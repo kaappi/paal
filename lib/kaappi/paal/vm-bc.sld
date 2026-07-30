@@ -177,6 +177,26 @@
            (frame-set-ip! frame (+ (frame-ip frame) (caddr instr))))
          (run! regs globals frames))
 
+        ;; --- Mutable box (for letrec/named-let mutable captured variables) ---
+
+        ((make-box)
+         ; (make-box dst src) — create 1-element mutable vector
+         (vector-set! regs (abs (cadr instr))
+                      (vector (vector-ref regs (abs (caddr instr)))))
+         (run! regs globals frames))
+
+        ((box-ref)
+         ; (box-ref dst src) — read value from box
+         (vector-set! regs (abs (cadr instr))
+                      (vector-ref (vector-ref regs (abs (caddr instr))) 0))
+         (run! regs globals frames))
+
+        ((box-set!)
+         ; (box-set! box-reg val-reg) — mutate box
+         (vector-set! (vector-ref regs (abs (cadr instr))) 0
+                      (vector-ref regs (abs (caddr instr))))
+         (run! regs globals frames))
+
         ((halt)
          (vector-ref regs (abs 0)))
 

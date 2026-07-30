@@ -44,7 +44,8 @@
                                  acc)
                              (loop (cdr ps) (+ i 1) (cons (cons (car ps) i) acc)))))
              (next-r   (+ arity (if rest-sym 1 0))))
-        (vector parent '() '() next-r arity variadic? locals 0)))
+        ; [8] boxed-locals: alist (name . box-reg) for mutable captured params
+        (vector parent '() '() next-r arity variadic? locals 0 '())))
 
     (define (proper-list p)
       (if (pair? p) (cons (car p) (proper-list (cdr p))) '()))
@@ -62,6 +63,10 @@
     (define (e-variadic? e)       (vector-ref e 5))
     (define (e-locals e)          (vector-ref e 6))
     (define (e-label-counter e)   (vector-ref e 7))
+    (define (e-boxed e)           (vector-ref e 8))
+
+    (define (e-add-boxed! e name box-reg)
+      (vector-set! e 8 (cons (cons name box-reg) (vector-ref e 8))))
 
     (define (e-emit! e instr)
       (vector-set! e 1 (append (vector-ref e 1) (list instr))))
@@ -88,51 +93,71 @@
     ;; Name resolution
     ;; ---------------------------------------------------------------
 
-    ;; Returns (local . reg), (upvalue . idx), or (global . sym)
+    ;; Returns (local . reg), (local-boxed . box-reg),
+    ;;         (upvalue . idx), (upvalue-boxed . idx), or (global . sym)
     (define (resolve e name)
       (cond
         ((assq name (e-locals e))
-         => (lambda (pair) (cons 'local (cdr pair))))
+         => (lambda (pair)
+              (let ((box-entry (assq name (e-boxed e))))
+                (if box-entry
+                    (cons 'local-boxed (cdr box-entry))
+                    (cons 'local (cdr pair))))))
         (else
          (let ((uv (capture-upvalue! e name)))
            (if uv
-               (cons 'upvalue uv)
+               (let* ((uv-entry (list-ref (e-upvalues e) uv))
+                      (boxed?   (cadddr uv-entry)))
+                 (if boxed? (cons 'upvalue-boxed uv) (cons 'upvalue uv)))
                (cons 'global name))))))
 
     ;; Try to capture name from parent chain; returns upvalue index or #f.
     ;; Recursively walks ancestors so that multi-level upvalue capture works
     ;; even when an intermediate lambda hasn't yet compiled its own reference
     ;; to the variable (which happens when callees are compiled before args).
+    ;; Propagates is-boxed? through the chain so child emitters know whether
+    ;; upvalue accesses need box-ref / box-set! indirection.
     (define (capture-upvalue! e name)
       (let ((parent (e-parent e)))
         (and parent
              (let ((res (resolve-in e name parent)))
                (if res
-                   (let ((is-local? (eq? (car res) 'local))
-                         (src-idx   (cdr res)))
-                     (add-upvalue! e name is-local? src-idx))
+                   (let* ((tag       (car res))
+                          (src-idx   (cadr res))
+                          (is-boxed? (caddr res))
+                          (is-local? (or (eq? tag 'local) (eq? tag 'local-boxed))))
+                     (add-upvalue! e name is-local? src-idx is-boxed?))
                    ; Not found in parent's locals or current upvalues.
                    ; Force upvalue addition through the ancestor chain.
                    (let ((ancestor-idx (capture-upvalue! parent name)))
                      (and ancestor-idx
-                          (add-upvalue! e name #f ancestor-idx))))))))
+                          (let* ((parent-uv (list-ref (e-upvalues parent) ancestor-idx))
+                                 (is-boxed? (cadddr parent-uv)))
+                            (add-upvalue! e name #f ancestor-idx is-boxed?)))))))))
 
     ;; Resolve name in the context of a child's parent.
-    ;; Returns (local . reg), (upvalue . idx), or #f.
+    ;; Returns (tag src-or-idx is-boxed?) or #f.
+    ;;   tag: local | local-boxed | upvalue
     (define (resolve-in child name parent)
       (cond
         ((assq name (e-locals parent))
-         => (lambda (pair) (cons 'local (cdr pair))))
+         => (lambda (pair)
+              (let ((box-entry (assq name (e-boxed parent))))
+                (if box-entry
+                    (list 'local-boxed (cdr box-entry) #t)
+                    (list 'local (cdr pair) #f)))))
         (else
-         ; Check if already an upvalue of parent
          (let loop ((uvs (e-upvalues parent)) (i 0))
            (cond
              ((null? uvs) #f)
-             ((eq? (caar uvs) name) (cons 'upvalue i))
+             ((eq? (caar uvs) name)
+              ; Inherit is-boxed? from parent's upvalue entry (4th element)
+              (list 'upvalue i (cadddr (car uvs))))
              (else (loop (cdr uvs) (+ i 1))))))))
 
     ;; Register a new upvalue in e; return its index.
-    (define (add-upvalue! e name is-local? src-idx)
+    ;; Each upvalue entry: (name is-local? src-idx is-boxed?)
+    (define (add-upvalue! e name is-local? src-idx is-boxed?)
       (let ((existing (let loop ((uvs (e-upvalues e)) (i 0))
                         (cond
                           ((null? uvs) #f)
@@ -142,7 +167,7 @@
             (let ((idx (length (e-upvalues e))))
               (vector-set! e 2
                 (append (vector-ref e 2)
-                        (list (list name is-local? src-idx))))
+                        (list (list name is-local? src-idx is-boxed?))))
               idx))))
 
     ;; ---------------------------------------------------------------
@@ -204,8 +229,15 @@
            (let ((src (cdr res)))
              (unless (= src dst)
                (e-emit! e `(move ,dst ,src)))))
+          ((local-boxed)
+           (e-emit! e `(box-ref ,dst ,(cdr res))))
           ((upvalue)
            (e-emit! e `(get-upvalue ,dst ,(cdr res))))
+          ((upvalue-boxed)
+           (let ((tmp (e-alloc-reg! e)))
+             (e-emit! e `(get-upvalue ,tmp ,(cdr res)))
+             (e-emit! e `(box-ref ,dst ,tmp))
+             (e-free-reg! e)))
           ((global)
            (e-emit! e `(get-global ,dst ,(cdr res)))))))
 
@@ -258,9 +290,19 @@
            (emit-node! e (ir:set!-val node) val-reg #f)
            (let ((res (resolve e (ir:set!-name node))))
              (case (car res)
-               ((local)   (e-emit! e `(move ,(cdr res) ,val-reg)))
-               ((upvalue) (e-emit! e `(set-upvalue ,(cdr res) ,val-reg)))
-               ((global)  (e-emit! e `(set-global ,(cdr res) ,val-reg)))))
+               ((local)
+                (e-emit! e `(move ,(cdr res) ,val-reg)))
+               ((local-boxed)
+                (e-emit! e `(box-set! ,(cdr res) ,val-reg)))
+               ((upvalue)
+                (e-emit! e `(set-upvalue ,(cdr res) ,val-reg)))
+               ((upvalue-boxed)
+                (let ((tmp (e-alloc-reg! e)))
+                  (e-emit! e `(get-upvalue ,tmp ,(cdr res)))
+                  (e-emit! e `(box-set! ,tmp ,val-reg))
+                  (e-free-reg! e)))
+               ((global)
+                (e-emit! e `(set-global ,(cdr res) ,val-reg)))))
            (e-free-reg! e)
            (emit-const! e #f dst)))   ; set! returns unspecified
 
@@ -274,23 +316,105 @@
          (error "paal-emitter: unknown IR node" node))))
 
     ;; ---------------------------------------------------------------
+    ;; Mutable-captured variable analysis
+    ;; ---------------------------------------------------------------
+    ;;
+    ;; A lambda param must be boxed if it is BOTH:
+    ;;   - assigned via set! in the lambda body (not inside nested lambdas), AND
+    ;;   - referenced inside a nested ir:lambda (i.e. captured).
+    ;; This covers the letrec/named-let pattern:
+    ;;   (let ((f #f)) (set! f (lambda ...)) f)
+
+    (define (collect-set-targets node)
+      ; Names that appear in (set! name ...) at THIS lambda level only.
+      ; Does not cross ir:lambda boundaries.
+      (cond
+        ((ir:set!?   node) (list (ir:set!-name node)))
+        ((ir:begin?  node) (apply append (map collect-set-targets (ir:begin-exprs node))))
+        ((ir:if?     node) (append (collect-set-targets (ir:if-test node))
+                                   (collect-set-targets (ir:if-then node))
+                                   (collect-set-targets (ir:if-else node))))
+        ((ir:call?   node) (apply append
+                                   (cons (collect-set-targets (ir:call-proc node))
+                                         (map collect-set-targets (ir:call-args node)))))
+        ((ir:define? node) (collect-set-targets (ir:define-val node)))
+        ; Stop at lambda boundaries
+        (else '())))
+
+    (define (collect-captured node params)
+      ; Params that appear as refs inside any ir:lambda in node (at any depth).
+      (cond
+        ((ir:lambda? node)
+         (collect-free-refs-in-body (ir:lambda-body node) params))
+        ((ir:begin?  node) (apply append (map (lambda (e) (collect-captured e params))
+                                              (ir:begin-exprs node))))
+        ((ir:if?     node) (append (collect-captured (ir:if-test node) params)
+                                   (collect-captured (ir:if-then node) params)
+                                   (collect-captured (ir:if-else node) params)))
+        ((ir:call?   node) (apply append
+                                   (cons (collect-captured (ir:call-proc node) params)
+                                         (map (lambda (a) (collect-captured a params))
+                                              (ir:call-args node)))))
+        ((ir:set!?   node) (collect-captured (ir:set!-val node) params))
+        ((ir:define? node) (collect-captured (ir:define-val node) params))
+        (else '())))
+
+    (define (collect-free-refs-in-body node params)
+      ; All refs to names in params anywhere inside node (crossing lambda boundaries).
+      (cond
+        ((ir:ref?    node) (if (memq (ir:ref-name node) params)
+                               (list (ir:ref-name node)) '()))
+        ((ir:lambda? node) (collect-free-refs-in-body (ir:lambda-body node) params))
+        ((ir:begin?  node) (apply append (map (lambda (e) (collect-free-refs-in-body e params))
+                                              (ir:begin-exprs node))))
+        ((ir:if?     node) (append (collect-free-refs-in-body (ir:if-test node) params)
+                                   (collect-free-refs-in-body (ir:if-then node) params)
+                                   (collect-free-refs-in-body (ir:if-else node) params)))
+        ((ir:call?   node) (apply append
+                                   (cons (collect-free-refs-in-body (ir:call-proc node) params)
+                                         (map (lambda (a) (collect-free-refs-in-body a params))
+                                              (ir:call-args node)))))
+        ((ir:set!?   node) (collect-free-refs-in-body (ir:set!-val node) params))
+        ((ir:define? node) (collect-free-refs-in-body (ir:define-val node) params))
+        (else '())))
+
+    (define (must-box-vars params body)
+      ; Returns the subset of params that must be stored in mutable boxes.
+      (let ((sets     (collect-set-targets body))
+            (captured (collect-captured body params)))
+        (filter (lambda (n) (and (memq n sets) (memq n captured))) params)))
+
+    ;; ---------------------------------------------------------------
     ;; Lambda compilation
     ;; ---------------------------------------------------------------
 
     (define (emit-lambda! e node dst)
-      (let* ((params   (ir:lambda-params node))
-             (body     (ir:lambda-body   node))
-             (variadic? (ir:lambda-rest? node))
-             (child-e  (make-emitter e params variadic?))
-             (body-dst (e-alloc-reg! child-e)))
-        (emit-node! child-e body body-dst #t)
-        (e-emit! child-e `(return ,body-dst))
-        (let* ((fn    (finalize! child-e #f))
-               (specs (map (lambda (uv)
-                             ; uv = (name is-local? src-idx)
-                             (cons (cadr uv) (caddr uv)))
-                           (e-upvalues child-e))))
-          (e-emit! e `(closure ,dst ,fn ,specs)))))
+      (let* ((params    (ir:lambda-params node))
+             (body      (ir:lambda-body   node))
+             (variadic? (ir:lambda-rest?  node))
+             (child-e   (make-emitter e params variadic?))
+             (flat-params (if (list? params) params
+                              (if (pair? params) (proper-list params) '())))
+             (to-box    (must-box-vars flat-params body)))
+        ; Box mutable-captured params before allocating body-dst so boxes
+        ; sit between params and scratch registers in the register layout.
+        (for-each
+          (lambda (name)
+            (let* ((param-reg (cdr (assq name (e-locals child-e))))
+                   (box-reg   (e-alloc-reg! child-e)))
+              (e-emit! child-e `(make-box ,box-reg ,param-reg))
+              (e-add-boxed! child-e name box-reg)))
+          to-box)
+        (let ((body-dst (e-alloc-reg! child-e)))
+          (emit-node! child-e body body-dst #t)
+          (e-emit! child-e `(return ,body-dst))
+          (let* ((fn    (finalize! child-e #f))
+                 (specs (map (lambda (uv)
+                               ; uv = (name is-local? src-idx is-boxed?)
+                               ; VM only needs is-local? and src-idx to capture the value
+                               (cons (cadr uv) (caddr uv)))
+                             (e-upvalues child-e))))
+            (e-emit! e `(closure ,dst ,fn ,specs))))))
 
     ;; ---------------------------------------------------------------
     ;; Call compilation

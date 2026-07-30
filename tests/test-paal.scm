@@ -478,4 +478,46 @@
       (close-output-port port))
     (test-equal "pkaappi-run-file" 49 (pkaappi-run-file tmp))))
 
+;; ---------------------------------------------------------------
+;; letrec / named-let (mutable upvalue fix)
+;; ---------------------------------------------------------------
+
+(test-group "letrec / named-let (mutable upvalue fix)"
+  (test-equal "named-let loop counts to 10"
+    10
+    (pkaappi-run-string "(let loop ((x 0)) (if (= x 10) x (loop (+ x 1))))"))
+  (test-equal "letrec factorial"
+    120
+    (pkaappi-run-string "(letrec ((fact (lambda (n) (if (= n 0) 1 (* n (fact (- n 1))))))) (fact 5))"))
+  (test-equal "letrec mutual recursion"
+    #t
+    (pkaappi-run-string "(letrec ((even? (lambda (n) (if (= n 0) #t (odd? (- n 1)))))
+                   (odd?  (lambda (n) (if (= n 0) #f (even? (- n 1))))))
+           (even? 10))"))
+  (test-equal "letrec* factorial"
+    6
+    (pkaappi-run-string "(letrec* ((fact (lambda (n) (if (= n 0) 1 (* n (fact (- n 1))))))) (fact 3))"))
+  (test-equal "named-let accumulator"
+    45
+    (pkaappi-run-string "(let loop ((i 0) (sum 0))
+           (if (= i 10) sum (loop (+ i 1) (+ sum i))))"))
+  (test-equal "letrec function passed as arg"
+    10
+    (pkaappi-run-string "(letrec ((f (lambda (n) (if (= n 0) 0 (+ 1 (f (- n 1))))))) (f 10))")))
+
+;; ---------------------------------------------------------------
+;; self-load: reader + expander (post-letrec-fix)
+;; ---------------------------------------------------------------
+
+(test-group "self-load: reader + expander (post-letrec-fix)"
+  (let ((g (pkaappi-make-globals)))
+    (pkaappi-load-file "lib/kaappi/paal/ir.sld" g)
+    (pkaappi-load-file "lib/kaappi/paal/reader.sld" g)
+    (test-equal "paal-read-string works after self-load"
+      '(42)
+      (pkaappi-run-string-in g "(paal-read-string \"42\")"))
+    (pkaappi-load-file "lib/kaappi/paal/expander.sld" g)
+    (test-assert "paal-expand works after self-load"
+      (pair? (pkaappi-run-string-in g "(paal-expand '(if #t 1 2))")))))
+
 (test-exit)
