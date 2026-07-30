@@ -160,6 +160,7 @@
              (current-error-port . ,current-error-port)
              (input-port? . ,input-port?) (output-port? . ,output-port?)
              (port? . ,port?)
+             (call-with-port . ,call-with-port)
 
              ;; Control
              (apply . ,apply) (map . ,map) (for-each . ,for-each)

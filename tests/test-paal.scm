@@ -640,6 +640,26 @@
         result))))
 
 ;; ---------------------------------------------------------------
+;; Self-hosted compile subcommand
+;; ---------------------------------------------------------------
+
+(test-group "self-hosted compile subcommand"
+  (test-equal "pkaappi-self-compile-to-file: add.scm"
+    7
+    (let ((path "paal-self-compile-add.pbc"))
+      (pkaappi-self-compile-to-file "tests/fixtures/add.scm" path)
+      (let ((result (pkaappi-run-pbc-file path)))
+        (delete-file path)
+        result)))
+  (test-equal "pkaappi-self-compile-to-file: factorial.scm"
+    120
+    (let ((path "paal-self-compile-fact.pbc"))
+      (pkaappi-self-compile-to-file "tests/fixtures/factorial.scm" path)
+      (let ((result (pkaappi-run-pbc-file path)))
+        (delete-file path)
+        result))))
+
+;; ---------------------------------------------------------------
 ;; Self-hosted run subcommand
 ;; ---------------------------------------------------------------
 

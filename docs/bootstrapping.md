@@ -27,7 +27,7 @@ Stage 4: pkaappi can compile pkaappi
 Stage 5: pkaappi binary (no host dependency)
 ```
 
-## Current Status: Stage 6 complete — 192 tests pass
+## Current Status: Stage 6 complete — 194 tests pass
 
 Paal can load all 8 of its own library files through its bytecode pipeline and
 compile and execute arbitrary Scheme through its own loaded pipeline with no HOST
@@ -57,6 +57,7 @@ pipeline involvement in the compute path:
 | Self-hosted `pkaappi run` subcommand (`pkaappi-self-run-file`) | ✓ |
 | Bytecode serializer (`.pbc` text S-expression format) | ✓ |
 | `pkaappi compile input.scm -o output.pbc` subcommand | ✓ |
+| Self-hosted `pkaappi compile` (uses paal's own loaded pipeline) | ✓ |
 
 ### Remaining work
 

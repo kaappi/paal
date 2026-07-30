@@ -70,9 +70,14 @@
       (sexp->bf (read port)))
 
     (define (paal-write-bc-file fn path)
-      (call-with-port (open-output-file path)
-        (lambda (p) (paal-write-bc fn p))))
+      ; Use explicit open/close — call-with-port can't invoke paal closures
+      ; as its thunk (kaappi's apply doesn't understand paal <closure> records).
+      (let ((port (open-output-file path)))
+        (paal-write-bc fn port)
+        (close-output-port port)))
 
     (define (paal-read-bc-file path)
-      (call-with-port (open-input-file path)
-        (lambda (p) (paal-read-bc p))))))
+      (let* ((port   (open-input-file path))
+             (result (paal-read-bc port)))
+        (close-input-port port)
+        result))))

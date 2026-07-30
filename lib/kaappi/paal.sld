@@ -30,8 +30,8 @@
     pkaappi-compile pkaappi-run-bc-string pkaappi-run-bc-file
     ;; Multi-file sequential loading
     pkaappi-make-globals pkaappi-load-file pkaappi-run-string-in
-    ;; Self-hosted run
-    pkaappi-self-run-file
+    ;; Self-hosted run + compile
+    pkaappi-self-run-file pkaappi-self-compile-to-file
     ;; Serializer
     paal-write-bc paal-read-bc paal-write-bc-file paal-read-bc-file
     pkaappi-compile-to-file pkaappi-run-pbc-file)
@@ -173,4 +173,22 @@
                 "      (paal-expand-all"
                 "        (paal-read-file \"" path "\"))))"
                 "  (pkaappi-make-globals))")))
-          (pkaappi-run-bc-file path)))))
+          (pkaappi-run-bc-file path)))
+
+    ; Load paal's 8 library files + serializer into a fresh globals, compile the
+    ; input file through the loaded pipeline, and write bytecode to output.
+    ; Falls back to HOST pipeline if library source files are not accessible.
+    (define (pkaappi-self-compile-to-file input output)
+      (if (file-exists? "lib/kaappi/paal/ir.sld")
+          (let ((g (pkaappi-make-globals)))
+            (for-each (lambda (p) (pkaappi-load-file p g)) %paal-lib-files)
+            (pkaappi-load-file "lib/kaappi/paal/serializer.sld" g)
+            (pkaappi-run-string-in g
+              (string-append
+                "(paal-write-bc-file"
+                "  (paal-emit-program"
+                "    (paal-analyze-all"
+                "      (paal-expand-all"
+                "        (paal-read-file \"" input "\"))))"
+                "  \"" output "\")")))
+          (pkaappi-compile-to-file input output)))))

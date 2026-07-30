@@ -40,7 +40,7 @@
         (display "error: compile: usage: pkaappi compile <input.scm> -o <output.pbc>\n")
         (exit 1))
        (else
-        (pkaappi-compile-to-file (cadr args) (cadddr args)))))
+        (pkaappi-self-compile-to-file (cadr args) (cadddr args)))))
     ((string=? (car args) "eval")
      (if (null? (cdr args))
          (begin (display "error: eval: missing expression\n") (exit 1))
