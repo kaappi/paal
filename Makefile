@@ -5,7 +5,7 @@ KAAPPI_TEST ?= ../kaappi-test/lib
 
 LIBS = --lib-path $(LIB) --lib-path $(KAAPPI_TEST)
 
-.PHONY: all test coverage run binary check-binary clean
+.PHONY: all test coverage run binary check-binary pbc-pipeline clean-cache clean
 
 all: test
 
@@ -44,6 +44,25 @@ check-binary: pkaappi
 	./pkaappi version
 	./pkaappi eval '(+ 1 2)'
 	./pkaappi eval '(define (fact n) (if (= n 0) 1 (* n (fact (- n 1))))) (fact 5)'
+
+# Build the pipeline bytecode cache (speeds up self-hosted run/compile).
+# Run once after checkout, and again whenever a paal library file changes.
+pbc-pipeline:
+	@mkdir -p cache
+	$(KAAPPI) $(LIBS) src/main.scm compile lib/kaappi/paal/ir.sld        -o cache/paal-ir.pbc
+	$(KAAPPI) $(LIBS) src/main.scm compile lib/kaappi/paal/bytecode.sld  -o cache/paal-bytecode.pbc
+	$(KAAPPI) $(LIBS) src/main.scm compile lib/kaappi/paal/reader.sld    -o cache/paal-reader.pbc
+	$(KAAPPI) $(LIBS) src/main.scm compile lib/kaappi/paal/expander.sld  -o cache/paal-expander.pbc
+	$(KAAPPI) $(LIBS) src/main.scm compile lib/kaappi/paal/compiler.sld  -o cache/paal-compiler.pbc
+	$(KAAPPI) $(LIBS) src/main.scm compile lib/kaappi/paal/frame.sld     -o cache/paal-frame.pbc
+	$(KAAPPI) $(LIBS) src/main.scm compile lib/kaappi/paal/emitter.sld   -o cache/paal-emitter.pbc
+	$(KAAPPI) $(LIBS) src/main.scm compile lib/kaappi/paal/vm-bc.sld     -o cache/paal-vm-bc.pbc
+	$(KAAPPI) $(LIBS) src/main.scm compile lib/kaappi/paal/serializer.sld -o cache/paal-serializer.pbc
+	@echo "Pipeline cache built in cache/"
+
+clean-cache:
+	rm -f cache/*.pbc
+	@echo "Cache cleared"
 
 clean:
 	rm -f coverage.xml pkaappi

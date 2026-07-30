@@ -157,38 +157,91 @@
         "lib/kaappi/paal/emitter.sld"
         "lib/kaappi/paal/vm-bc.sld"))
 
-    ; Load paal's 8 library files into a fresh globals, then compile and run the
-    ; user's file through the loaded pipeline (reader, expander, emitter, VM).
-    ; Falls back to HOST pipeline if library source files are not accessible
-    ; (e.g. standalone binary mode where .sld files are not on disk).
-    (define (pkaappi-self-run-file path)
-      (if (file-exists? "lib/kaappi/paal/ir.sld")
-          (let ((g (pkaappi-make-globals)))
-            (for-each (lambda (p) (pkaappi-load-file p g)) %paal-lib-files)
-            (pkaappi-run-string-in g
-              (string-append
-                "(paal-run-bc"
-                "  (paal-emit-program"
-                "    (paal-analyze-all"
-                "      (paal-expand-all"
-                "        (paal-read-file \"" path "\"))))"
-                "  (pkaappi-make-globals))")))
-          (pkaappi-run-bc-file path)))
+    ; Pre-compiled .pbc cache paths (produced by `make pbc-pipeline`).
+    ; One .pbc per library file; cache/paal-serializer.pbc only for compile.
+    (define %paal-cache-files
+      '("cache/paal-ir.pbc"
+        "cache/paal-bytecode.pbc"
+        "cache/paal-reader.pbc"
+        "cache/paal-expander.pbc"
+        "cache/paal-compiler.pbc"
+        "cache/paal-frame.pbc"
+        "cache/paal-emitter.pbc"
+        "cache/paal-vm-bc.pbc"))
 
-    ; Load paal's 8 library files + serializer into a fresh globals, compile the
-    ; input file through the loaded pipeline, and write bytecode to output.
-    ; Falls back to HOST pipeline if library source files are not accessible.
+    (define %paal-serializer-cache "cache/paal-serializer.pbc")
+
+    ; True only when all 8 pipeline .pbc files exist (partial cache is unsafe).
+    (define (paal-cache-complete?)
+      (let loop ((files %paal-cache-files))
+        (or (null? files)
+            (and (file-exists? (car files))
+                 (loop (cdr files))))))
+
+    ; Load all 8 pipeline .pbc files into globals g.
+    ; Reads each .pbc (fast: parse + reconstruct) then runs it into g.
+    (define (pkaappi-load-cached-pipeline g)
+      (for-each (lambda (pbc) (paal-run-bc (paal-read-bc-file pbc) g))
+                %paal-cache-files))
+
+    ; Load paal's pipeline into a fresh globals, then compile and run the user's
+    ; file through the loaded pipeline (reader, expander, emitter, VM).
+    ; Priority: cache (.pbc) > .sld sources > HOST bytecode fallback.
+    (define (pkaappi-self-run-file path)
+      (cond
+        ((paal-cache-complete?)
+         (let ((g (pkaappi-make-globals)))
+           (pkaappi-load-cached-pipeline g)
+           (pkaappi-run-string-in g
+             (string-append
+               "(paal-run-bc"
+               "  (paal-emit-program"
+               "    (paal-analyze-all"
+               "      (paal-expand-all"
+               "        (paal-read-file \"" path "\"))))"
+               "  (pkaappi-make-globals))"))))
+        ((file-exists? "lib/kaappi/paal/ir.sld")
+         (let ((g (pkaappi-make-globals)))
+           (for-each (lambda (p) (pkaappi-load-file p g)) %paal-lib-files)
+           (pkaappi-run-string-in g
+             (string-append
+               "(paal-run-bc"
+               "  (paal-emit-program"
+               "    (paal-analyze-all"
+               "      (paal-expand-all"
+               "        (paal-read-file \"" path "\"))))"
+               "  (pkaappi-make-globals))"))))
+        (else
+         (pkaappi-run-bc-file path))))
+
+    ; Load paal's pipeline + serializer into a fresh globals, compile the input
+    ; file through the loaded pipeline, and write bytecode to output.
+    ; Priority: cache (.pbc) > .sld sources > HOST bytecode fallback.
     (define (pkaappi-self-compile-to-file input output)
-      (if (file-exists? "lib/kaappi/paal/ir.sld")
-          (let ((g (pkaappi-make-globals)))
-            (for-each (lambda (p) (pkaappi-load-file p g)) %paal-lib-files)
-            (pkaappi-load-file "lib/kaappi/paal/serializer.sld" g)
-            (pkaappi-run-string-in g
-              (string-append
-                "(paal-write-bc-file"
-                "  (paal-emit-program"
-                "    (paal-analyze-all"
-                "      (paal-expand-all"
-                "        (paal-read-file \"" input "\"))))"
-                "  \"" output "\")")))
-          (pkaappi-compile-to-file input output)))))
+      (cond
+        ((paal-cache-complete?)
+         (let ((g (pkaappi-make-globals)))
+           (pkaappi-load-cached-pipeline g)
+           (paal-run-bc (paal-read-bc-file %paal-serializer-cache) g)
+           (pkaappi-run-string-in g
+             (string-append
+               "(paal-write-bc-file"
+               "  (paal-emit-program"
+               "    (paal-analyze-all"
+               "      (paal-expand-all"
+               "        (paal-read-file \"" input "\"))))"
+               "  \"" output "\")"))))
+        ((file-exists? "lib/kaappi/paal/ir.sld")
+         (let ((g (pkaappi-make-globals)))
+           (for-each (lambda (p) (pkaappi-load-file p g)) %paal-lib-files)
+           (pkaappi-load-file "lib/kaappi/paal/serializer.sld" g)
+           (pkaappi-run-string-in g
+             (string-append
+               "(paal-write-bc-file"
+               "  (paal-emit-program"
+               "    (paal-analyze-all"
+               "      (paal-expand-all"
+               "        (paal-read-file \"" input "\"))))"
+               "  \"" output "\")"))))
+        (else
+         (pkaappi-compile-to-file input output))))))

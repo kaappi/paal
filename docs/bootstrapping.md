@@ -58,6 +58,7 @@ pipeline involvement in the compute path:
 | Bytecode serializer (`.pbc` text S-expression format) | ✓ |
 | `pkaappi compile input.scm -o output.pbc` subcommand | ✓ |
 | Self-hosted `pkaappi compile` (uses paal's own loaded pipeline) | ✓ |
+| Pipeline cache: `make pbc-pipeline` → `cache/*.pbc`; fast load path | ✓ |
 
 ### Remaining work
 

@@ -98,7 +98,6 @@
 
         ((set-global)
          (globals-set! globals (cadr instr) (vector-ref regs (abs (caddr instr))))
-         (vector-set! regs (abs 0) #f)   ; set! returns unspecified
          (run! regs globals frames))
 
         ((define-global)
