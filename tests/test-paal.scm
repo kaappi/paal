@@ -200,6 +200,69 @@
        (fib 20)")))
 
 ;; ----------------------------------------------------------------
+;; Self-hosted reader tests (Phase 5)
+;; ----------------------------------------------------------------
+
+(test-group "reader: atoms"
+  (test-equal "integer"   42      (car (paal-read-string "42")))
+  (test-equal "negative"  -7      (car (paal-read-string "-7")))
+  (test-equal "float"     3.14    (car (paal-read-string "3.14")))
+  (test-equal "true"      #t      (car (paal-read-string "#t")))
+  (test-equal "false"     #f      (car (paal-read-string "#f")))
+  (test-equal "true-long" #t      (car (paal-read-string "#true")))
+  (test-equal "symbol"    'hello  (car (paal-read-string "hello")))
+  (test-equal "+"         '+      (car (paal-read-string "+")))
+  (test-equal "..."       '...    (car (paal-read-string "...")))
+  (test-equal "string"    "hi"    (car (paal-read-string "\"hi\""))))
+
+(test-group "reader: characters"
+  (test-equal "space"     #\space   (car (paal-read-string "#\\space")))
+  (test-equal "newline"   #\newline (car (paal-read-string "#\\newline")))
+  (test-equal "tab"       #\tab     (car (paal-read-string "#\\tab")))
+  (test-equal "single"    #\a       (car (paal-read-string "#\\a")))
+  (test-equal "hex"       #\A       (car (paal-read-string "#\\x41"))))
+
+(test-group "reader: string escapes"
+  (test-equal "newline" (string #\newline) (car (paal-read-string "\"\\n\"")))
+  (test-equal "tab"     (string #\tab)     (car (paal-read-string "\"\\t\"")))
+  (test-equal "quote"   "\""              (car (paal-read-string "\"\\\"\"")))
+  (test-equal "hex"     "A"              (car (paal-read-string "\"\\x41;\""))))
+
+(test-group "reader: lists"
+  (test-equal "empty"  '()      (car (paal-read-string "()")))
+  (test-equal "simple" '(1 2 3) (car (paal-read-string "(1 2 3)")))
+  (test-equal "nested" '(a (b c) d) (car (paal-read-string "(a (b c) d)")))
+  (test-equal "dotted" '(a . b) (car (paal-read-string "(a . b)")))
+  (test-equal "vector" #(1 2 3) (car (paal-read-string "#(1 2 3)"))))
+
+(test-group "reader: abbreviations"
+  (test-equal "quote"  '(quote x)            (car (paal-read-string "'x")))
+  (test-equal "quasi"  '(quasiquote x)       (car (paal-read-string "`x")))
+  (test-equal "unq"    '(unquote x)          (car (paal-read-string ",x")))
+  (test-equal "splice" '(unquote-splicing x) (car (paal-read-string ",@x"))))
+
+(test-group "reader: comments"
+  (test-equal "line comment"  '(1 3)  (paal-read-string "1 ; skip this\n 3"))
+  (test-equal "block comment" '(1 3)  (paal-read-string "1 #| skip |# 3"))
+  (test-equal "nested block"  '(1 3)  (paal-read-string "1 #| a #| b |# c |# 3"))
+  (test-equal "datum comment" '(1 3)  (paal-read-string "1 #;2 3")))
+
+(test-group "reader: multiple forms"
+  (test-equal "two" '(a b)   (paal-read-string "a b"))
+  (test-equal "three" '(1 2 3) (paal-read-string "1 2 3")))
+
+(test-group "reader: read paal source"
+  ; The test gate: paal can read its own source files.
+  (let ((forms (paal-read-file "lib/kaappi/paal/reader.sld")))
+    (test-assert "reader.sld is non-empty" (> (length forms) 0))
+    (test-equal  "starts with define-library"
+                 'define-library (caar forms)))
+  (let ((forms (paal-read-file "lib/kaappi/paal/ir.sld")))
+    (test-assert "ir.sld is non-empty" (> (length forms) 0)))
+  (let ((forms (paal-read-file "lib/kaappi/paal/expander.sld")))
+    (test-assert "expander.sld is non-empty" (> (length forms) 0))))
+
+;; ----------------------------------------------------------------
 ;; Bytecode VM tests (Phase 4) — same programs via pkaappi-run-bc-string
 ;; ----------------------------------------------------------------
 

@@ -59,8 +59,16 @@ Each stage is a separate `define-library` importable independently:
 **Input:** source text (string or port)  
 **Output:** list of S-expressions
 
-Currently delegates to the host `(scheme read)`. The final implementation will be a
-self-hosted character-level reader (see `docs/bootstrapping.md`).
+A self-hosted character-level recursive descent reader. Handles all token types
+needed for paal's own source and most R7RS programs.
+
+**Supported:** `( )` lists, dotted pairs, `#( )` vectors, `' ` \` , ,@` abbreviations,
+booleans (`#t` `#f` `#true` `#false`), characters (`#\space` `#\newline` `#\xHH` etc.),
+strings with `\n \t \r \a \b \" \\ \xHH;` escapes, numbers (via `string->number`),
+symbols, line comments (`;`), block comments (`#| … |#` nested), datum comments (`#;`),
+radix prefixes (`#b` `#o` `#x` `#d`), exactness prefixes (`#e` `#i`).
+
+**Not yet supported:** `|…|` symbol quoting, `#u8(`, datum labels (`#N=` `#N#`).
 
 Key exports: `paal-read-string`, `paal-read-file`, `paal-read-all`, `paal-read`
 

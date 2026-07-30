@@ -27,12 +27,12 @@ Stage 4: pkaappi can compile pkaappi
 Stage 5: pkaappi binary (no host dependency)
 ```
 
-## Current Status: Stage 4 complete
+## Current Status: Stage 5 complete
 
-The register-based bytecode VM is working. Paal can compile source text to register
-bytecode and execute it via `pkaappi-run-bc-string` / `pkaappi-run-bc-file`. Both
-pipelines (tree-walking and bytecode) pass 104 tests, including closures, upvalue
-capture, `set!`, all derived forms, and 1 000 000-iteration tail-recursive loops.
+All five bootstrapping stages are done. Paal has a self-hosted character-level reader,
+a full derived-form expander, an IR analyzer, a trampoline-based tree-walking VM with
+TCO, and a register-based bytecode compiler + VM. The test gate passes: paal reads its
+own `.sld` source files correctly. 142 tests pass across all pipelines.
 
 ```sh
 make run ARGS="eval '(define (fib n) (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2))))) (fib 20)'"
@@ -133,7 +133,7 @@ Scheme `vector`). The loop processes one instruction per iteration:
 function) and `pkaappi-run-bc` (run bytecode). The tree-walking VM stays as a fallback
 during the transition. The same 79 tests run against both VMs to verify equivalence.
 
-### Stage 5 — Self-Hosted Reader
+### Stage 5 — Self-Hosted Reader ✓ complete
 
 **File to rewrite:** `lib/kaappi/paal/reader.sld`
 
