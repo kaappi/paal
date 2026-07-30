@@ -11,7 +11,8 @@
           (kaappi paal compiler)
           (kaappi paal vm)
           (kaappi paal emitter)
-          (kaappi paal vm-bc))
+          (kaappi paal vm-bc)
+          (kaappi paal serializer))
   (export
     ;; Reader
     paal-read paal-read-string paal-read-all paal-read-file
@@ -30,7 +31,10 @@
     ;; Multi-file sequential loading
     pkaappi-make-globals pkaappi-load-file pkaappi-run-string-in
     ;; Self-hosted run
-    pkaappi-self-run-file)
+    pkaappi-self-run-file
+    ;; Serializer
+    paal-write-bc paal-read-bc paal-write-bc-file paal-read-bc-file
+    pkaappi-compile-to-file pkaappi-run-pbc-file)
   (begin
 
     ;; --- Tree-walking pipeline ---
@@ -125,6 +129,20 @@
     ;; get-global ops resolve against all previously loaded definitions.
     (define (pkaappi-run-string-in globals src)
       (paal-run-bc (pkaappi-compile src) globals))
+
+    ;; --- Serializer high-level API ---
+
+    (define (pkaappi-compile-to-file input output)
+      (let ((fn (pkaappi-compile-forms (paal-read-file input))))
+        (paal-write-bc-file fn output)))
+
+    (define (pkaappi-run-pbc-file path)
+      (let* ((fn      (paal-read-bc-file path))
+             (globals (paal-make-globals
+                        (map (lambda (pair)
+                               (cons (car pair) (vector-ref (cdr pair) 0)))
+                             (paal-initial-env)))))
+        (paal-run-bc fn globals)))
 
     ;; --- Self-hosted run ---
 

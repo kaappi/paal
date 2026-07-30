@@ -608,6 +608,38 @@
     (car (paal-read-string "|a\\|b|"))))
 
 ;; ---------------------------------------------------------------
+;; Bytecode serializer
+;; ---------------------------------------------------------------
+
+(define (round-trip-run src)
+  (let* ((fn  (pkaappi-compile src))
+         (buf (open-output-string))
+         (_   (paal-write-bc fn buf))
+         (fn2 (paal-read-bc (open-input-string (get-output-string buf))))
+         (g   (paal-make-globals
+                (map (lambda (p) (cons (car p) (vector-ref (cdr p) 0)))
+                     (paal-initial-env)))))
+    (paal-run-bc fn2 g)))
+
+(test-group "bytecode serializer"
+  (test-equal "round-trip: arithmetic"
+    3
+    (round-trip-run "(+ 1 2)"))
+  (test-equal "round-trip: closure/upvalue"
+    7
+    (round-trip-run "(define (add x y) (+ x y)) (add 3 4)"))
+  (test-equal "round-trip: recursion"
+    120
+    (round-trip-run "(define (fact n) (if (= n 0) 1 (* n (fact (- n 1))))) (fact 5)"))
+  (test-equal "file round-trip"
+    120
+    (let ((path "paal-test-tmp.pbc"))
+      (pkaappi-compile-to-file "tests/fixtures/factorial.scm" path)
+      (let ((result (pkaappi-run-pbc-file path)))
+        (delete-file path)
+        result))))
+
+;; ---------------------------------------------------------------
 ;; Self-hosted run subcommand
 ;; ---------------------------------------------------------------
 
