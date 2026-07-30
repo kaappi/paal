@@ -13,6 +13,7 @@
   (display "\nCommands:\n")
   (display "  run <file>              Run a Scheme file (.scm or .pbc)\n")
   (display "  compile <f> -o <out>   Compile a Scheme file to .pbc bytecode\n")
+  (display "  repl                    Start interactive REPL\n")
   (display "  eval <expr>             Evaluate an expression\n")
   (display "  version                 Print version\n"))
 
@@ -31,6 +32,8 @@
            (if (and (>= len 4) (string=? (substring path (- len 4) len) ".pbc"))
                (pkaappi-run-pbc-file path)
                (pkaappi-self-run-file path)))))
+    ((string=? (car args) "repl")
+     (pkaappi-self-repl))
     ((string=? (car args) "compile")
      (cond
        ((or (null? (cdr args))

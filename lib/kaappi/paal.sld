@@ -6,6 +6,7 @@
 (define-library (kaappi paal)
   (import (scheme base)
           (scheme file)
+          (scheme write)
           (kaappi paal reader)
           (kaappi paal expander)
           (kaappi paal compiler)
@@ -30,8 +31,8 @@
     pkaappi-compile pkaappi-run-bc-string pkaappi-run-bc-file
     ;; Multi-file sequential loading
     pkaappi-make-globals pkaappi-load-file pkaappi-run-string-in
-    ;; Self-hosted run + compile
-    pkaappi-self-run-file pkaappi-self-compile-to-file
+    ;; Self-hosted run, compile, and REPL
+    pkaappi-self-run-file pkaappi-self-compile-to-file pkaappi-self-repl
     ;; Serializer
     paal-write-bc paal-read-bc paal-write-bc-file paal-read-bc-file
     pkaappi-compile-to-file pkaappi-run-pbc-file)
@@ -248,4 +249,62 @@
                "        (paal-read-file \"" input "\"))))"
                "  \"" output "\")"))))
         (else
-         (pkaappi-compile-to-file input output))))))
+         (pkaappi-compile-to-file input output))))
+
+    ; --- Self-hosted REPL ---
+
+    ; Internal: run a REPL loop inside an already-loaded globals g.
+    ; The loop persists user globals across expressions so define accumulates.
+    ; Internal: run a REPL loop with pipeline already loaded in g.
+    ; The loop runs in HOST Scheme so we can use HOST guard for error handling.
+    ; Each iteration reads one datum via the loaded paal-read, stashes it in g
+    ; as %repl-last-input, then compiles and runs it through the loaded pipeline.
+    (define (%run-repl g)
+      ; Create persistent user globals inside g — defines accumulate here.
+      (pkaappi-run-string-in g "(define %repl-user-globals (pkaappi-make-globals))")
+      (let loop ()
+        (display "pkaappi> ")
+        (flush-output-port (current-output-port))
+        ; Read one datum using the loaded reader; store it in g.
+        (pkaappi-run-string-in g
+          "(define %repl-last-input (paal-read (current-input-port)))")
+        (let ((is-eof (pkaappi-run-string-in g "(eof-object? %repl-last-input)")))
+          (unless is-eof
+            (guard (exn (#t
+                         (display "error: ")
+                         (display (error-object-message exn))
+                         (for-each (lambda (x) (display " ") (write x))
+                                   (error-object-irritants exn))
+                         (newline)))
+              (let* ((result
+                      (pkaappi-run-string-in g
+                        "(paal-run-bc
+                           (paal-emit-program
+                             (paal-analyze-all
+                               (paal-expand-all (list %repl-last-input))))
+                           %repl-user-globals)"))
+                     (is-def
+                      (pkaappi-run-string-in g
+                        "(and (pair? %repl-last-input)
+                              (memq (car %repl-last-input)
+                                    '(define define-values define-record-type
+                                      define-library import)))")))
+                (unless is-def
+                  (write result)
+                  (newline))))
+            (loop)))))
+
+    ; Load paal's pipeline and start an interactive REPL.
+    ; Priority: cache (.pbc) > .sld sources > error (no pipeline available).
+    (define (pkaappi-self-repl)
+      (cond
+        ((paal-cache-complete?)
+         (let ((g (pkaappi-make-globals)))
+           (pkaappi-load-cached-pipeline g)
+           (%run-repl g)))
+        ((file-exists? "lib/kaappi/paal/ir.sld")
+         (let ((g (pkaappi-make-globals)))
+           (for-each (lambda (p) (pkaappi-load-file p g)) %paal-lib-files)
+           (%run-repl g)))
+        (else
+         (display "error: repl requires cache (make pbc-pipeline) or paal sources\n"))))))

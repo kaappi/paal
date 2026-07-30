@@ -160,6 +160,7 @@
              (current-error-port . ,current-error-port)
              (input-port? . ,input-port?) (output-port? . ,output-port?)
              (port? . ,port?)
+             (flush-output-port . ,flush-output-port)
              (call-with-port . ,call-with-port)
 
              ;; Control
