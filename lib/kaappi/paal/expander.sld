@@ -34,7 +34,7 @@
             ((quote)
              form)
             ((lambda)
-             `(lambda ,(cadr form) ,@(map paal-expand (cddr form))))
+             `(lambda ,(cadr form) ,@(expand-body (cddr form))))
             ((define)
              (if (pair? (cadr form))
                  `(define ,(cadr form) ,@(map paal-expand (cddr form)))
@@ -66,11 +66,30 @@
             ((case)        (paal-expand (expand-case form)))
             ((quasiquote)  (paal-expand (expand-qq (cadr form) 0)))
             ((do)          (paal-expand (expand-do form)))
+            ((define-record-type)
+             (paal-expand (expand-define-record-type form)))
+            ((define-library)
+             ;; Minimal: extract all (begin ...) declarations and splice.
+             (let ((bodies (filter (lambda (d) (and (pair? d) (eq? (car d) 'begin)))
+                                   (cddr form))))
+               (paal-expand (cons 'begin (apply append (map cdr bodies))))))
+            ((import export)
+             ;; No-op: imports/exports not resolved during bootstrap.
+             '(quote #f))
             ;; --- Procedure call or unrecognised form ---
             (else (map paal-expand form)))))
 
     (define (paal-expand-all forms)
-      (map paal-expand forms))
+      ;; Top-level begin is transparent in R7RS: splice its contents.
+      ;; This is needed for define-record-type and define-library desugaring,
+      ;; which both produce a top-level (begin (define ...) ...) form.
+      (let splice ((fs forms))
+        (if (null? fs)
+            '()
+            (let ((expanded (paal-expand (car fs))))
+              (if (and (pair? expanded) (eq? (car expanded) 'begin))
+                  (splice (append (cdr expanded) (cdr fs)))
+                  (cons expanded (splice (cdr fs))))))))
 
     ;; ---------------------------------------------------------------
     ;; let
@@ -283,4 +302,97 @@
         `(let ,loop ,(map list vars inits)
            (if ,test
                (begin ,@(if (null? results) '((if #f #f)) results))
-               (begin ,@commands (,loop ,@steps))))))))
+               (begin ,@commands (,loop ,@steps))))))
+
+    ;; ---------------------------------------------------------------
+    ;; Body expansion (internal defines → letrec*)
+    ;; ---------------------------------------------------------------
+    ;;
+    ;; R7RS §5.3.2: leading (define ...) forms in a lambda body are
+    ;; equivalent to a letrec*. expand-body hoists them.
+
+    (define (define->binding d)
+      ;; Convert (define ...) to a (name expr) letrec* binding pair.
+      (if (pair? (cadr d))
+          ;; (define (name params...) body...)
+          (list (caadr d) (cons 'lambda (cons (cdadr d) (cddr d))))
+          ;; (define name expr)
+          (list (cadr d) (if (null? (cddr d)) #f (caddr d)))))
+
+    (define (expand-body forms)
+      ;; Expand a lambda body list. Leading (define ...) forms are lifted
+      ;; to letrec*. Returns a list of expanded forms for ,@body splicing.
+      (let loop ((rest forms) (defs '()))
+        (cond
+          ((null? rest)
+           (if (null? defs)
+               (error "paal-expand: empty lambda body")
+               (error "paal-expand: lambda body has only definitions")))
+          ((and (pair? (car rest)) (eq? (caar rest) 'define))
+           (loop (cdr rest) (cons (car rest) defs)))
+          (else
+           (if (null? defs)
+               (map paal-expand rest)
+               (list (paal-expand
+                      (cons 'letrec*
+                        (cons (map define->binding (reverse defs))
+                              rest)))))))))
+
+    ;; ---------------------------------------------------------------
+    ;; define-record-type desugaring
+    ;; ---------------------------------------------------------------
+    ;;
+    ;; Generates constructor, predicate, and field accessors/mutators
+    ;; using vector storage. Layout: [type-tag, field0, field1, ...]
+    ;; The type-tag is a fresh pair allocated once; eq? identity = type test.
+
+    (define (expand-define-record-type form)
+      (let* ((type-name   (cadr form))
+             (ctor-spec   (caddr form))
+             (pred-name   (cadddr form))
+             (field-specs (cddddr form))
+             (ctor-name   (car ctor-spec))
+             (ctor-fields (cdr ctor-spec))
+             (n           (length ctor-fields))
+             (tag-var     (string->symbol
+                            (string-append "%" (symbol->string type-name) "-tag")))
+             ;; 1-based vector index for a given field name.
+             (field-idx   (lambda (fname)
+                            (let loop ((fs ctor-fields) (i 1))
+                              (cond
+                                ((null? fs)
+                                 (error "paal: define-record-type: field not in constructor" fname))
+                                ((eq? (car fs) fname) i)
+                                (else (loop (cdr fs) (+ i 1)))))))
+             ;; (vector-set! v i field) for each constructor parameter.
+             (ctor-sets   (let lp ((fs ctor-fields) (i 1) (acc '()))
+                            (if (null? fs)
+                                (reverse acc)
+                                (lp (cdr fs) (+ i 1)
+                                    (cons `(vector-set! v ,i ,(car fs)) acc)))))
+             ;; Accessor and optional mutator defines per field spec.
+             (field-defs  (apply append
+                            (map (lambda (spec)
+                                   (let* ((fname (car spec))
+                                          (idx   (field-idx fname))
+                                          (acc   (cadr spec))
+                                          (mut   (and (pair? (cddr spec)) (caddr spec))))
+                                     (if mut
+                                         `((define (,acc obj) (vector-ref obj ,idx))
+                                           (define (,mut obj val) (vector-set! obj ,idx val)))
+                                         `((define (,acc obj) (vector-ref obj ,idx))))))
+                                 field-specs))))
+        `(begin
+           (define ,tag-var (list (quote ,type-name)))
+           (define (,ctor-name ,@ctor-fields)
+             (let ((v (make-vector ,(+ 1 n))))
+               (vector-set! v 0 ,tag-var)
+               ,@ctor-sets
+               v))
+           (define (,pred-name obj)
+             (and (vector? obj)
+                  (= (vector-length obj) ,(+ 1 n))
+                  (eq? (vector-ref obj 0) ,tag-var)))
+           ,@field-defs)))
+
+    ))

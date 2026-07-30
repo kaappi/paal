@@ -27,16 +27,45 @@ Stage 4: pkaappi can compile pkaappi
 Stage 5: pkaappi binary (no host dependency)
 ```
 
-## Current Status: Stage 5 complete
+## Current Status: Stage 6 pre-work in progress
 
-All five bootstrapping stages are done. Paal has a self-hosted character-level reader,
-a full derived-form expander, an IR analyzer, a trampoline-based tree-walking VM with
-TCO, and a register-based bytecode compiler + VM. The test gate passes: paal reads its
-own `.sld` source files correctly. 142 tests pass across all pipelines.
+All five bootstrapping stages are done. Stage 6 (self-compilation) requires paal to
+handle the forms used in its own `.sld` source files. Three such forms have been added
+to the expander in this phase — 157 tests pass across all pipelines.
 
 ```sh
 make run ARGS="eval '(define (fib n) (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2))))) (fib 20)'"
 ```
+
+### Stage 6 Prerequisites — forms now handled
+
+| Form | Where used in paal source | Status |
+|------|--------------------------|--------|
+| Internal `define` in lambda/let bodies | Throughout all `.sld` files | ✓ done |
+| `define-record-type` | `bytecode.sld`, `frame.sld` | ✓ done |
+| `define-library` / `import` / `export` | All `.sld` files (top-level) | ✓ done (minimal: splices `begin` body, ignores imports/exports) |
+| `define-syntax` / `syntax-rules` | Not used in paal source | deferred |
+| `case-lambda` | Not used in paal source | deferred |
+
+**Key expander changes (all in `expander.sld`):**
+
+- `expand-body` — hoists leading `(define ...)` forms in a lambda body to `letrec*`
+  (R7RS §5.3.2). Called from the `lambda` dispatch case.
+- `expand-define-record-type` — desugars to `begin` of `define`s using vector storage.
+  Vector layout: `[type-tag, field0, field1, …]`. Tag is a fresh pair for eq? identity.
+- `define-library` handler — extracts all `(begin …)` declarations and splices them.
+  `import` and `export` declarations expand to `(quote #f)` (no-op).
+- `paal-expand-all` — changed from `(map paal-expand forms)` to a splicing variant:
+  top-level `(begin …)` results are recursively spliced. This is required for
+  `define-record-type` and `define-library` to produce multiple top-level defines
+  that `paal-eval-program` can process at the proper scope.
+
+### Remaining work for Stage 6
+
+- Load and evaluate paal's own `bytecode.sld` + `frame.sld` via `pkaappi-run-file`
+  (should work now with the above changes).
+- Implement the self-compilation pipeline: paal compiles its own `.sld` files to
+  bytecode, producing a `pkaappi` binary with no kaappi host dependency.
 
 ## Remaining Stages
 

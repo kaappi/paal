@@ -44,11 +44,11 @@
 
     ;; --- Bytecode pipeline ---
 
+    (define (pkaappi-compile-forms forms)
+      (paal-emit-program (paal-analyze-all (paal-expand-all forms))))
+
     (define (pkaappi-compile src)
-      (paal-emit-program
-        (paal-analyze-all
-          (paal-expand-all
-            (paal-read-string src)))))
+      (pkaappi-compile-forms (paal-read-string src)))
 
     (define (pkaappi-run-bc-string src)
       (let* ((fn      (pkaappi-compile src))
@@ -59,10 +59,7 @@
         (paal-run-bc fn globals)))
 
     (define (pkaappi-run-bc-file path)
-      (let* ((fn      (paal-emit-program
-                        (paal-analyze-all
-                          (paal-expand-all
-                            (paal-read-file path)))))
+      (let* ((fn      (pkaappi-compile-forms (paal-read-file path)))
              (globals (paal-make-globals
                         (map (lambda (pair)
                                (cons (car pair) (vector-ref (cdr pair) 0)))

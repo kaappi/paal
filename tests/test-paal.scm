@@ -314,6 +314,115 @@
       "(define (loop n) (if (= n 0) 'done (loop (- n 1))))
        (loop 1000000)")))
 
+;; ----------------------------------------------------------------
+;; Internal defines (Phase 6 pre-work)
+;; ----------------------------------------------------------------
+
+(test-group "internal defines"
+  (test-equal "define in lambda body"
+    3
+    (pkaappi-run-string
+      "((lambda ()
+         (define x 1)
+         (define y 2)
+         (+ x y)))"))
+  (test-equal "recursive internal define"
+    120
+    (pkaappi-run-string
+      "((lambda ()
+         (define (fact n) (if (= n 0) 1 (* n (fact (- n 1)))))
+         (fact 5)))"))
+  (test-equal "internal define in let body"
+    5
+    (pkaappi-run-string
+      "(let ((a 2))
+         (define b 3)
+         (+ a b))"))
+  (test-equal "mutual internal defines"
+    #t
+    (pkaappi-run-string
+      "((lambda ()
+         (define (even? n) (if (= n 0) #t (odd?  (- n 1))))
+         (define (odd?  n) (if (= n 0) #f (even? (- n 1))))
+         (even? 10)))"))
+  (test-equal "bc: internal define"
+    3
+    (pkaappi-run-bc-string
+      "((lambda ()
+         (define x 1)
+         (define y 2)
+         (+ x y)))")))
+
+;; ----------------------------------------------------------------
+;; define-record-type (Phase 6 pre-work)
+;; ----------------------------------------------------------------
+
+(test-group "define-record-type"
+  (test-equal "constructor and accessor"
+    42
+    (pkaappi-run-string
+      "(define-record-type <point>
+         (make-point x y)
+         point?
+         (x point-x)
+         (y point-y))
+       (point-x (make-point 42 0))"))
+  (test-assert "predicate true"
+    (pkaappi-run-string
+      "(define-record-type <foo> (make-foo v) foo? (v foo-v))
+       (foo? (make-foo 1))"))
+  (test-assert "predicate false on other value"
+    (not (pkaappi-run-string
+           "(define-record-type <foo> (make-foo v) foo? (v foo-v))
+            (foo? 42)")))
+  (test-equal "mutator"
+    99
+    (pkaappi-run-string
+      "(define-record-type <cell>
+         (make-cell val)
+         cell?
+         (val cell-val set-cell-val!))
+       (define c (make-cell 0))
+       (set-cell-val! c 99)
+       (cell-val c)"))
+  (test-equal "two fields, second accessor"
+    7
+    (pkaappi-run-string
+      "(define-record-type <pair>
+         (make-pair a b)
+         pair-record?
+         (a pair-a)
+         (b pair-b))
+       (pair-b (make-pair 3 7))"))
+  (test-equal "bc: record-type constructor and accessor"
+    42
+    (pkaappi-run-bc-string
+      "(define-record-type <box>
+         (make-box val)
+         box?
+         (val box-val))
+       (box-val (make-box 42))")))
+
+;; ----------------------------------------------------------------
+;; define-library / import / export (Phase 6 pre-work)
+;; ----------------------------------------------------------------
+
+(test-group "define-library"
+  (test-assert "import expands to no-op"
+    (equal? '(quote #f)
+            (paal-expand '(import (scheme base)))))
+  (test-assert "export expands to no-op"
+    (equal? '(quote #f)
+            (paal-expand '(export foo bar))))
+  (test-equal "expand define-library produces begin"
+    'begin
+    (let ((forms (paal-read-file "lib/kaappi/paal/ir.sld")))
+      (car (paal-expand (car forms)))))
+  (test-assert "paal reads its own ir.sld"
+    (let ((forms (paal-read-file "lib/kaappi/paal/ir.sld")))
+      (and (> (length forms) 0)
+           (eq? 'define-library (caar forms))))))
+
 (test-group "run-file"
   (let ((tmp "/tmp/paal-test-run-file.scm"))
     (let ((port (open-output-file tmp)))

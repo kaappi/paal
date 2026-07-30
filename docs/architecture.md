@@ -87,9 +87,9 @@ structural — it transforms S-expressions to S-expressions with no semantic ana
 | Form | How handled |
 |------|-------------|
 | `(quote datum)` | passed through unchanged |
-| `(lambda params body…)` | body sub-forms recursively expanded |
+| `(lambda params body…)` | body expanded via `expand-body` (see below) |
 | `(define name val)` | val recursively expanded |
-| `(define (name params…) body…)` | body recursively expanded |
+| `(define (name params…) body…)` | body expanded via `expand-body` |
 | `(set! name val)` | val recursively expanded |
 | `(if test then)` / `(if test then else)` | all sub-forms recursively expanded |
 | `(begin e…)` | all sub-forms recursively expanded |
@@ -116,6 +116,23 @@ structural — it transforms S-expressions to S-expressions with no semantic ana
 | `(case key …)` | `(let ((_k key)) (cond …))` with `memv` |
 | `` `form `` | `cons`/`append`/`list` construction |
 | `(do …)` | named-let loop |
+| `(define-record-type name (ctor f…) pred (f acc [mut])…)` | `begin` of `define`s using vector storage |
+| `(define-library name decl…)` | `begin` of the library's `(begin …)` bodies |
+| `(import …)` / `(export …)` | `(quote #f)` — no-op during bootstrap |
+
+**Internal defines:** `expand-body` processes a lambda/let body and hoists any leading
+`(define …)` forms to `letrec*` (R7RS §5.3.2). Both the `lambda` and shorthand
+`(define (name …) body…)` handlers call `expand-body`.
+
+**Top-level begin splicing:** `paal-expand-all` splices top-level `(begin …)` results.
+This is necessary for `define-record-type` and `define-library` desugaring, which both
+produce a `(begin (define …) …)` form that must be seen as multiple top-level forms by
+`paal-eval-program`, not as a single begin expression.
+
+**Record type encoding:** vectors with layout `[type-tag, field0, field1, …]`.
+The type-tag is `(list '<name>)` — a fresh pair allocated once, so `eq?` identity
+serves as the type test in the predicate. Accessor: `(vector-ref obj i)`. Mutator:
+`(vector-set! obj i val)`. Mutable fields declared as `(field acc mut)` in the spec.
 
 **Hygiene:** fresh temporaries introduced by `or`, `cond =>`, and `case` use
 `fresh-name` (a module-level counter) to avoid variable capture.
