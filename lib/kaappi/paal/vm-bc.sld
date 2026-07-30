@@ -198,7 +198,7 @@
            ; Handle variadic: collect rest args into a list
            (when variadic?
              (let ((rest-args
-                     (let loop ((i (+ new-base arity)) (end (+ abs-base 1 nargs)) (acc '()))
+                     (let loop ((i (+ new-base arity)) (end (+ abs-base nargs)) (acc '()))
                        (if (> i end)
                            (reverse acc)
                            (loop (+ i 1) end (cons (vector-ref regs i) acc))))))

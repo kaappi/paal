@@ -25,7 +25,9 @@
     ;; High-level pipeline (tree-walking)
     pkaappi-run-string pkaappi-run-file
     ;; High-level pipeline (bytecode)
-    pkaappi-compile pkaappi-run-bc-string pkaappi-run-bc-file)
+    pkaappi-compile pkaappi-run-bc-string pkaappi-run-bc-file
+    ;; Multi-file sequential loading
+    pkaappi-make-globals pkaappi-load-file pkaappi-run-string-in)
   (begin
 
     ;; --- Tree-walking pipeline ---
@@ -64,4 +66,26 @@
                         (map (lambda (pair)
                                (cons (car pair) (vector-ref (cdr pair) 0)))
                              (paal-initial-env)))))
-        (paal-run-bc fn globals)))))
+        (paal-run-bc fn globals)))
+
+    ;; --- Multi-file sequential loading ---
+
+    ;; Create a fresh globals table seeded with kaappi primitives.
+    ;; The returned object can be passed to pkaappi-load-file repeatedly;
+    ;; each call accumulates the loaded file's definitions in place.
+    (define (pkaappi-make-globals)
+      (paal-make-globals
+        (map (lambda (pair) (cons (car pair) (vector-ref (cdr pair) 0)))
+             (paal-initial-env))))
+
+    ;; Compile a .sld or .scm file and run it into an existing globals table.
+    ;; New names defined by the file are added to globals via define-global ops.
+    ;; Returns globals for easy chaining: (pkaappi-load-file b (pkaappi-load-file a g))
+    (define (pkaappi-load-file path globals)
+      (paal-run-bc (pkaappi-compile-forms (paal-read-file path)) globals)
+      globals)
+
+    ;; Compile and evaluate a source string in an existing globals table.
+    ;; get-global ops resolve against all previously loaded definitions.
+    (define (pkaappi-run-string-in globals src)
+      (paal-run-bc (pkaappi-compile src) globals))))

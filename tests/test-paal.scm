@@ -423,6 +423,54 @@
       (and (> (length forms) 0)
            (eq? 'define-library (caar forms))))))
 
+;; ----------------------------------------------------------------
+;; Self-load integration (Stage 6 gate)
+;; ----------------------------------------------------------------
+
+(test-group "self-load: ir + compiler"
+  (let ((g (pkaappi-make-globals)))
+    (pkaappi-load-file "lib/kaappi/paal/ir.sld" g)
+    (test-assert "ir:const? works after loading ir.sld"
+      (pkaappi-run-string-in g "(ir:const? (ir:const 42))"))
+    (test-assert "ir:ref? works"
+      (pkaappi-run-string-in g "(ir:ref? (ir:ref 'x))"))
+    (test-equal "ir:const-val works"
+      42
+      (pkaappi-run-string-in g "(ir:const-val (ir:const 42))"))
+    (test-equal "ir:if-test works"
+      #t
+      (pkaappi-run-string-in g
+        "(ir:const-val (ir:if-test (ir:if (ir:const #t) (ir:const 1) (ir:const 2))))"))
+    (pkaappi-load-file "lib/kaappi/paal/compiler.sld" g)
+    (test-assert "paal-analyze of literal produces ir:const"
+      (pkaappi-run-string-in g "(ir:const? (paal-analyze 42))"))
+    (test-assert "paal-analyze of symbol produces ir:ref"
+      (pkaappi-run-string-in g "(ir:ref? (paal-analyze 'x))"))
+    (test-assert "paal-analyze of (if ...) produces ir:if"
+      (pkaappi-run-string-in g "(ir:if? (paal-analyze '(if #t 1 2)))"))))
+
+(test-group "self-load: ir+bytecode+compiler+frame"
+  ;; Load files that don't use named-let (letrec self-reference requires
+  ;; mutable upvalue cells, not yet supported in the bytecode VM).
+  ;; reader.sld, expander.sld, emitter.sld use 'let loop' and are deferred.
+  ;; paal-analyze-all uses (map paal-analyze ...) but HOST map can't call
+  ;; paal closures; use paal-analyze directly instead.
+  (let ((g (pkaappi-make-globals)))
+    (for-each (lambda (path) (pkaappi-load-file path g))
+              '("lib/kaappi/paal/ir.sld"
+                "lib/kaappi/paal/bytecode.sld"
+                "lib/kaappi/paal/compiler.sld"
+                "lib/kaappi/paal/frame.sld"))
+    (test-assert "paal-analyze of (if ...) produces ir:if"
+      (pkaappi-run-string-in g "(ir:if? (paal-analyze '(if #t 1 2)))"))
+    (test-assert "paal-analyze of (quote ...) produces ir:const"
+      (pkaappi-run-string-in g "(ir:const? (paal-analyze '(quote hello)))"))
+    (test-assert "paal-analyze of (set! ...) produces ir:set!"
+      (pkaappi-run-string-in g "(ir:set!? (paal-analyze '(set! x 99)))"))
+    (test-assert "closure? from frame.sld works on paal-compiled closure"
+      (pkaappi-run-string-in g
+        "(closure? (make-closure (paal-analyze 42) (vector)))"))))
+
 (test-group "run-file"
   (let ((tmp "/tmp/paal-test-run-file.scm"))
     (let ((port (open-output-file tmp)))

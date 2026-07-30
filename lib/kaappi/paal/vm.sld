@@ -95,6 +95,11 @@
              (caar . ,caar) (cadr . ,cadr) (cdar . ,cdar) (cddr . ,cddr)
              (caaar . ,caaar) (caadr . ,caadr) (cadar . ,cadar) (caddr . ,caddr)
              (cdaar . ,cdaar) (cdadr . ,cdadr) (cddar . ,cddar) (cdddr . ,cdddr)
+             ;; 4-level c*r combinations (needed by paal-analyze for (if t c a))
+             (caaaar . ,caaaar) (caaadr . ,caaadr) (caadar . ,caadar) (caaddr . ,caaddr)
+             (cadaar . ,cadaar) (cadadr . ,cadadr) (caddar . ,caddar) (cadddr . ,cadddr)
+             (cdaaar . ,cdaaar) (cdaadr . ,cdaadr) (cdadar . ,cdadar) (cdaddr . ,cdaddr)
+             (cddaar . ,cddaar) (cddadr . ,cddadr) (cdddar . ,cdddar) (cddddr . ,cddddr)
              (set-car! . ,set-car!) (set-cdr! . ,set-cdr!)
 
              ;; Vectors

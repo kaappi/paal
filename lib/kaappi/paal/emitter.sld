@@ -100,14 +100,22 @@
                (cons 'global name))))))
 
     ;; Try to capture name from parent chain; returns upvalue index or #f.
+    ;; Recursively walks ancestors so that multi-level upvalue capture works
+    ;; even when an intermediate lambda hasn't yet compiled its own reference
+    ;; to the variable (which happens when callees are compiled before args).
     (define (capture-upvalue! e name)
       (let ((parent (e-parent e)))
         (and parent
              (let ((res (resolve-in e name parent)))
-               (and res
-                    (let ((is-local? (eq? (car res) 'local))
-                          (src-idx   (cdr res)))
-                      (add-upvalue! e name is-local? src-idx)))))))
+               (if res
+                   (let ((is-local? (eq? (car res) 'local))
+                         (src-idx   (cdr res)))
+                     (add-upvalue! e name is-local? src-idx))
+                   ; Not found in parent's locals or current upvalues.
+                   ; Force upvalue addition through the ancestor chain.
+                   (let ((ancestor-idx (capture-upvalue! parent name)))
+                     (and ancestor-idx
+                          (add-upvalue! e name #f ancestor-idx))))))))
 
     ;; Resolve name in the context of a child's parent.
     ;; Returns (local . reg), (upvalue . idx), or #f.
