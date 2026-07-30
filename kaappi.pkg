@@ -1,3 +1,4 @@
 name: paal
 version: 0.1.0
+depends: kaappi-test
 source: https://github.com/kaappi/paal

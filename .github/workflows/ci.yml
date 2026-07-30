@@ -22,13 +22,14 @@ jobs:
         with:
           version: 0.16.0
 
-      - name: Build Kaappi
+      - name: Build Kaappi and dependencies
         run: |
           git clone --depth 1 https://github.com/kaappi/kaappi.git /tmp/kaappi
           cd /tmp/kaappi && zig build
+          git clone --depth 1 https://github.com/kaappi/kaappi-test.git /tmp/kaappi-test
 
       - name: Run tests
-        run: make test KAAPPI=/tmp/kaappi/zig-out/bin/kaappi
+        run: make test KAAPPI=/tmp/kaappi/zig-out/bin/kaappi KAAPPI_TEST=/tmp/kaappi-test/lib
 
       - name: Upload to Codecov
         if: github.event_name == 'push'
