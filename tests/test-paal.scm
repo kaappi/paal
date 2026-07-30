@@ -1,4 +1,4 @@
-(import (kaappi test) (kaappi paal))
+(import (scheme base) (scheme file) (kaappi test) (kaappi paal))
 
 (test-group "literals"
   (test-equal "integer"    42       (pkaappi-run-string "42"))
@@ -40,10 +40,43 @@
   (test-assert "<"     (pkaappi-run-string "(< 1 2)")))
 
 (test-group "lists"
-  (test-equal "cons"  '(1 2) (pkaappi-run-string "(cons 1 '(2))"))
-  (test-equal "car"   1      (pkaappi-run-string "(car '(1 2 3))"))
-  (test-equal "cdr"   '(2 3) (pkaappi-run-string "(cdr '(1 2 3))"))
-  (test-assert "null?"       (pkaappi-run-string "(null? '())"))
-  (test-assert "pair?"       (pkaappi-run-string "(pair? '(1))")))
+  (test-equal "cons"    '(1 2) (pkaappi-run-string "(cons 1 '(2))"))
+  (test-equal "car"     1      (pkaappi-run-string "(car '(1 2 3))"))
+  (test-equal "cdr"     '(2 3) (pkaappi-run-string "(cdr '(1 2 3))"))
+  (test-assert "null?"         (pkaappi-run-string "(null? '())"))
+  (test-assert "pair?"         (pkaappi-run-string "(pair? '(1))"))
+  (test-equal "append"  '(1 2 3 4) (pkaappi-run-string "(append '(1 2) '(3 4))"))
+  (test-equal "reverse" '(3 2 1)   (pkaappi-run-string "(reverse '(1 2 3))"))
+  (test-equal "length"  3          (pkaappi-run-string "(length '(a b c))"))
+  (test-equal "list-ref" 'b        (pkaappi-run-string "(list-ref '(a b c) 1)"))
+  (test-equal "assq"    '(b 2)     (pkaappi-run-string "(assq 'b '((a 1) (b 2) (c 3)))"))
+  (test-equal "member"  '(2 3)     (pkaappi-run-string "(member 2 '(1 2 3))")))
+
+(test-group "set!"
+  (test-equal "mutate" 2
+    (pkaappi-run-string "(define x 1) (set! x 2) x"))
+  (test-equal "closure over set!" 3
+    (pkaappi-run-string
+      "(define n 0)
+       (define (bump!) (set! n (+ n 1)))
+       (bump!) (bump!) (bump!) n")))
+
+(test-group "lambda params"
+  (test-equal "improper (x . rest)"
+    '(2 3 4)
+    (pkaappi-run-string "((lambda (x . rest) rest) 1 2 3 4)"))
+  (test-equal "improper (x y . rest)"
+    '(3 4)
+    (pkaappi-run-string "((lambda (x y . rest) rest) 1 2 3 4)"))
+  (test-equal "define shorthand rest"
+    '(2 3)
+    (pkaappi-run-string "(define (f x . rest) rest) (f 1 2 3)")))
+
+(test-group "run-file"
+  (let ((tmp "/tmp/paal-test-run-file.scm"))
+    (let ((port (open-output-file tmp)))
+      (display "(define (square x) (* x x)) (square 7)" port)
+      (close-output-port port))
+    (test-equal "pkaappi-run-file" 49 (pkaappi-run-file tmp))))
 
 (test-exit)

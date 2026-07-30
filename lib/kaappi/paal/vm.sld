@@ -11,7 +11,7 @@
 ;;; replaced by a bytecode emitter + register-based VM.
 
 (define-library (kaappi paal vm)
-  (import (scheme base) (kaappi paal ir))
+  (import (scheme base) (scheme read) (kaappi paal ir))
   (export paal-eval paal-eval-program paal-initial-env)
   (begin
 
@@ -34,6 +34,8 @@
             (error "paal: set! on unbound variable" name))))
 
     ;; Bind a parameter list against actual arguments.
+    ;; Handles proper lists, pure variadic (symbol params), and
+    ;; improper lists (x y . rest) via the recursive else branch.
     (define (env-bind env params args rest?)
       (cond
         ((and rest? (symbol? params))
@@ -43,23 +45,138 @@
          (env-bind (env-extend env (car params) (car args))
                    (cdr params) (cdr args) rest?))))
 
+    ;; --- Scheme-implemented gensym (kaappi has no built-in) ---
+
+    (define %paal-gensym-counter 0)
+    (define (paal-gensym)
+      (set! %paal-gensym-counter (+ %paal-gensym-counter 1))
+      (string->symbol
+        (string-append "__paal_" (number->string %paal-gensym-counter))))
+
     ;; --- Initial environment seeded with host primitives ---
 
     (define (paal-initial-env)
       (map (lambda (pair) (cons (car pair) (vector (cdr pair))))
-           `((+  . ,+)  (-  . ,-)  (*  . ,*)  (/  . ,/)
-             (=  . ,=)  (<  . ,<)  (>  . ,>)  (<= . ,<=) (>= . ,>=)
+           `(;; Arithmetic
+             (+ . ,+) (- . ,-) (* . ,*) (/ . ,/)
+             (= . ,=) (< . ,<) (> . ,>) (<= . ,<=) (>= . ,>=)
+             (abs . ,abs) (max . ,max) (min . ,min)
+             (floor . ,floor) (ceiling . ,ceiling)
+             (truncate . ,truncate) (round . ,round)
+             (expt . ,expt) (sqrt . ,sqrt)
+             (modulo . ,modulo) (remainder . ,remainder) (quotient . ,quotient)
+             (gcd . ,gcd) (lcm . ,lcm)
+             (exact . ,exact) (inexact . ,inexact)
+             (exact? . ,exact?) (inexact? . ,inexact?)
+             (zero? . ,zero?) (positive? . ,positive?) (negative? . ,negative?)
+             (odd? . ,odd?) (even? . ,even?)
+             (number->string . ,number->string) (string->number . ,string->number)
+
+             ;; Booleans
+             (not . ,not) (boolean? . ,boolean?) (boolean=? . ,boolean=?)
+
+             ;; Equivalence
              (eq? . ,eq?) (eqv? . ,eqv?) (equal? . ,equal?)
-             (not . ,not)
+
+             ;; Pairs and lists
              (cons . ,cons) (car . ,car) (cdr . ,cdr) (list . ,list)
-             (null? . ,null?) (pair? . ,pair?) (length . ,length)
-             (number? . ,number?) (string? . ,string?) (symbol? . ,symbol?)
-             (boolean? . ,boolean?) (procedure? . ,procedure?) (char? . ,char?)
-             (display . ,display) (newline . ,newline) (write . ,write)
-             (string-append . ,string-append) (string-length . ,string-length)
+             (null? . ,null?) (pair? . ,pair?) (list? . ,list?)
+             (length . ,length) (append . ,append) (reverse . ,reverse)
+             (list-tail . ,list-tail) (list-ref . ,list-ref)
+             (list-copy . ,list-copy)
+             (assq . ,assq) (assv . ,assv) (assoc . ,assoc)
+             (memq . ,memq) (memv . ,memv) (member . ,member)
+             (caar . ,caar) (cadr . ,cadr) (cdar . ,cdar) (cddr . ,cddr)
+             (caaar . ,caaar) (caadr . ,caadr) (cadar . ,cadar) (caddr . ,caddr)
+             (cdaar . ,cdaar) (cdadr . ,cdadr) (cddar . ,cddar) (cdddr . ,cdddr)
+             (set-car! . ,set-car!) (set-cdr! . ,set-cdr!)
+
+             ;; Vectors
+             (vector . ,vector) (make-vector . ,make-vector)
+             (vector-ref . ,vector-ref) (vector-set! . ,vector-set!)
+             (vector-length . ,vector-length) (vector? . ,vector?)
+             (vector->list . ,vector->list) (list->vector . ,list->vector)
+             (vector-fill! . ,vector-fill!) (vector-copy . ,vector-copy)
+             (vector-copy! . ,vector-copy!) (vector-append . ,vector-append)
+
+             ;; Strings
+             (string? . ,string?) (string . ,string) (make-string . ,make-string)
+             (string-length . ,string-length) (string-ref . ,string-ref)
+             (string-copy . ,string-copy) (string-append . ,string-append)
+             (string->list . ,string->list) (list->string . ,list->string)
+             (string->symbol . ,string->symbol) (symbol->string . ,symbol->string)
+             (string-upcase . ,string-upcase) (string-downcase . ,string-downcase)
+             (string=? . ,string=?) (string<? . ,string<?)
+             (string>? . ,string>?) (string<=? . ,string<=?) (string>=? . ,string>=?)
+             (substring . ,substring)
              (string->number . ,string->number) (number->string . ,number->string)
+
+             ;; Symbols
+             (symbol? . ,symbol?) (symbol=? . ,symbol=?)
+             (gensym . ,paal-gensym)
+
+             ;; Characters
+             (char? . ,char?)
+             (char->integer . ,char->integer) (integer->char . ,integer->char)
+             (char-alphabetic? . ,char-alphabetic?) (char-numeric? . ,char-numeric?)
+             (char-whitespace? . ,char-whitespace?)
+             (char-upper-case? . ,char-upper-case?) (char-lower-case? . ,char-lower-case?)
+             (char-upcase . ,char-upcase) (char-downcase . ,char-downcase)
+             (char=? . ,char=?) (char<? . ,char<?) (char>? . ,char>?)
+             (char<=? . ,char<=?) (char>=? . ,char>=?)
+
+             ;; Type predicates
+             (number? . ,number?) (integer? . ,integer?) (real? . ,real?)
+             (rational? . ,rational?) (complex? . ,complex?)
+             (procedure? . ,procedure?)
+
+             ;; I/O
+             (display . ,display) (newline . ,newline) (write . ,write)
+             (read . ,read) (read-char . ,read-char) (peek-char . ,peek-char)
+             (write-char . ,write-char) (write-string . ,write-string)
+             (read-line . ,read-line) (read-string . ,read-string)
+             (eof-object? . ,eof-object?) (eof-object . ,eof-object)
+             (char-ready? . ,char-ready?)
+             (open-input-string . ,open-input-string)
+             (open-output-string . ,open-output-string)
+             (get-output-string . ,get-output-string)
+             (open-input-file . ,open-input-file)
+             (open-output-file . ,open-output-file)
+             (close-input-port . ,close-input-port)
+             (close-output-port . ,close-output-port)
+             (current-input-port . ,current-input-port)
+             (current-output-port . ,current-output-port)
+             (current-error-port . ,current-error-port)
+             (input-port? . ,input-port?) (output-port? . ,output-port?)
+             (port? . ,port?)
+
+             ;; Control
              (apply . ,apply) (map . ,map) (for-each . ,for-each)
-             (error . ,error) (values . ,values))))
+             (values . ,values)
+             (call-with-values . ,call-with-values)
+             (call-with-current-continuation . ,call-with-current-continuation)
+             (call/cc . ,call/cc)
+             (dynamic-wind . ,dynamic-wind)
+
+             ;; Exceptions
+             (error . ,error)
+             (with-exception-handler . ,with-exception-handler)
+             (raise . ,raise) (raise-continuable . ,raise-continuable)
+             (error-object? . ,error-object?)
+             (error-object-message . ,error-object-message)
+             (error-object-irritants . ,error-object-irritants)
+
+             ;; Bytevectors
+             (bytevector? . ,bytevector?) (make-bytevector . ,make-bytevector)
+             (bytevector . ,bytevector) (bytevector-length . ,bytevector-length)
+             (bytevector-u8-ref . ,bytevector-u8-ref)
+             (bytevector-u8-set! . ,bytevector-u8-set!)
+             (bytevector-copy . ,bytevector-copy)
+             (bytevector-append . ,bytevector-append)
+
+             ;; Misc
+             (void . ,(lambda () (if #f #f)))
+             (not . ,not))))
 
     ;; --- Evaluator ---
 

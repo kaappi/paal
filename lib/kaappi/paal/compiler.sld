@@ -39,18 +39,19 @@
         (cond
           ((symbol? params) (ir:lambda params body-ir #t))
           ((null?   params) (ir:lambda '() body-ir #f))
-          ((pair?   params) (ir:lambda params body-ir #f))
+          ;; proper list → rest?=#f; improper list (x . rest) → rest?=#t
+          ((pair?   params) (ir:lambda params body-ir (not (list? params))))
           (else (error "analyze-lambda: bad parameter list" params)))))
 
     (define (analyze-define rest)
       (if (pair? (car rest))
-          ;; shorthand: (define (name params...) body...)
+          ;; shorthand: (define (name params...) body...) or (define (name x . rest) ...)
           (let ((name   (caar rest))
                 (params (cdar rest)))
             (ir:define name
               (ir:lambda params
                          (ir:begin (map paal-analyze (cdr rest)))
-                         #f)))
+                         (not (list? params)))))
           ;; plain: (define name val)
           (ir:define (car rest)
             (if (null? (cdr rest))
