@@ -20,47 +20,14 @@ make run ARGS="ir file.scm"            # print IR nodes (diagnostic)
 make pbc-pipeline                      # build pipeline cache (speeds up self-hosted path)
 ```
 
-## CLI — pkaappi vs kaappi
+## CLI
 
-`pkaappi` intentionally mirrors `kaappi`'s interpreter-style CLI:
+`pkaappi` follows the same interpreter-style conventions as `kaappi`: no args starts
+the REPL, a positional file runs it, subcommands (`expand`, `ir`, `eval`, `compile`,
+`repl`) and flags (`--help`, `--version`) work the same way.
 
-| Invocation | kaappi | pkaappi |
-|------------|--------|---------|
-| No args | REPL | REPL ✓ |
-| `<tool> file.scm` | run file | run file ✓ |
-| `<tool> -h` / `--help` | usage | usage ✓ |
-| `<tool> --version` | print version | print version ✓ |
-| `<tool> expand file.scm` | print expanded forms | print expanded forms ✓ |
-| `<tool> ir file.scm` | print IR nodes | print IR nodes ✓ |
-| `<tool> eval '<expr>'` | evaluate expression | evaluate expression ✓ |
-| `<tool> repl` | — | explicit REPL subcommand |
-| Unknown flag | `error: unknown option:` (exit 2) | `error: unknown option:` (exit 2) ✓ |
-
-### Exceptions and differences
-
-- **`compile` output differs**: `kaappi compile file.scm` produces a native binary via
-  LLVM; `pkaappi compile file.scm -o out.pbc` produces a text S-expression bytecode
-  file (`.pbc`). The `-o` flag is required for pkaappi; kaappi defaults the output name.
-
-- **No `--lib-path` flag**: pkaappi doesn't accept `--lib-path`. In bootstrap mode the
-  library path is provided to kaappi; in standalone binary mode libraries are bundled.
-
-- **Script args not forwarded**: `pkaappi file.scm arg1 arg2` runs `file.scm` but
-  `(command-line)` inside the user's program does not see `arg1 arg2`. kaappi passes
-  everything after the filename as script args.
-
-- **`.pbc` auto-detection**: `pkaappi file.pbc` runs a pre-compiled paal bytecode file.
-  kaappi has no `.pbc` equivalent (it uses `.sbc`).
-
-- **`run` subcommand kept**: `pkaappi run file.scm` still works for compatibility;
-  kaappi has no `run` subcommand.
-
-- **`version` subcommand kept**: `pkaappi version` still works; kaappi only has
-  `--version`.
-
-- **kaappi-only subcommands not yet in pkaappi**: `check`, `fmt`, `test`, `doctor`,
-  `cache`, `features`, `ast`. Runtime flags (`--sandbox`, `--gc-stats`, `--profile`,
-  `--coverage`, `--timeout`, etc.) are also absent.
+**Exceptions:** `compile` outputs `.pbc` text bytecode (not a native binary); `--lib-path`
+is not accepted; script args after the filename are not forwarded to `(command-line)`.
 
 ## Architecture
 
