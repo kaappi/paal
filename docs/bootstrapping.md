@@ -27,45 +27,41 @@ Stage 4: pkaappi can compile pkaappi
 Stage 5: pkaappi binary (no host dependency)
 ```
 
-## Current Status: Stage 6 pre-work in progress
+## Current Status: Stage 6 complete — 186 tests pass
 
-All five bootstrapping stages are done. Stage 6 (self-compilation) requires paal to
-handle the forms used in its own `.sld` source files. Three such forms have been added
-to the expander in this phase — 157 tests pass across all pipelines.
+Paal can load all 8 of its own library files through its bytecode pipeline and
+compile and execute arbitrary Scheme through its own loaded pipeline with no HOST
+pipeline involvement in the compute path:
 
-```sh
-make run ARGS="eval '(define (fib n) (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2))))) (fib 20)'"
+```scheme
+; All through paal's own loaded code:
+(paal-run-bc
+  (paal-emit-program
+    (paal-analyze-all
+      (paal-expand-all '((define (fact n) (if (= n 0) 1 (* n (fact (- n 1)))))
+                         (fact 5)))))
+  (pkaappi-make-globals))
+; → 120
 ```
 
-### Stage 6 Prerequisites — forms now handled
+### Stage 6 — What was done
 
-| Form | Where used in paal source | Status |
-|------|--------------------------|--------|
-| Internal `define` in lambda/let bodies | Throughout all `.sld` files | ✓ done |
-| `define-record-type` | `bytecode.sld`, `frame.sld` | ✓ done |
-| `define-library` / `import` / `export` | All `.sld` files (top-level) | ✓ done (minimal: splices `begin` body, ignores imports/exports) |
-| `define-syntax` / `syntax-rules` | Not used in paal source | deferred |
-| `case-lambda` | Not used in paal source | deferred |
+| Item | Status |
+|------|--------|
+| Expander: `define-record-type`, `define-library`, internal define lifting | ✓ |
+| Bytecode VM: `letrec`/named-let mutable upvalue fix (box mutable captured vars) | ✓ |
+| HOST/paal boundary: paal-native `map`/`for-each`/`filter` in globals | ✓ |
+| Self-execution loop: vm-bc.sld loaded, `pkaappi-make-globals` in globals | ✓ |
+| Expander bug: shorthand `define` now uses `expand-body` (internal define lifting) | ✓ |
+| Reader: `\|...\|` bar-quoted symbol support | ✓ |
 
-**Key expander changes (all in `expander.sld`):**
+### Remaining work
 
-- `expand-body` — hoists leading `(define ...)` forms in a lambda body to `letrec*`
-  (R7RS §5.3.2). Called from the `lambda` dispatch case.
-- `expand-define-record-type` — desugars to `begin` of `define`s using vector storage.
-  Vector layout: `[type-tag, field0, field1, …]`. Tag is a fresh pair for eq? identity.
-- `define-library` handler — extracts all `(begin …)` declarations and splices them.
-  `import` and `export` declarations expand to `(quote #f)` (no-op).
-- `paal-expand-all` — changed from `(map paal-expand forms)` to a splicing variant:
-  top-level `(begin …)` results are recursively spliced. This is required for
-  `define-record-type` and `define-library` to produce multiple top-level defines
-  that `paal-eval-program` can process at the proper scope.
-
-### Remaining work for Stage 6
-
-- Load and evaluate paal's own `bytecode.sld` + `frame.sld` via `pkaappi-run-file`
-  (should work now with the above changes).
-- Implement the self-compilation pipeline: paal compiles its own `.sld` files to
-  bytecode, producing a `pkaappi` binary with no kaappi host dependency.
+- Bytecode serializer — write compiled bytecode to `.sbc` files so paal can produce
+  standalone bytecode bundles without kaappi host re-compilation.
+- `pkaappi compile` subcommand — expose self-hosted compilation through the CLI.
+- `define-syntax` / `syntax-rules` — not used in paal source, deferred.
+- `case-lambda` — not used in paal source, deferred.
 
 ## Remaining Stages
 

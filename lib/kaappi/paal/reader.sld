@@ -17,7 +17,7 @@
 ;;;   123 3.14 +inf.0    — numbers (via string->number)
 ;;;   identifier         — symbols
 ;;;
-;;; Not yet supported: |..| symbol quoting, #u8(, datum labels (#N= #N#),
+;;; Not yet supported: #u8(, datum labels (#N= #N#),
 ;;; bignum/rational/complex literals (delegated to string->number if supported
 ;;; by the host), #e/#i exactness prefixes.
 
@@ -269,6 +269,24 @@
              (cons elem (read-list port)))))))
 
     ;; ---------------------------------------------------------------
+    ;; Bar-quoted symbol reader (| already consumed)
+    ;; ---------------------------------------------------------------
+
+    (define (read-bar-symbol port)
+      ; Read characters until closing |, with \ escape support. Returns a symbol.
+      (let loop ((acc '()))
+        (let ((ch (read-char port)))
+          (cond
+            ((eof-object? ch)
+             (error "paal-read: unterminated bar-quoted symbol"))
+            ((char=? ch #\|)
+             (string->symbol (list->string (reverse acc))))
+            ((char=? ch #\\)
+             (loop (cons (read-char port) acc)))
+            (else
+             (loop (cons ch acc)))))))
+
+    ;; ---------------------------------------------------------------
     ;; Main reader
     ;; ---------------------------------------------------------------
 
@@ -307,6 +325,10 @@
                (begin (read-char port)
                       (list 'unquote-splicing (paal-read port)))
                (list 'unquote (paal-read port))))
+
+          ((char=? ch #\|)
+           (read-char port)
+           (read-bar-symbol port))
 
           ;; Numbers and symbols: read until delimiter, try string->number
           (else

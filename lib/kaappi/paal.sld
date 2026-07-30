@@ -74,9 +74,12 @@
     ;; The returned object can be passed to pkaappi-load-file repeatedly;
     ;; each call accumulates the loaded file's definitions in place.
     (define (pkaappi-make-globals)
-      (let ((g (paal-make-globals
-                  (map (lambda (pair) (cons (car pair) (vector-ref (cdr pair) 0)))
-                       (paal-initial-env)))))
+      ; Seed the alist with pkaappi-make-globals itself (HOST procedure) so that
+      ; paal code loaded via pkaappi-load-file can call it to create fresh globals.
+      (let* ((base-alist (map (lambda (pair) (cons (car pair) (vector-ref (cdr pair) 0)))
+                              (paal-initial-env)))
+             (g (paal-make-globals (cons (cons 'pkaappi-make-globals pkaappi-make-globals)
+                                         base-alist))))
         ; Install paal-native map/for-each/filter, replacing the HOST stubs.
         ; HOST map cannot call paal closures; these paal-compiled versions can.
         ; map handles 1 or 2 list args (covers all usage in paal's own source).

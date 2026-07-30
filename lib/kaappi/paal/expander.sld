@@ -37,7 +37,10 @@
              `(lambda ,(cadr form) ,@(expand-body (cddr form))))
             ((define)
              (if (pair? (cadr form))
-                 `(define ,(cadr form) ,@(map paal-expand (cddr form)))
+                 ; Shorthand (define (f params) body...): convert to canonical form
+                 ; and use expand-body so internal defines are lifted to letrec*.
+                 `(define ,(caadr form)
+                    (lambda ,(cdadr form) ,@(expand-body (cddr form))))
                  `(define ,(cadr form)
                     ,@(if (null? (cddr form))
                           '()

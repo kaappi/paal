@@ -555,4 +555,56 @@
                     (paal-analyze-all
                       (paal-expand-all '((define (add x y) (+ x y)) (add 3 4))))))"))))
 
+;; ---------------------------------------------------------------
+;; Stage 6 complete: self-execute
+;; ---------------------------------------------------------------
+
+(test-group "stage-6 complete: self-execute"
+  (let ((g (pkaappi-make-globals)))
+    (for-each (lambda (path) (pkaappi-load-file path g))
+              '("lib/kaappi/paal/ir.sld"
+                "lib/kaappi/paal/bytecode.sld"
+                "lib/kaappi/paal/reader.sld"
+                "lib/kaappi/paal/expander.sld"
+                "lib/kaappi/paal/compiler.sld"
+                "lib/kaappi/paal/frame.sld"
+                "lib/kaappi/paal/emitter.sld"
+                "lib/kaappi/paal/vm-bc.sld"))
+    (test-equal "self-hosted (add 3 4) evaluates to 7"
+      7
+      (pkaappi-run-string-in g
+        "(paal-run-bc
+           (paal-emit-program
+             (paal-analyze-all
+               (paal-expand-all '((define (add x y) (+ x y)) (add 3 4)))))
+           (pkaappi-make-globals))"))
+    (test-equal "self-hosted factorial via loaded pipeline"
+      120
+      (pkaappi-run-string-in g
+        "(paal-run-bc
+           (paal-emit-program
+             (paal-analyze-all
+               (paal-expand-all
+                 '((define (fact n) (if (= n 0) 1 (* n (fact (- n 1)))))
+                   (fact 5)))))
+           (pkaappi-make-globals))"))))
+
+;; ---------------------------------------------------------------
+;; Bar-quoted symbols |...|
+;; ---------------------------------------------------------------
+
+(test-group "bar-quoted symbols"
+  (test-equal "simple bar symbol"
+    (string->symbol "hello")
+    (car (paal-read-string "|hello|")))
+  (test-equal "symbol with spaces"
+    (string->symbol "foo bar")
+    (car (paal-read-string "|foo bar|")))
+  (test-equal "symbol with parens"
+    (string->symbol "a(b)c")
+    (car (paal-read-string "|a(b)c|")))
+  (test-equal "backslash escape"
+    (string->symbol "a|b")
+    (car (paal-read-string "|a\\|b|"))))
+
 (test-exit)
