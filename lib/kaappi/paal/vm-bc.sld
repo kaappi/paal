@@ -10,7 +10,7 @@
   (export paal-run-bc paal-make-globals)
   (begin
 
-    (define REGS-SIZE 4096)
+    (define REGS-SIZE 16384)
 
     ;; ---------------------------------------------------------------
     ;; Global environment (simple association list, mutable via set!)

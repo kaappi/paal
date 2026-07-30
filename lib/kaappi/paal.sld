@@ -217,12 +217,16 @@
     ; Load paal's pipeline + serializer into a fresh globals, compile the input
     ; file through the loaded pipeline, and write bytecode to output.
     ; Priority: cache (.pbc) > .sld sources > HOST bytecode fallback.
+    ; The serializer cache is loaded only if it already exists — when building
+    ; the serializer cache itself it won't exist yet, so fall back to .sld.
     (define (pkaappi-self-compile-to-file input output)
       (cond
         ((paal-cache-complete?)
          (let ((g (pkaappi-make-globals)))
            (pkaappi-load-cached-pipeline g)
-           (paal-run-bc (paal-read-bc-file %paal-serializer-cache) g)
+           (if (file-exists? %paal-serializer-cache)
+               (paal-run-bc (paal-read-bc-file %paal-serializer-cache) g)
+               (pkaappi-load-file "lib/kaappi/paal/serializer.sld" g))
            (pkaappi-run-string-in g
              (string-append
                "(paal-write-bc-file"
