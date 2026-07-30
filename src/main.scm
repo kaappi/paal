@@ -1,7 +1,7 @@
 ;;; pkaappi — Paal Kaappi command-line driver
 ;;;
 ;;; Bootstrap invocation:
-;;;   kaappi --lib-path <lib> src/main.scm <command> [args]
+;;;   kaappi --lib-path <lib> src/main.scm [args...]
 
 (import (scheme base)
         (scheme write)
@@ -9,31 +9,47 @@
         (kaappi paal))
 
 (define (usage)
-  (display "Usage: pkaappi <command> [args]\n")
-  (display "\nCommands:\n")
-  (display "  run <file>              Run a Scheme file (.scm or .pbc)\n")
-  (display "  compile <f> -o <out>   Compile a Scheme file to .pbc bytecode\n")
+  (display "Paal Kaappi v0.1.0\n")
+  (display "\nUsage: pkaappi [file] [args...]\n")
+  (display "       pkaappi compile <file.scm> -o <output.pbc>\n")
+  (display "       pkaappi <subcommand> [args...]\n")
+  (display "\nWith no arguments, starts an interactive REPL.\n")
+  (display "\nSubcommands:\n")
+  (display "  compile <f> -o <out>    Compile to .pbc bytecode\n")
+  (display "  expand <file>           Print expanded forms\n")
+  (display "  ir <file>               Print IR nodes\n")
   (display "  repl                    Start interactive REPL\n")
   (display "  eval <expr>             Evaluate an expression\n")
-  (display "  version                 Print version\n"))
+  (display "\nOptions:\n")
+  (display "  -h, --help              Show this help\n")
+  (display "  --version               Show version\n"))
+
+(define (run-file path)
+  (let ((len (string-length path)))
+    (if (and (>= len 4) (string=? (substring path (- len 4) len) ".pbc"))
+        (pkaappi-run-pbc-file path)
+        (pkaappi-self-run-file path))))
 
 (define (main args)
   (cond
-    ((null? args) (usage))
+    ; No args → REPL (matches kaappi's behavior)
+    ((null? args)
+     (pkaappi-self-repl))
+    ; Help
     ((or (string=? (car args) "--help") (string=? (car args) "-h"))
      (usage))
-    ((string=? (car args) "version")
+    ; Version
+    ((or (string=? (car args) "--version") (string=? (car args) "version"))
      (display "pkaappi 0.1.0") (newline))
+    ; run <file> — explicit subcommand (kept for compatibility)
     ((string=? (car args) "run")
      (if (null? (cdr args))
          (begin (display "error: run: missing file\n") (exit 1))
-         (let* ((path (cadr args))
-                (len  (string-length path)))
-           (if (and (>= len 4) (string=? (substring path (- len 4) len) ".pbc"))
-               (pkaappi-run-pbc-file path)
-               (pkaappi-self-run-file path)))))
+         (run-file (cadr args))))
+    ; repl — explicit subcommand
     ((string=? (car args) "repl")
      (pkaappi-self-repl))
+    ; compile <input> -o <output>
     ((string=? (car args) "compile")
      (cond
        ((or (null? (cdr args))
@@ -44,13 +60,33 @@
         (exit 1))
        (else
         (pkaappi-self-compile-to-file (cadr args) (cadddr args)))))
+    ; eval <expr>
     ((string=? (car args) "eval")
      (if (null? (cdr args))
          (begin (display "error: eval: missing expression\n") (exit 1))
          (let ((result (pkaappi-run-bc-string (cadr args))))
            (write result) (newline))))
+    ; expand <file> — print expanded forms (diagnostic)
+    ((string=? (car args) "expand")
+     (if (null? (cdr args))
+         (begin (display "error: expand: missing file\n") (exit 1))
+         (for-each (lambda (form) (write form) (newline))
+                   (paal-expand-all (paal-read-file (cadr args))))))
+    ; ir <file> — print IR nodes (diagnostic)
+    ((string=? (car args) "ir")
+     (if (null? (cdr args))
+         (begin (display "error: ir: missing file\n") (exit 1))
+         (for-each (lambda (node) (write node) (newline))
+                   (paal-analyze-all
+                     (paal-expand-all
+                       (paal-read-file (cadr args)))))))
+    ; Positional file: first arg doesn't start with '-'
+    ((and (positive? (string-length (car args)))
+          (not (char=? (string-ref (car args) 0) #\-)))
+     (run-file (car args)))
+    ; Unknown flag
     (else
-     (display "error: unknown command: ") (display (car args)) (newline)
+     (display "error: unknown option: ") (display (car args)) (newline)
      (exit 1))))
 
 ; In bootstrap mode (kaappi src/main.scm args...), command-line includes
