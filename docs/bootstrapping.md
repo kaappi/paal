@@ -27,11 +27,12 @@ Stage 4: pkaappi can compile pkaappi
 Stage 5: pkaappi binary (no host dependency)
 ```
 
-## Current Status: Stage 2 complete
+## Current Status: Stage 4 complete
 
-The tree-walking VM has proper tail calls via a tagged-thunk trampoline, and all R7RS
-derived forms are desugared by the expander. Paal can run non-trivial Scheme programs —
-including tail-recursive loops of 1 000 000+ iterations — using kaappi as the host.
+The register-based bytecode VM is working. Paal can compile source text to register
+bytecode and execute it via `pkaappi-run-bc-string` / `pkaappi-run-bc-file`. Both
+pipelines (tree-walking and bytecode) pass 104 tests, including closures, upvalue
+capture, `set!`, all derived forms, and 1 000 000-iteration tail-recursive loops.
 
 ```sh
 make run ARGS="eval '(define (fib n) (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2))))) (fib 20)'"
@@ -56,7 +57,7 @@ Tail positions: last expression of `ir:begin`, both arms of `ir:if`, lambda body
 **Test gate:** `(define (loop n) (if (= n 0) 'done (loop (- n 1)))) (loop 1000000)`
 must complete without stack overflow.
 
-### Stage 3 — Bytecode Compiler
+### Stage 3 — Bytecode Compiler ✓ complete
 
 **Files to create:**
 - `lib/kaappi/paal/bytecode.sld` — ISA definitions (instruction tags + operand shapes)
@@ -106,7 +107,7 @@ The dispatch loop's `while` is the implicit trampoline.
 `(list 'load-const dst idx)` etc. A later phase migrates to bytevector encoding
 for performance and eventual self-compilation.
 
-### Stage 4 — Bytecode VM Dispatch
+### Stage 4 — Bytecode VM Dispatch ✓ complete
 
 **File to create:** `lib/kaappi/paal/vm-bc.sld`
 

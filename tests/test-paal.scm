@@ -199,6 +199,58 @@
          (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))
        (fib 20)")))
 
+;; ----------------------------------------------------------------
+;; Bytecode VM tests (Phase 4) — same programs via pkaappi-run-bc-string
+;; ----------------------------------------------------------------
+
+(test-group "bytecode: literals"
+  (test-equal "integer"  42      (pkaappi-run-bc-string "42"))
+  (test-equal "boolean"  #t      (pkaappi-run-bc-string "#t"))
+  (test-equal "string"   "hi"    (pkaappi-run-bc-string "\"hi\""))
+  (test-equal "quoted"   '(a b)  (pkaappi-run-bc-string "'(a b)")))
+
+(test-group "bytecode: arithmetic"
+  (test-equal "+"  6  (pkaappi-run-bc-string "(+ 1 2 3)"))
+  (test-equal "*" 12  (pkaappi-run-bc-string "(* 3 4)"))
+  (test-equal "="  #t (pkaappi-run-bc-string "(= 5 5)")))
+
+(test-group "bytecode: if"
+  (test-equal "true"    1  (pkaappi-run-bc-string "(if #t 1 2)"))
+  (test-equal "false"   2  (pkaappi-run-bc-string "(if #f 1 2)"))
+  (test-equal "no-else" #f (pkaappi-run-bc-string "(if #f 1)")))
+
+(test-group "bytecode: define and call"
+  (test-equal "var"  10  (pkaappi-run-bc-string "(define x 10) x"))
+  (test-equal "fn"    7  (pkaappi-run-bc-string "(define (add a b) (+ a b)) (add 3 4)"))
+  (test-equal "recursive" 120
+    (pkaappi-run-bc-string
+      "(define (fact n) (if (= n 0) 1 (* n (fact (- n 1))))) (fact 5)")))
+
+(test-group "bytecode: closures"
+  (test-equal "closure over define" 3
+    (pkaappi-run-bc-string
+      "(define (make-adder n) (lambda (x) (+ n x)))
+       (define add3 (make-adder 3))
+       (add3 0)"))
+  (test-equal "counter with set!" 3
+    (pkaappi-run-bc-string
+      "(define n 0)
+       (define (bump!) (set! n (+ n 1)))
+       (bump!) (bump!) (bump!) n")))
+
+(test-group "bytecode: derived forms"
+  (test-equal "let"  3  (pkaappi-run-bc-string "(let ((x 1) (y 2)) (+ x y))"))
+  (test-equal "cond" 2  (pkaappi-run-bc-string "(cond (#f 1) (else 2))"))
+  (test-equal "and"  #f (pkaappi-run-bc-string "(and 1 #f 3)"))
+  (test-equal "quasiquote" '(a 42 c)
+    (pkaappi-run-bc-string "(define x 42) `(a ,x c)")))
+
+(test-group "bytecode: tail calls"
+  (test-equal "1M loop" 'done
+    (pkaappi-run-bc-string
+      "(define (loop n) (if (= n 0) 'done (loop (- n 1))))
+       (loop 1000000)")))
+
 (test-group "run-file"
   (let ((tmp "/tmp/paal-test-run-file.scm"))
     (let ((port (open-output-file tmp)))
