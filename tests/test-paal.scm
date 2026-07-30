@@ -520,4 +520,39 @@
     (test-assert "paal-expand works after self-load"
       (pair? (pkaappi-run-string-in g "(paal-expand '(if #t 1 2))")))))
 
+;; ---------------------------------------------------------------
+;; Stage 6 milestone: full self-load
+;; ---------------------------------------------------------------
+
+(test-group "stage-6 milestone: full self-load"
+  (let ((g (pkaappi-make-globals)))
+    (for-each (lambda (path) (pkaappi-load-file path g))
+              '("lib/kaappi/paal/ir.sld"
+                "lib/kaappi/paal/bytecode.sld"
+                "lib/kaappi/paal/reader.sld"
+                "lib/kaappi/paal/expander.sld"
+                "lib/kaappi/paal/compiler.sld"
+                "lib/kaappi/paal/frame.sld"
+                "lib/kaappi/paal/emitter.sld"))
+    (test-equal "paal map with paal closure"
+      '(2 4 6)
+      (pkaappi-run-string-in g
+        "(define (double x) (* x 2)) (map double '(1 2 3))"))
+    (test-assert "paal-analyze-all works (map paal-analyze)"
+      (pkaappi-run-string-in g
+        "(list? (paal-analyze-all '(42 (+ 1 2))))"))
+    (test-assert "full pipeline: expand->analyze->emit produces bytecode-function"
+      (pkaappi-run-string-in g
+        "(bytecode-function? (paal-emit-program
+           (paal-analyze-all
+             (paal-expand-all '((define (add x y) (+ x y)))))))"))
+    ; The loaded paal-emit-program returns a paal-encoded bytecode-function
+    ; (a vector from paal's define-record-type expansion, not a HOST record).
+    ; Verify the loaded pipeline runs end-to-end and produces a vector.
+    (test-assert "loaded compiler pipeline produces bytecode structure"
+      (pkaappi-run-string-in g
+        "(vector? (paal-emit-program
+                    (paal-analyze-all
+                      (paal-expand-all '((define (add x y) (+ x y)) (add 3 4))))))"))))
+
 (test-exit)

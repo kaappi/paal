@@ -74,9 +74,39 @@
     ;; The returned object can be passed to pkaappi-load-file repeatedly;
     ;; each call accumulates the loaded file's definitions in place.
     (define (pkaappi-make-globals)
-      (paal-make-globals
-        (map (lambda (pair) (cons (car pair) (vector-ref (cdr pair) 0)))
-             (paal-initial-env))))
+      (let ((g (paal-make-globals
+                  (map (lambda (pair) (cons (car pair) (vector-ref (cdr pair) 0)))
+                       (paal-initial-env)))))
+        ; Install paal-native map/for-each/filter, replacing the HOST stubs.
+        ; HOST map cannot call paal closures; these paal-compiled versions can.
+        ; map handles 1 or 2 list args (covers all usage in paal's own source).
+        (paal-run-bc
+          (pkaappi-compile
+            "(define (map f lst . rest)
+               (if (null? lst)
+                   '()
+                   (if (null? rest)
+                       (cons (f (car lst)) (map f (cdr lst)))
+                       (cons (f (car lst) (car (car rest)))
+                             (map f (cdr lst) (cdr (car rest)))))))
+             (define (for-each f lst . rest)
+               (if (null? lst)
+                   (if #f #f)
+                   (begin
+                     (if (null? rest)
+                         (f (car lst))
+                         (f (car lst) (car (car rest))))
+                     (if (null? rest)
+                         (for-each f (cdr lst))
+                         (for-each f (cdr lst) (cdr (car rest)))))))
+             (define (filter pred lst)
+               (if (null? lst)
+                   '()
+                   (if (pred (car lst))
+                       (cons (car lst) (filter pred (cdr lst)))
+                       (filter pred (cdr lst)))))")
+          g)
+        g))
 
     ;; Compile a .sld or .scm file and run it into an existing globals table.
     ;; New names defined by the file are added to globals via define-global ops.
