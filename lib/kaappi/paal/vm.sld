@@ -7,6 +7,12 @@
 ;;; that top-level defines are visible to recursive closures and set!
 ;;; works correctly.
 ;;;
+;;; Tail calls use a tagged-thunk trampoline.  paal-eval takes a tail?
+;;; flag; when #t and the node is ir:call, it returns a thunk instead of
+;;; applying immediately.  The trampoline in paal-eval-program (and at
+;;; every non-tail call site) forces thunks until a plain value emerges,
+;;; bounding stack depth to O(1) per tail call.
+;;;
 ;;; This tree-walking interpreter is the bootstrap VM.  It will be
 ;;; replaced by a bytecode emitter + register-based VM.
 
@@ -178,37 +184,67 @@
              (void . ,(lambda () (if #f #f)))
              (not . ,not))))
 
-    ;; --- Evaluator ---
+    ;; --- Trampoline machinery ---
+    ;;
+    ;; A thunk is (cons %thunk-tag procedure).  The tag is a unique pair
+    ;; (allocated once) so thunk? is a single eq? check.
 
-    (define (paal-eval node env)
+    (define %thunk-tag (list 'paal-thunk))
+
+    (define (make-thunk proc)   (cons %thunk-tag proc))
+    (define (thunk? x)          (and (pair? x) (eq? (car x) %thunk-tag)))
+    (define (thunk-force t)     ((cdr t)))
+
+    (define (trampoline v)
+      (let loop ((v v))
+        (if (thunk? v) (loop (thunk-force v)) v)))
+
+    ;; --- Evaluator ---
+    ;;
+    ;; tail? = #t  → ir:call returns a thunk (O(1) tail call)
+    ;; tail? = #f  → ir:call forces via trampoline before returning
+    ;;
+    ;; Tail positions: both arms of ir:if, last expr of ir:begin,
+    ;;   lambda body, top-level exprs in paal-eval-program.
+    ;; Non-tail: ir:if test, ir:call args, ir:set! val, ir:define val.
+
+    (define (paal-eval node env tail?)
       (cond
         ((ir:const?  node) (ir:const-val node))
         ((ir:ref?    node) (env-lookup env (ir:ref-name node)))
         ((ir:if?     node)
-         (if (paal-eval (ir:if-test node) env)
-             (paal-eval (ir:if-then node) env)
-             (paal-eval (ir:if-else node) env)))
+         (if (paal-eval (ir:if-test node) env #f)
+             (paal-eval (ir:if-then node) env tail?)
+             (paal-eval (ir:if-else node) env tail?)))
         ((ir:begin?  node)
-         (let loop ((exprs (ir:begin-exprs node)) (val #f))
+         (let ((exprs (ir:begin-exprs node)))
            (if (null? exprs)
-               val
-               (loop (cdr exprs) (paal-eval (car exprs) env)))))
+               #f
+               (let loop ((exprs exprs))
+                 (if (null? (cdr exprs))
+                     (paal-eval (car exprs) env tail?)
+                     (begin
+                       (paal-eval (car exprs) env #f)
+                       (loop (cdr exprs))))))))
         ((ir:lambda? node)
          (let ((params (ir:lambda-params node))
                (body   (ir:lambda-body  node))
                (rest?  (ir:lambda-rest? node)))
+           ;; Lambda body is always in tail position relative to its call.
            (lambda args
-             (paal-eval body (env-bind env params args rest?)))))
+             (paal-eval body (env-bind env params args rest?) #t))))
         ((ir:set!? node)
          (env-set! env (ir:set!-name node)
-                       (paal-eval (ir:set!-val node) env)))
+                       (paal-eval (ir:set!-val node) env #f)))
         ((ir:define? node)
          (error "paal: define used as expression — use paal-eval-program"))
         ((ir:call? node)
-         (let ((proc (paal-eval (ir:call-proc node) env))
-               (args (map (lambda (a) (paal-eval a env))
+         (let ((proc (paal-eval (ir:call-proc node) env #f))
+               (args (map (lambda (a) (paal-eval a env #f))
                           (ir:call-args node))))
-           (apply proc args)))
+           (if tail?
+               (make-thunk (lambda () (apply proc args)))
+               (trampoline (apply proc args)))))
         (else (error "paal-eval: unknown IR node" node))))
 
     ;; Evaluate a sequence of top-level IR nodes, threading defines
@@ -221,9 +257,10 @@
             (let ((node (car ns)))
               (if (ir:define? node)
                   (let* ((name (ir:define-name node))
-                         (box  (vector #f))                     ; placeholder
-                         (env* (cons (cons name box) env))      ; visible immediately
-                         (val  (paal-eval (ir:define-val node) env*)))
-                    (vector-set! box 0 val)                     ; fill in
+                         (box  (vector #f))
+                         (env* (cons (cons name box) env))
+                         (val  (trampoline (paal-eval (ir:define-val node) env* #f))))
+                    (vector-set! box 0 val)
                     (loop (cdr ns) env* val))
-                  (loop (cdr ns) env (paal-eval node env)))))))))
+                  (loop (cdr ns) env
+                        (trampoline (paal-eval node env #t))))))))))

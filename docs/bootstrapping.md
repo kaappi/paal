@@ -27,11 +27,11 @@ Stage 4: pkaappi can compile pkaappi
 Stage 5: pkaappi binary (no host dependency)
 ```
 
-## Current Status: Stage 1
+## Current Status: Stage 2 complete
 
-The tree-walking VM (`lib/kaappi/paal/vm.sld`) is complete and all R7RS derived forms
-are desugared by the expander. Paal can run non-trivial Scheme programs using kaappi
-as the host.
+The tree-walking VM has proper tail calls via a tagged-thunk trampoline, and all R7RS
+derived forms are desugared by the expander. Paal can run non-trivial Scheme programs —
+including tail-recursive loops of 1 000 000+ iterations — using kaappi as the host.
 
 ```sh
 make run ARGS="eval '(define (fib n) (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2))))) (fib 20)'"
@@ -39,7 +39,7 @@ make run ARGS="eval '(define (fib n) (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)
 
 ## Remaining Stages
 
-### Stage 2 — Tail Call Optimization
+### Stage 2 — Tail Call Optimization ✓ complete
 
 **Why first:** Scheme mandates proper tail calls. Any tail-recursive program (including
 paal's own compiler passes) will stack-overflow on the tree-walking VM without TCO.

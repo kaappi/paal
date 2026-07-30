@@ -164,6 +164,41 @@
       "(do ((i 0 (+ i 1)) (acc '() (cons i acc)))
            ((= i 5) acc))")))
 
+;; ----------------------------------------------------------------
+;; TCO tests (Phase 3) — all would stack-overflow without a trampoline
+;; ----------------------------------------------------------------
+
+(test-group "tail calls"
+  (test-equal "self-tail-recursive loop (1M)" 'done
+    (pkaappi-run-string
+      "(define (loop n)
+         (if (= n 0) 'done (loop (- n 1))))
+       (loop 1000000)"))
+
+  (test-equal "tail call to different function" 42
+    (pkaappi-run-string
+      "(define (even? n) (if (= n 0) #t (odd?  (- n 1))))
+       (define (odd?  n) (if (= n 0) #f (even? (- n 1))))
+       (if (even? 100000) 42 0)"))
+
+  (test-equal "named-let tail loop (1M)" 500000
+    (pkaappi-run-string
+      "(let loop ((n 1000000) (acc 0))
+         (if (= n 0) acc (loop (- n 1) (+ acc 1/2))))"))
+
+  (test-equal "tail call in cond else" 0
+    (pkaappi-run-string
+      "(define (count-down n)
+         (cond ((= n 0) 0)
+               (else (count-down (- n 1)))))
+       (count-down 500000)"))
+
+  (test-equal "non-tail call still works (fib)" 6765
+    (pkaappi-run-string
+      "(define (fib n)
+         (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))
+       (fib 20)")))
+
 (test-group "run-file"
   (let ((tmp "/tmp/paal-test-run-file.scm"))
     (let ((port (open-output-file tmp)))

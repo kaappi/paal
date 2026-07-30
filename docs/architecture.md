@@ -144,7 +144,29 @@ Special cases in the analyzer:
 **Input:** list of IR nodes  
 **Output:** result value of the last expression
 
-A tree-walking interpreter. See `docs/ir.md` for the node types it handles.
+A tree-walking interpreter with proper tail calls via a tagged-thunk trampoline.
+See `docs/ir.md` for the node types it handles.
+
+### Tail call optimization
+
+`paal-eval` takes a `tail?` flag. In tail position with `tail? = #t`, an `ir:call`
+node returns a tagged thunk `(cons %thunk-tag (lambda () (apply proc args)))` instead
+of applying immediately. The trampoline in `paal-eval-program` (and at every non-tail
+call site) forces thunks in a loop until a plain value emerges — bounding stack depth
+to O(1) per tail call regardless of iteration count.
+
+**Tail positions** (inherit parent's `tail?`):
+- Both arms of `ir:if`
+- Last expression of `ir:begin`
+- Lambda body (always `tail? = #t`)
+- Top-level expressions in `paal-eval-program`
+
+**Non-tail positions** (always `tail? = #f`): `ir:if` test, all `ir:call` arguments,
+`ir:set!` value, `ir:define` value.
+
+The tag `%thunk-tag` is a unique pair `(list 'paal-thunk)` allocated once; `thunk?`
+is a single `eq?` check on the `car`. This distinguishes paal thunks from user-returned
+pairs without wrapping every value.
 
 ### Environment model
 
