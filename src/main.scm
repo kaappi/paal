@@ -25,7 +25,7 @@
     ((string=? (car args) "run")
      (if (null? (cdr args))
          (begin (display "error: run: missing file\n") (exit 1))
-         (pkaappi-run-bc-file (cadr args))))
+         (pkaappi-self-run-file (cadr args))))
     ((string=? (car args) "eval")
      (if (null? (cdr args))
          (begin (display "error: eval: missing expression\n") (exit 1))

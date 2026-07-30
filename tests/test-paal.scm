@@ -607,4 +607,16 @@
     (string->symbol "a|b")
     (car (paal-read-string "|a\\|b|"))))
 
+;; ---------------------------------------------------------------
+;; Self-hosted run subcommand
+;; ---------------------------------------------------------------
+
+(test-group "self-hosted run subcommand"
+  (test-equal "pkaappi-self-run-file: add.scm returns 7"
+    7
+    (pkaappi-self-run-file "tests/fixtures/add.scm"))
+  (test-equal "pkaappi-self-run-file: factorial.scm returns 120"
+    120
+    (pkaappi-self-run-file "tests/fixtures/factorial.scm")))
+
 (test-exit)

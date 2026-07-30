@@ -5,6 +5,7 @@
 
 (define-library (kaappi paal)
   (import (scheme base)
+          (scheme file)
           (kaappi paal reader)
           (kaappi paal expander)
           (kaappi paal compiler)
@@ -27,7 +28,9 @@
     ;; High-level pipeline (bytecode)
     pkaappi-compile pkaappi-run-bc-string pkaappi-run-bc-file
     ;; Multi-file sequential loading
-    pkaappi-make-globals pkaappi-load-file pkaappi-run-string-in)
+    pkaappi-make-globals pkaappi-load-file pkaappi-run-string-in
+    ;; Self-hosted run
+    pkaappi-self-run-file)
   (begin
 
     ;; --- Tree-walking pipeline ---
@@ -121,4 +124,35 @@
     ;; Compile and evaluate a source string in an existing globals table.
     ;; get-global ops resolve against all previously loaded definitions.
     (define (pkaappi-run-string-in globals src)
-      (paal-run-bc (pkaappi-compile src) globals))))
+      (paal-run-bc (pkaappi-compile src) globals))
+
+    ;; --- Self-hosted run ---
+
+    ; Library file load order for paal's own pipeline.
+    (define %paal-lib-files
+      '("lib/kaappi/paal/ir.sld"
+        "lib/kaappi/paal/bytecode.sld"
+        "lib/kaappi/paal/reader.sld"
+        "lib/kaappi/paal/expander.sld"
+        "lib/kaappi/paal/compiler.sld"
+        "lib/kaappi/paal/frame.sld"
+        "lib/kaappi/paal/emitter.sld"
+        "lib/kaappi/paal/vm-bc.sld"))
+
+    ; Load paal's 8 library files into a fresh globals, then compile and run the
+    ; user's file through the loaded pipeline (reader, expander, emitter, VM).
+    ; Falls back to HOST pipeline if library source files are not accessible
+    ; (e.g. standalone binary mode where .sld files are not on disk).
+    (define (pkaappi-self-run-file path)
+      (if (file-exists? "lib/kaappi/paal/ir.sld")
+          (let ((g (pkaappi-make-globals)))
+            (for-each (lambda (p) (pkaappi-load-file p g)) %paal-lib-files)
+            (pkaappi-run-string-in g
+              (string-append
+                "(paal-run-bc"
+                "  (paal-emit-program"
+                "    (paal-analyze-all"
+                "      (paal-expand-all"
+                "        (paal-read-file \"" path "\"))))"
+                "  (pkaappi-make-globals))")))
+          (pkaappi-run-bc-file path)))))
