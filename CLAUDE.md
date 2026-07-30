@@ -39,5 +39,21 @@ Paal binaries use the `p` prefix to avoid collision with kaappi tools:
 
 - 2-space indentation, R7RS idioms throughout
 - Each pipeline stage is independently importable
-- Tests live in `tests/test-paal.scm` and use the `check` helper pattern
+- Tests live in `tests/test-paal.scm` and use the `(kaappi test)` API
 - Commit messages: short imperative subject, body explains why
+
+## Documentation
+
+Internal docs live in `docs/` (see `docs/README.md` for the index).
+
+**After every major code change, update the relevant doc(s):**
+
+| Changed | Update |
+|---------|--------|
+| Pipeline stage design, env model, public API | `docs/architecture.md` |
+| IR node types (add/remove/rename) | `docs/ir.md` |
+| Bootstrapping roadmap, ISA, stage status | `docs/bootstrapping.md` |
+
+"Major" means: new pipeline stage, new IR node type, changed calling convention,
+new public export, or any architectural decision that would surprise a reader of
+the existing docs. Bug fixes and test additions don't require a doc update.
