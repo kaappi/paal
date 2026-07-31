@@ -949,6 +949,79 @@
 ;; ---------------------------------------------------------------
 
 ;; ---------------------------------------------------------------
+;; syntax-rules ellipsis: nesting, splicing, escape
+;; ---------------------------------------------------------------
+
+(test-group "define-syntax: ellipsis"
+  (test-equal "nested ellipsis passes structure through"
+    '((1 2) (3 4))
+    (pkaappi-run-bc-string
+      "(define-syntax m (syntax-rules () ((_ (a ...) ...) '((a ...) ...))))
+       (m (1 2) (3 4))"))
+  (test-equal "nested ellipsis with a variable at the outer level"
+    '((a (1 2)) (b (3)))
+    (pkaappi-run-bc-string
+      "(define-syntax m (syntax-rules () ((_ (k v ...) ...) '((k (v ...)) ...))))
+       (m (a 1 2) (b 3))"))
+  (test-equal "three levels of nesting"
+    '(((1 2) (3)) ((4)))
+    (pkaappi-run-bc-string
+      "(define-syntax m (syntax-rules () ((_ ((a ...) ...) ...) '(((a ...) ...) ...))))
+       (m ((1 2) (3)) ((4)))"))
+  (test-equal "ragged inner groups"
+    '((1 2) (3 4 5))
+    (pkaappi-run-bc-string
+      "(define-syntax m (syntax-rules () ((_ (a ...) ...) (list (list a ...) ...))))
+       (m (1 2) (3 4 5))"))
+  (test-equal "an empty inner group"
+    '(() (1))
+    (pkaappi-run-bc-string
+      "(define-syntax m (syntax-rules () ((_ (a ...) ...) '((a ...) ...))))
+       (m () (1))"))
+  (test-equal "an empty match"
+    '(start)
+    (pkaappi-run-bc-string
+      "(define-syntax m (syntax-rules () ((_ a ...) '(start a ...))))
+       (m)"))
+  ;; Each ellipsis past the first splices a level away rather than nesting it.
+  (test-equal "a ... ... splices one level"
+    '(1 2 3 4)
+    (pkaappi-run-bc-string
+      "(define-syntax m (syntax-rules () ((_ (a ...) ...) '(a ... ...))))
+       (m (1 2) (3 4))"))
+  (test-equal "splicing keeps surrounding template elements"
+    '(start 1 2 3 end)
+    (pkaappi-run-bc-string
+      "(define-syntax m (syntax-rules () ((_ (a ...) ...) '(start a ... ... end))))
+       (m (1 2) (3))"))
+  (test-equal "three ellipses splice two levels"
+    '(1 2 3 4 5)
+    (pkaappi-run-bc-string
+      "(define-syntax m (syntax-rules () ((_ ((a ...) ...) ...) '(a ... ... ...))))
+       (m ((1 2) (3)) ((4 5)))"))
+  ;; (... <template>) suppresses ellipsis handling; (... ...) emits a literal one.
+  (test-equal "ellipsis escape emits a literal ellipsis"
+    '(foo ...)
+    (pkaappi-run-bc-string
+      "(define-syntax m (syntax-rules () ((_ x) '(x (... ...)))))
+       (m foo)"))
+  (test-equal "a macro that defines a macro"
+    '(1 2 3)
+    (pkaappi-run-bc-string
+      "(define-syntax def-listor
+         (syntax-rules ()
+           ((_ name)
+            (define-syntax name
+              (syntax-rules () ((_ x (... ...)) (list x (... ...))))))))
+       (def-listor my-l)
+       (my-l 1 2 3)"))
+  (test-equal "tree-walking pipeline"
+    '(1 2 3 4)
+    (pkaappi-run-string
+      "(define-syntax m (syntax-rules () ((_ (a ...) ...) '(a ... ...))))
+       (m (1 2) (3 4))")))
+
+;; ---------------------------------------------------------------
 ;; Macro hygiene — introduced bindings do not capture
 ;; ---------------------------------------------------------------
 ;;

@@ -189,6 +189,57 @@
                      (find-ellipsis-vars (cdr tmpl) env))))
         (else '())))
 
+    (define (concat-lists ls)
+      (if (null? ls) '() (append (car ls) (concat-lists (cdr ls)))))
+
+    ;; How many ellipses a template element is followed by.  One is the ordinary
+    ;; case; each extra one splices a further level, so (x ... ...) flattens what
+    ;; ((x ...) ...) would have nested.
+    (define (count-ellipses l)
+      (if (and (pair? l) (eq? (car l) '...))
+          (+ 1 (count-ellipses (cdr l)))
+          0))
+
+    (define (drop-ellipses l)
+      (if (and (pair? l) (eq? (car l) '...))
+          (drop-ellipses (cdr l))
+          l))
+
+    ;; Expand `subtempl` across `depth` levels of ellipsis, returning a flat list
+    ;; of the results.  At depth 1 each iteration contributes one element; deeper
+    ;; down each contributes a list, and those are concatenated — which is what
+    ;; makes the extra ellipses splice rather than nest.
+    (define (expand-ellipsis subtempl depth env)
+      (let* ((evars (find-ellipsis-vars subtempl env))
+             (n     (if (null? evars)
+                        0
+                        (length (ellipsis-vals (cdr (assq (car evars) env)))))))
+        (concat-lists
+          (map (lambda (i)
+                 (let* ((point-env
+                         (map (lambda (v)
+                                (cons v (list-ref (ellipsis-vals (cdr (assq v env))) i)))
+                              evars))
+                        (local-env (append point-env env)))
+                   (if (= depth 1)
+                       (list (instantiate-template subtempl local-env))
+                       (expand-ellipsis subtempl (- depth 1) local-env))))
+               (iota n)))))
+
+    ;; (<ellipsis> <template>) — R7RS ellipsis escape: the template is used with
+    ;; ellipses having no special meaning.  Pattern variables still substitute.
+    ;; Overwhelmingly used as (... ...) to emit a literal ellipsis, in a macro
+    ;; that itself expands to a macro definition.
+    (define (instantiate-escaped tmpl env)
+      (cond
+        ((symbol? tmpl)
+         (let ((b (assq tmpl env)))
+           (if b (cdr b) tmpl)))
+        ((pair? tmpl)
+         (cons (instantiate-escaped (car tmpl) env)
+               (instantiate-escaped (cdr tmpl) env)))
+        (else tmpl)))
+
     ;; Instantiate a template with pattern-variable bindings.
     ;; Ellipsis variables have (ellipsis-vals ...) values.
     (define (instantiate-template tmpl env)
@@ -204,23 +255,17 @@
                tmpl)))
         ;; Non-pair: datum
         ((not (pair? tmpl)) tmpl)
-        ;; Ellipsis template: (subtempl ...)
+        ;; Ellipsis escape — must precede the ellipsis-template case, since
+        ;; (... ...) also looks like "subtemplate followed by ellipsis".
+        ((and (eq? (car tmpl) '...) (pair? (cdr tmpl)) (null? (cddr tmpl)))
+         (instantiate-escaped (cadr tmpl) env))
+        ;; Ellipsis template: (subtempl ... [... ...]) rest
         ((and (pair? (cdr tmpl)) (eq? (cadr tmpl) '...))
-         (let* ((subtempl (car tmpl))
-                (rest-tmpl (cddr tmpl))
-                (evars     (find-ellipsis-vars subtempl env))
-                (n         (if (null? evars)
-                               0
-                               (length (ellipsis-vals (cdr (assq (car evars) env)))))))
+         (let* ((subtempl  (car tmpl))
+                (depth     (count-ellipses (cdr tmpl)))
+                (rest-tmpl (drop-ellipses (cdr tmpl))))
            (append
-             (map (lambda (i)
-                    (let* ((point-env
-                            (map (lambda (v)
-                                   (cons v (list-ref (ellipsis-vals (cdr (assq v env))) i)))
-                                 evars))
-                           (local-env (append point-env env)))
-                      (instantiate-template subtempl local-env)))
-                  (iota n))
+             (expand-ellipsis subtempl depth env)
              (instantiate-template rest-tmpl env))))
         ;; Regular pair
         (else

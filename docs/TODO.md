@@ -3,7 +3,7 @@
 Goal: make `pkaappi` a correct R7RS-small Scheme implementation that runs the
 same programs as `kaappi`, with the same CLI conventions.
 
-Current: Stage 6 complete (self-hosting). **380 tests pass** (was 194 before Phase 1–2).
+Current: Stage 6 complete (self-hosting). **392 tests pass** (was 194 before Phase 1–2).
 
 ---
 
@@ -11,9 +11,10 @@ Current: Stage 6 complete (self-hosting). **380 tests pass** (was 194 before Pha
 
 Special forms and expander gaps.
 
-- [x] `define-syntax` + `syntax-rules` — single-level ellipsis; template-introduced
-      bindings are renamed per expansion so they cannot capture (no nested ellipsis,
-      and no referential transparency — both below)
+- [x] `define-syntax` + `syntax-rules` — nested ellipsis to arbitrary depth,
+      `x ... ...` splicing, and the `(... <template>)` escape. Template-introduced
+      bindings are renamed per expansion so they cannot capture. Referential
+      transparency is the one remaining gap — see below.
 - [x] `let-syntax` / `letrec-syntax` — local macro binding (save/restore global macro env)
 - [x] `case-lambda` — multi-arity dispatch via let-destructuring (no `apply`)
 - [x] `define-values` / `let-values` / `let*-values` — multiple-value binding forms
@@ -109,7 +110,6 @@ Missing primitives added to `paal-initial-env` (`lib/kaappi/paal/vm.sld`):
       explicit renaming — which this purely structural S-expr → S-expr design has
       nowhere to put. A test pins the current answer so the gap is visible rather
       than forgotten.
-- [ ] `define-syntax` nested ellipsis — only single-level `...` is supported
 - [ ] `let-syntax` / `letrec-syntax` true mutual recursion — sequential binding only
 - [ ] `guard` re-raise **dynamic environment** — partially addressed. An unmatched
       clause now re-raises with `raise-continuable` rather than `raise`, and a

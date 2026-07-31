@@ -163,6 +163,12 @@ was defined. That needs each identifier to carry its definition environment thro
 the expander (syntactic closures, or explicit renaming), which a structural
 S-expression → S-expression pass has nowhere to record.
 
+**Ellipsis:** `syntax-rules` supports nesting to arbitrary depth — a pattern variable
+bound under two ellipses instantiates under two in the template. Each ellipsis past the
+first *splices* rather than nests, so `(a ... ...)` flattens what `((a ...) ...)` would
+have kept structured. `(<ellipsis> <template>)` escapes: ellipses inside have no special
+meaning, which is how a macro emits a literal `...` for a macro it defines.
+
 **Quasiquote note:** `expand-qq` uses explicit `list`/`cons` calls rather than
 quasiquote templates. Kaappi's own expander misinterprets `unquote-splicing` as a
 special form when it appears as a literal symbol inside a template, even inside
