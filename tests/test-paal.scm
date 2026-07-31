@@ -1057,6 +1057,83 @@
     (pkaappi-run-string "(guard (exn (#t \"caught\")) (raise \"oops\"))")))
 
 ;; ---------------------------------------------------------------
+;; make-parameter / parameterize
+;; ---------------------------------------------------------------
+
+(test-group "parameterize"
+  (test-equal "parameter returns its default"
+    10
+    (pkaappi-run-bc-string "(define p (make-parameter 10)) (p)"))
+  (test-equal "parameterize rebinds for the body"
+    20
+    (pkaappi-run-bc-string
+      "(define p (make-parameter 10)) (parameterize ((p 20)) (p))"))
+  (test-equal "value is restored on normal exit"
+    10
+    (pkaappi-run-bc-string
+      "(define p (make-parameter 10)) (parameterize ((p 20)) (p)) (p)"))
+  (test-equal "nested parameterize, inner wins then restores"
+    '(2 1)
+    (pkaappi-run-bc-string
+      "(define p (make-parameter 1))
+       (list (parameterize ((p 2)) (parameterize ((p 3)) (p)) (p)) (p))"))
+  (test-equal "two parameters at once"
+    30
+    (pkaappi-run-bc-string
+      "(define a (make-parameter 1)) (define b (make-parameter 2))
+       (parameterize ((a 10) (b 20)) (+ (a) (b)))"))
+  (test-equal "converter applied to the initial value"
+    10
+    (pkaappi-run-bc-string "(define p (make-parameter 5 (lambda (x) (* x 2)))) (p)"))
+  (test-equal "converter applied to a parameterized value"
+    20
+    (pkaappi-run-bc-string
+      "(define p (make-parameter 5 (lambda (x) (* x 2))))
+       (parameterize ((p 10)) (p))"))
+  ;; The reason parameterize needed guard: a raise out of the body must still
+  ;; restore, otherwise the old value is lost for the rest of the program.
+  (test-equal "value is restored when the body raises"
+    1
+    (pkaappi-run-bc-string
+      "(define p (make-parameter 1))
+       (guard (e (#t (p))) (parameterize ((p 99)) (raise 'boom)))"))
+  (test-equal "restored through two nested extents"
+    1
+    (pkaappi-run-bc-string
+      "(define p (make-parameter 1))
+       (guard (e (#t (p)))
+         (parameterize ((p 2)) (parameterize ((p 3)) (raise 'x))))"))
+  ;; R7RS: the value expressions are evaluated before any binding is installed,
+  ;; so (p) here reads the outer value, not 2.
+  (test-equal "value expression sees the outer binding"
+    1
+    (pkaappi-run-bc-string
+      "(define p (make-parameter 1)) (parameterize ((p (p))) (p))"))
+  (test-equal "callee inside the extent sees the new value"
+    7
+    (pkaappi-run-bc-string
+      "(define p (make-parameter 0)) (define (peek) (p))
+       (parameterize ((p 7)) (peek))"))
+  (test-equal "empty binding list"
+    1
+    (pkaappi-run-bc-string "(define p (make-parameter 1)) (parameterize () (p))"))
+  (test-equal "repeated entry and exit"
+    10
+    (pkaappi-run-bc-string
+      "(define p (make-parameter 0))
+       (define (bump) (parameterize ((p 1)) (p)))
+       (let loop ((i 0) (acc 0)) (if (= i 10) acc (loop (+ i 1) (+ acc (bump)))))"))
+  (test-equal "tree-walking pipeline"
+    20
+    (pkaappi-run-string
+      "(define p (make-parameter 10)) (parameterize ((p 20)) (p))"))
+  (test-equal "tree-walking pipeline: restore on raise"
+    1
+    (pkaappi-run-string
+      "(define p (make-parameter 1))
+       (guard (e (#t (p))) (parameterize ((p 99)) (raise 'boom)))")))
+
+;; ---------------------------------------------------------------
 ;; Mutable variables captured by closures
 ;; ---------------------------------------------------------------
 ;;

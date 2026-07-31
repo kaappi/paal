@@ -275,6 +275,64 @@
              (define (string-for-each f s)
                (for-each f (string->list s)))")
           g)
+
+        ; Install paal-native parameter objects (overriding the HOST make-parameter
+        ; inherited from paal-initial-env).  A parameter is a paal closure over a
+        ; 2-slot cell #(value converter); calling it with no arguments reads the
+        ; value, and calling it with %paal-param-key — a key only this code knows —
+        ; hands back the cell so %paal-parameterize can rebind it.  That avoids a
+        ; registry mapping parameters to cells, which would leak.
+        ;
+        ; The whole thing is paal source rather than a VM marker because `guard`
+        ; already gives the unwind protection parameterize needs: restore on a
+        ; raise, then re-raise.  Continuations are the other way out of a dynamic
+        ; extent, and paal has none for paal closures, so this covers every exit.
+        (paal-run-bc
+          (pkaappi-compile
+            "(define %paal-param-key (list 'paal-param-key))
+             (define (make-parameter init . rest)
+               (let* ((conv (if (null? rest) (lambda (x) x) (car rest)))
+                      (cell (vector (conv init) conv)))
+                 (lambda args
+                   (if (null? args)
+                       (vector-ref cell 0)
+                       (if (eq? (car args) %paal-param-key)
+                           cell
+                           (error \"parameter: unexpected argument\"))))))
+             (define (%paal-param-cells params)
+               (if (null? params)
+                   '()
+                   (cons ((car params) %paal-param-key)
+                         (%paal-param-cells (cdr params)))))
+             (define (%paal-param-read cells)
+               (if (null? cells)
+                   '()
+                   (cons (vector-ref (car cells) 0) (%paal-param-read (cdr cells)))))
+             ; Install converts through each parameter's own converter; restore
+             ; does not — the saved values were already converted when stored.
+             (define (%paal-param-install! cells vals)
+               (if (null? cells)
+                   (if #f #f)
+                   (begin
+                     (vector-set! (car cells) 0
+                                  ((vector-ref (car cells) 1) (car vals)))
+                     (%paal-param-install! (cdr cells) (cdr vals)))))
+             (define (%paal-param-restore! cells olds)
+               (if (null? cells)
+                   (if #f #f)
+                   (begin
+                     (vector-set! (car cells) 0 (car olds))
+                     (%paal-param-restore! (cdr cells) (cdr olds)))))
+             (define (%paal-parameterize params vals thunk)
+               (let* ((cells (%paal-param-cells params))
+                      (olds  (%paal-param-read cells)))
+                 (%paal-param-install! cells vals)
+                 (let ((result (guard (e (#t (%paal-param-restore! cells olds)
+                                             (raise e)))
+                                 (thunk))))
+                   (%paal-param-restore! cells olds)
+                   result)))")
+          g)
         g))
 
     ;; Inject a command-line list into a globals table created by pkaappi-make-globals.

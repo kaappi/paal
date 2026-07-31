@@ -121,6 +121,7 @@ structural — it transforms S-expressions to S-expressions with no semantic ana
 | `(define-library name decl…)` | `begin` of the library's `(begin …)` bodies |
 | `(import …)` / `(export …)` | `(quote #f)` — no-op during bootstrap |
 | `(guard (v clause…) body…)` | `(%paal-guard-run (lambda () body…) (lambda (v) (cond clause… [else (raise v)])))` |
+| `(parameterize ((p v)…) body…)` | `(%paal-parameterize (list p…) (list v…) (lambda () body…))` |
 
 **Internal defines:** `expand-body` processes a lambda/let body and hoists any leading
 `(define …)` forms to `letrec*` (R7RS §5.3.2). Both the `lambda` and shorthand
@@ -309,6 +310,42 @@ HOST `guard`, and its own is a few levels lower still, since `paal-run-bc` and
 no test covers the ceiling, since the threshold is host behavior rather than paal's.
 `raise-continuable` cannot resume, so it behaves as `raise`, and an unmatched clause
 re-raises from the handler's dynamic environment rather than the original one.
+
+---
+
+## Parameter objects
+
+A parameter is a closure over a two-slot cell `#(value converter)`. Calling it with
+no arguments reads the value; calling it with `%paal-param-key` — a unique value only
+`make-parameter` and `%paal-parameterize` hold — returns the cell. That key is what
+lets `parameterize` rebind a parameter without a registry mapping parameters to cells,
+which would keep every parameter ever created alive.
+
+HOST `make-parameter` cannot be reused. A HOST parameter is only rebindable through
+HOST `parameterize`, which is syntax rather than a procedure, so no paal-side code can
+install a value into one.
+
+`%paal-parameterize` reads the old values, installs the new ones through each
+parameter's converter, runs the thunk, and restores. Restoration happens on a raise
+as well, via `guard`:
+
+```scheme
+(let ((result (guard (e (#t (restore!) (raise e)))
+                (thunk))))
+  (restore!)
+  result)
+```
+
+This needs no VM marker of its own — unlike `guard`, which had to be one. `guard`
+already supplies the unwind protection, and a raise is the only non-local exit from a
+dynamic extent that paal has, since there are no continuations for paal closures. If
+paal ever gains `call/cc` over paal closures, this is one of the places that has to be
+revisited, along with `dynamic-wind`.
+
+Both pipelines provide it: the tree-walking VM as HOST procedures in
+`paal-initial-env` (forcing the trampoline on the converter and on the thunk, the
+latter *inside* the guard), the bytecode VM as paal source compiled into globals by
+`pkaappi-make-globals`, which overrides the HOST bindings.
 
 ---
 

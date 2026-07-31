@@ -65,6 +65,12 @@
 
     (define %paal-promise-tag (list 'paal-promise-tag))
 
+    ;; --- Parameter cell key (HOST side) ---
+    ;; Passing this to a parameter object returns its underlying cell.  Unique
+    ;; and unexported, so only make-parameter and %paal-parameterize can ask.
+
+    (define %paal-param-key (list 'paal-param-key))
+
     ;; --- Command-line for user programs ---
     ;; Set by pkaappi-set-command-line! before running a user file.
     ;; The paal-initial-env binds (command-line) to read this variable.
@@ -263,7 +269,42 @@
              (read-error? . ,read-error?) (file-error? . ,file-error?)
 
              ;; Parameters
-             (make-parameter . ,make-parameter)
+             ;;
+             ;; Not HOST make-parameter: a HOST parameter can only be rebound by
+             ;; HOST `parameterize`, which is syntax, so there is no procedural
+             ;; way for %paal-parameterize to install a value into one.  These
+             ;; parameters are closures over a 2-slot cell #(value converter)
+             ;; instead; %paal-param-key retrieves the cell.  The bytecode
+             ;; pipeline installs a paal-compiled equivalent over the top.
+             ;;
+             ;; Converter and thunk may be paal lambdas, which return trampoline
+             ;; thunks rather than values, so each call is forced — and the body
+             ;; is forced *inside* the guard, so a raise cannot escape the
+             ;; restore. Same reasoning as %paal-guard-run above.
+             (make-parameter
+               . ,(lambda (init . rest)
+                    (let* ((conv (if (null? rest) (lambda (x) x) (car rest)))
+                           (cell (vector (trampoline (conv init)) conv)))
+                      (lambda args
+                        (cond
+                          ((null? args) (vector-ref cell 0))
+                          ((eq? (car args) %paal-param-key) cell)
+                          (else (error "parameter: unexpected argument")))))))
+             (%paal-parameterize
+               . ,(lambda (params vals thunk)
+                    (let* ((cells (map (lambda (p) (p %paal-param-key)) params))
+                           (olds  (map (lambda (c) (vector-ref c 0)) cells))
+                           (restore (lambda ()
+                                      (for-each (lambda (c v) (vector-set! c 0 v))
+                                                cells olds))))
+                      (for-each (lambda (c v)
+                                  (vector-set! c 0
+                                               (trampoline ((vector-ref c 1) v))))
+                                cells vals)
+                      (let ((result (guard (e (#t (restore) (raise e)))
+                                      (trampoline (thunk)))))
+                        (restore)
+                        result))))
 
              ;; Features
              (features . ,features)

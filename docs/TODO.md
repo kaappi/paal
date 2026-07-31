@@ -3,7 +3,7 @@
 Goal: make `pkaappi` a correct R7RS-small Scheme implementation that runs the
 same programs as `kaappi`, with the same CLI conventions.
 
-Current: Stage 6 complete (self-hosting). **299 tests pass** (was 194 before Phase 1–2).
+Current: Stage 6 complete (self-hosting). **314 tests pass** (was 194 before Phase 1–2).
 
 ---
 
@@ -37,7 +37,7 @@ Missing primitives added to `paal-initial-env` (`lib/kaappi/paal/vm.sld`):
 - [x] `close-port`, `textual-port?`, `binary-port?`, `input-port-open?`, `output-port-open?`
 - [x] `read-u8`, `peek-u8`, `u8-ready?`, `write-u8`
 - [x] `read-error?`, `file-error?`
-- [x] `make-parameter`
+- [x] `make-parameter` (paal-native cell-based objects — see `parameterize` below)
 - [x] `features`
 - [x] `write-shared`, `write-simple`
 - [x] `apply` (paal-compiled, up to 8 args — see limitation below)
@@ -49,6 +49,15 @@ Missing primitives added to `paal-initial-env` (`lib/kaappi/paal/vm.sld`):
       HOST procedure that trampolines both inside the guard. Catches paal `raise`
       *and* primitive errors. See `docs/architecture.md` § Exceptions in the
       bytecode VM.
+- [x] `make-parameter` / `parameterize` — both pipelines. A parameter is a closure
+      over a 2-slot cell `#(value converter)`; passing it `%paal-param-key` returns
+      the cell, so `%paal-parameterize` can rebind it without a registry. No VM
+      marker was needed in the end: `guard` already provides the unwind protection
+      (restore, then re-raise), and since paal has no continuations for paal
+      closures, a raise is the only non-local exit from the extent. HOST
+      `make-parameter` could not be reused — a HOST parameter is only rebindable
+      through HOST `parameterize`, which is syntax, so nothing can install a value
+      procedurally. See `docs/architecture.md` § Parameter objects.
 
 **Known limitations (still open):**
 
@@ -61,9 +70,6 @@ Missing primitives added to `paal-initial-env` (`lib/kaappi/paal/vm.sld`):
       → returns `1`, should return `0`. Filed as kaappi/kaappi#1886 — the cap is
       `MAX_HANDLERS = 64`, and exceeding it yields a *catchable* error, so an
       enclosing `guard` swallows it. Revisit this entry when that lands.
-- [ ] `parameterize` — requires paal-native `dynamic-wind`; same boundary issue as
-      `guard` had. The `paal-call-value` re-entry mechanism added for `guard` is
-      the piece that was missing, so this is now tractable.
 - [ ] `define-syntax` hygiene — introduced bindings are not renamed (non-hygienic);
       macros that introduce `let` bindings can capture user variables
 - [ ] `define-syntax` nested ellipsis — only single-level `...` is supported

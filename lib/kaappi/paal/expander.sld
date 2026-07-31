@@ -339,6 +339,8 @@
              (paal-expand (expand-define-record-type form)))
             ((guard)
              (paal-expand (expand-guard form)))
+            ((parameterize)
+             (paal-expand (expand-parameterize form)))
             ;; --- New derived forms ---
             ((case-lambda)
              (paal-expand (expand-case-lambda form)))
@@ -812,6 +814,29 @@
         `(%paal-guard-run
            (lambda () ,@body)
            (lambda (,var) (cond ,@all-clauses)))))
+
+    ;; ---------------------------------------------------------------
+    ;; parameterize
+    ;; ---------------------------------------------------------------
+    ;;
+    ;; (parameterize ((p v) ...) body ...)
+    ;;   => (%paal-parameterize (list p ...) (list v ...) (lambda () body ...))
+    ;;
+    ;; Both parameter and value expressions are evaluated before any binding is
+    ;; installed, which R7RS requires.  Wrapping them in `list` gets that for
+    ;; free, since arguments are evaluated before the call.
+    ;;
+    ;; %paal-parameterize installs the new values, runs the thunk, and restores
+    ;; the old ones — on normal return and on a raise alike.  Both pipelines
+    ;; bind it; see the note in lib/kaappi/paal.sld.
+
+    (define (expand-parameterize form)
+      (let ((bindings (cadr form))
+            (body     (cddr form)))
+        `(%paal-parameterize
+           (list ,@(map car bindings))
+           (list ,@(map cadr bindings))
+           (lambda () ,@body))))
 
     ;; ---------------------------------------------------------------
     ;; define-record-type desugaring
