@@ -17,9 +17,14 @@
 ;;;   123 3.14 +inf.0    — numbers (via string->number)
 ;;;   identifier         — symbols
 ;;;
-;;; Not yet supported: #u8(, datum labels (#N= #N#),
-;;; bignum/rational/complex literals (delegated to string->number if supported
-;;; by the host), #e/#i exactness prefixes.
+;;;   #u8( )             — bytevectors
+;;;   #b #o #d #x        — radix prefixes
+;;;   #e #i              — exactness prefixes
+;;;   |...|              — bar-quoted symbols
+;;;   #N= #N#            — datum labels (shared and circular structure)
+;;;
+;;; Not yet supported: bignum/rational/complex literals beyond what the host's
+;;; string->number accepts.
 
 (define-library (kaappi paal reader)
   (import (scheme base) (scheme char) (scheme file))
@@ -177,6 +182,93 @@
     ;; Hash dispatch (#  already consumed)
     ;; ---------------------------------------------------------------
 
+    ;; ---------------------------------------------------------------
+    ;; Datum labels: #N= <datum> defines, #N# refers
+    ;; ---------------------------------------------------------------
+    ;;
+    ;; R7RS 7.1.2 scopes a label to the outermost datum being read, so the
+    ;; table is cleared by paal-read and every nested read goes through
+    ;; read-datum, which does not clear it.
+    ;;
+    ;; A reference inside the datum it names cannot be resolved when it is read
+    ;; — the datum does not exist yet.  #N= therefore registers a placeholder
+    ;; first, reads the datum, and then walks it replacing the placeholder with
+    ;; the finished datum.  That is what makes '#0=(a b . #0#) a real circular
+    ;; list rather than a list containing a marker.
+    ;;
+    ;; A reference that appears *after* the definition is resolved on the spot,
+    ;; so #0=5 followed by #0# needs no patching — which is why only pairs and
+    ;; vectors are walked.  An unresolved reference is necessarily an element of
+    ;; one or the other.
+
+    (define %labels '())          ; alist: label -> #(resolved? value)
+
+    (define (label-entry label)
+      (let ((hit (assv label %labels)))
+        (and hit (cdr hit))))
+
+    ;; The structure is already circular by the time this runs, so `seen`
+    ;; keeps the walk finite.  Threaded rather than mutated so the traversal
+    ;; stays a plain recursion.
+    (define (label-patch! obj placeholder value seen)
+      (cond
+        ((pair? obj)
+         (if (memq obj seen)
+             seen
+             (let* ((seen (cons obj seen))
+                    (seen (if (eq? (car obj) placeholder)
+                              (begin (set-car! obj value) seen)
+                              (label-patch! (car obj) placeholder value seen))))
+               (if (eq? (cdr obj) placeholder)
+                   (begin (set-cdr! obj value) seen)
+                   (label-patch! (cdr obj) placeholder value seen)))))
+        ((vector? obj)
+         (if (memq obj seen)
+             seen
+             (let loop ((i 0) (seen (cons obj seen)))
+               (if (= i (vector-length obj))
+                   seen
+                   (loop (+ i 1)
+                         (if (eq? (vector-ref obj i) placeholder)
+                             (begin (vector-set! obj i value) seen)
+                             (label-patch! (vector-ref obj i)
+                                           placeholder value seen)))))))
+        (else seen)))
+
+    ;; #N= or #N# — the leading digit has been consumed into `first-digit`.
+    (define (read-label port first-digit)
+      (let loop ((digits (list first-digit)))
+        (let ((c (peek-char port)))
+          (if (and (char? c) (char-numeric? c))
+              (begin (read-char port) (loop (cons c digits)))
+              (let ((label (string->number (list->string (reverse digits))))
+                    (next  (read-char port)))
+                (cond
+                  ((eqv? next #\=)
+                   ; Redefining a label within one datum is undefined in R7RS.
+                   ; The fresh entry is consed on front, so assv finds it and
+                   ; the later definition wins — which is what kaappi does, and
+                   ; being stricter would reject programs kaappi accepts.
+                   (let ((slot (vector #f (vector 'paal-datum-label label))))
+                     (set! %labels (cons (cons label slot) %labels))
+                     (let ((datum (read-datum port)))
+                       (if (eq? datum (vector-ref slot 1))
+                           (error "paal-read: datum label defined as itself"
+                                  label)
+                           (begin
+                             (label-patch! datum (vector-ref slot 1) datum '())
+                             (vector-set! slot 0 #t)
+                             (vector-set! slot 1 datum)
+                             datum)))))
+                  ((eqv? next #\#)
+                   (let ((slot (label-entry label)))
+                     (if slot
+                         (vector-ref slot 1)   ; placeholder if still unresolved
+                         (error "paal-read: undefined datum label" label))))
+                  (else
+                   (error "paal-read: expected = or # after datum label"
+                          label))))))))
+
     (define (read-hash port)
       (let ((ch (read-char port)))
         (cond
@@ -224,12 +316,12 @@
           ;; Block comment: #| ... |#
           ((char=? ch #\|)
            (skip-block-comment! port 0)
-           (paal-read port))              ; tail call: read next datum
+           (read-datum port))            ; tail call: read next datum
 
           ;; Datum comment: #; <datum>
           ((char=? ch #\;)
-           (paal-read port)              ; read and discard
-           (paal-read port))             ; return next datum
+           (read-datum port)             ; read and discard
+           (read-datum port))            ; return next datum
 
           ;; Radix prefixes: #b #o #d #x
           ((char=? ch #\b)
@@ -244,6 +336,12 @@
           ((char=? ch #\x)
            (let ((n (string->number (list->string (read-until-delimiter port)) 16)))
              (or n (error "paal-read: invalid hex literal"))))
+
+          ;; Datum label: #N= <datum> or #N#
+          ;; Checked after the radix and exactness prefixes so #b1 etc. are
+          ;; still prefixes, not labels — no prefix letter is a digit.
+          ((char-numeric? ch)
+           (read-label port ch))
 
           ;; Exactness prefixes: #e #i — read number that follows
           ((char=? ch #\e)
@@ -276,7 +374,7 @@
            (let ((ch2 (peek-char port)))
              (if (delimiter? ch2)
                  ; dotted pair tail: (car . cdr)
-                 (let ((tail (paal-read port)))
+                 (let ((tail (read-datum port)))
                    (skip-whitespace! port)
                    (if (char=? (peek-char port) #\))
                        (begin (read-char port) tail)
@@ -285,7 +383,7 @@
                  (let ((sym (read-atom port #\.)))
                    (cons sym (read-list port))))))
           (else
-           (let ((elem (paal-read port)))
+           (let ((elem (read-datum port)))
              (cons elem (read-list port)))))))
 
     ;; ---------------------------------------------------------------
@@ -310,7 +408,9 @@
     ;; Main reader
     ;; ---------------------------------------------------------------
 
-    (define (paal-read port)
+    ;; The recursive worker.  Every nested read goes through this, so a datum
+    ;; label stays in scope for the whole of the datum that defines it.
+    (define (read-datum port)
       (skip-whitespace! port)
       (let ((ch (peek-char port)))
         (cond
@@ -333,18 +433,18 @@
 
           ((char=? ch #\')
            (read-char port)
-           (list 'quote (paal-read port)))
+           (list 'quote (read-datum port)))
 
           ((char=? ch #\`)
            (read-char port)
-           (list 'quasiquote (paal-read port)))
+           (list 'quasiquote (read-datum port)))
 
           ((char=? ch #\,)
            (read-char port)
            (if (char=? (peek-char port) #\@)
                (begin (read-char port)
-                      (list 'unquote-splicing (paal-read port)))
-               (list 'unquote (paal-read port))))
+                      (list 'unquote-splicing (read-datum port)))
+               (list 'unquote (read-datum port))))
 
           ((char=? ch #\|)
            (read-char port)
@@ -358,6 +458,12 @@
     ;; ---------------------------------------------------------------
     ;; Public API
     ;; ---------------------------------------------------------------
+
+    ;; Read one datum.  R7RS scopes datum labels to the outermost datum, which
+    ;; is exactly this call, so the table is cleared here and nowhere else.
+    (define (paal-read port)
+      (set! %labels '())
+      (read-datum port))
 
     (define (paal-read-all port)
       (let loop ((acc '()))

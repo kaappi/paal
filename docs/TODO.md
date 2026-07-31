@@ -3,7 +3,7 @@
 Goal: make `paal` a correct R7RS-small Scheme implementation that runs the
 same programs as `kaappi`, with the same CLI conventions.
 
-Current: Stage 6 complete (self-hosting). **436 tests pass** (was 194 before Phase 1–2).
+Current: Stage 6 complete (self-hosting). **448 tests pass** (was 194 before Phase 1–2).
 
 ---
 
@@ -192,7 +192,22 @@ Gaps in `lib/kaappi/paal/reader.sld`:
 - [x] `#u8(...)` bytevector literals (e.g. `#u8(1 2 3)`)
 - [x] `#e` / `#i` exactness prefix on numeric literals (`#e1.5` → exact 3/2)
       — already present; this entry was stale
-- [ ] Datum labels `#N=` / `#N#` — shared/circular structure notation
+- [x] Datum labels `#N=` / `#N#` — shared *and* circular structure. A reference
+      inside the datum that defines it cannot be resolved when it is read, so
+      `#N=` registers a placeholder, reads the datum, then walks it replacing
+      the placeholder with the finished datum — which is what makes
+      `'#0=(a b . #0#)` a real circular list rather than one holding a marker.
+      The walk carries a `seen` list, since the structure is circular by then.
+      References *after* a definition resolve on the spot, so only pairs and
+      vectors are walked; an unresolved reference is necessarily an element of
+      one. Labels are scoped to the outermost datum, which is exactly one
+      `paal-read` call. Redefining a label inside one datum lets the later
+      definition win, matching kaappi — R7RS leaves it undefined, and rejecting
+      it would refuse programs kaappi accepts.
+
+      A circular constant survives the `.pbc` round trip for free: kaappi's
+      `write` already emits `#0=` for cycles, and the reader now understands
+      what it wrote.
 
 ---
 

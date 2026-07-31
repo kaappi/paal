@@ -2003,4 +2003,74 @@
     "paal"
     (pkaappi-run-bc-string "(utf8->string #u8(112 97 97 108))")))
 
+;; ---------------------------------------------------------------
+;; Datum labels (#N= / #N#)
+;; ---------------------------------------------------------------
+;;
+;; A reference inside the datum that defines it cannot be resolved when read,
+;; so #N= registers a placeholder, reads the datum, then walks it replacing the
+;; placeholder — which is what makes the result genuinely circular rather than a
+;; structure containing a marker.  References after the definition resolve on
+;; the spot, so only pairs and vectors need walking.
+
+(test-group "reader: datum labels"
+  (test-equal "shared structure is one object, not two equal ones"
+    '(#t (1 2))
+    (let ((d (car (paal-read-string "(#0=(1 2) #0#)"))))
+      (list (eq? (car d) (cadr d)) (car d))))
+  (test-equal "a reference after an atomic definition"
+    '(42 42 42)
+    (car (paal-read-string "(#1=42 #1# #1#)")))
+  (test-equal "shared inside a vector"
+    #t
+    (let ((v (car (paal-read-string "#(#2=\"s\" #2#)"))))
+      (eq? (vector-ref v 0) (vector-ref v 1))))
+  (test-equal "multi-digit labels"
+    #t
+    (let ((d (car (paal-read-string "(#12=(q) #12#)"))))
+      (eq? (car d) (cadr d))))
+  ;; The interesting case: the label is used inside its own definition.
+  (test-equal "a circular list closes on itself"
+    '(a b #t)
+    (let ((c (car (paal-read-string "#0=(a b . #0#)"))))
+      (list (car c) (cadr c) (eq? c (cddr c)))))
+  (test-equal "a self-referential vector"
+    #t
+    (let ((v (car (paal-read-string "#0=#(1 2 #0#)"))))
+      (eq? v (vector-ref v 2))))
+  (test-equal "walking a circular datum terminates"
+    '(a b a b a)
+    (let ((c (car (paal-read-string "#0=(a b . #0#)"))))
+      (let loop ((i 0) (p c) (acc '()))
+        (if (= i 5) (reverse acc) (loop (+ i 1) (cdr p) (cons (car p) acc))))))
+  ;; R7RS scopes a label to the outermost datum, so the next one starts clean.
+  (test-equal "labels are scoped to one datum"
+    '(1 2)
+    (let ((ds (paal-read-string "#0=(1 . #0#) #0=(2 . #0#)")))
+      (list (car (car ds)) (car (cadr ds)))))
+  ;; Redefining within one datum is undefined in R7RS; kaappi lets the later
+  ;; definition win, and rejecting it would refuse programs kaappi accepts.
+  (test-equal "a redefinition within one datum takes effect"
+    '(1 2)
+    (car (paal-read-string "(#0=1 #0=2)")))
+  (test-equal "an undefined reference is an error"
+    'error
+    (guard (e (#t 'error)) (paal-read-string "#3#")))
+  (test-equal "a circular literal evaluates"
+    '(a b a #t)
+    (pkaappi-run-bc-string
+      "(define c '#0=(a b . #0#))
+       (list (car c) (cadr c) (car (cddr c)) (eq? c (cddr c)))"))
+  ;; kaappi's `write` emits labels for cycles and paal's reader now reads them,
+  ;; so a circular constant survives the .pbc round trip.
+  (test-equal "a circular constant survives serialization"
+    '(a b a #t)
+    (let* ((fn  (pkaappi-compile
+                  "(define c '#0=(a b . #0#))
+                   (list (car c) (cadr c) (car (cddr c)) (eq? c (cddr c)))"))
+           (buf (open-output-string)))
+      (paal-write-bc fn buf)
+      (paal-run-bc (paal-read-bc (open-input-string (get-output-string buf)))
+                   (pkaappi-make-globals)))))
+
 (test-exit)

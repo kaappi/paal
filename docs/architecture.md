@@ -69,7 +69,12 @@ symbols, line comments (`;`), block comments (`#| … |#` nested), datum comment
 radix prefixes (`#b` `#o` `#x` `#d`), exactness prefixes (`#e` `#i`),
 bytevectors (`#u8( … )`), `|…|` bar-quoted symbols.
 
-**Not yet supported:** datum labels (`#N=` `#N#`).
+**Datum labels** (`#N=` `#N#`) cover shared and circular structure. A reference
+inside the datum that defines it cannot be resolved when read, so `#N=` registers a
+placeholder, reads the datum, then walks it replacing the placeholder with the
+finished datum — carrying a `seen` list, since the structure is circular by then.
+References after a definition resolve on the spot, so only pairs and vectors are
+walked. Labels are scoped to one `paal-read` call, which is the outermost datum.
 
 Key exports: `paal-read-string`, `paal-read-file`, `paal-read-all`, `paal-read`
 
