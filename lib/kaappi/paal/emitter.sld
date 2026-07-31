@@ -326,10 +326,16 @@
     ;;   (let ((f #f)) (set! f (lambda ...)) f)
 
     (define (collect-set-targets node)
-      ; Names that appear in (set! name ...) at THIS lambda level only.
-      ; Does not cross ir:lambda boundaries.
+      ; Names that appear as (set! name ...) targets anywhere inside node,
+      ; including inside nested lambdas.  Crossing lambda boundaries is what
+      ; makes closure mutation work: if a nested lambda assigns the variable,
+      ; every closure over it — and the frame that owns it — must share one
+      ; cell, so the variable has to be boxed.  Capturing by value instead
+      ; would give each closure a private copy and silently drop the write.
       (cond
-        ((ir:set!?   node) (list (ir:set!-name node)))
+        ((ir:set!?   node) (cons (ir:set!-name node)
+                                 (collect-set-targets (ir:set!-val node))))
+        ((ir:lambda? node) (collect-set-targets (ir:lambda-body node)))
         ((ir:begin?  node) (apply append (map collect-set-targets (ir:begin-exprs node))))
         ((ir:if?     node) (append (collect-set-targets (ir:if-test node))
                                    (collect-set-targets (ir:if-then node))
@@ -338,7 +344,6 @@
                                    (cons (collect-set-targets (ir:call-proc node))
                                          (map collect-set-targets (ir:call-args node)))))
         ((ir:define? node) (collect-set-targets (ir:define-val node)))
-        ; Stop at lambda boundaries
         (else '())))
 
     (define (collect-captured node params)
@@ -361,6 +366,8 @@
 
     (define (collect-free-refs-in-body node params)
       ; All refs to names in params anywhere inside node (crossing lambda boundaries).
+      ; A set! target counts as a use: a closure that assigns the variable needs
+      ; the cell just as much as one that reads it.
       (cond
         ((ir:ref?    node) (if (memq (ir:ref-name node) params)
                                (list (ir:ref-name node)) '()))
@@ -374,7 +381,9 @@
                                    (cons (collect-free-refs-in-body (ir:call-proc node) params)
                                          (map (lambda (a) (collect-free-refs-in-body a params))
                                               (ir:call-args node)))))
-        ((ir:set!?   node) (collect-free-refs-in-body (ir:set!-val node) params))
+        ((ir:set!?   node) (append (if (memq (ir:set!-name node) params)
+                                       (list (ir:set!-name node)) '())
+                                   (collect-free-refs-in-body (ir:set!-val node) params)))
         ((ir:define? node) (collect-free-refs-in-body (ir:define-val node) params))
         (else '())))
 

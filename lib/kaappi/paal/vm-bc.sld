@@ -7,10 +7,55 @@
 
 (define-library (kaappi paal vm-bc)
   (import (scheme base) (kaappi paal bytecode) (kaappi paal frame))
-  (export paal-run-bc paal-make-globals)
+  (export paal-run-bc paal-make-globals
+          %paal-guard-run-marker paal-vm-raise-escape!)
   (begin
 
     (define REGS-SIZE 16384)
+
+    ;; ---------------------------------------------------------------
+    ;; guard / raise across the HOST ↔ self-hosted boundary
+    ;; ---------------------------------------------------------------
+    ;;
+    ;; `guard` cannot be an ordinary binding in globals.  A HOST procedure
+    ;; cannot invoke a paal closure — paal closures are <closure> records that
+    ;; only this dispatch loop knows how to enter — and `guard` has to run a
+    ;; body thunk and then, on an exception, a handler.
+    ;;
+    ;; So the expander compiles (guard ...) into a call to %paal-guard-run,
+    ;; whose value in globals is the marker symbol below, and do-call! performs
+    ;; the whole operation itself.  Keeping the logic here matters for
+    ;; self-hosting: two copies of this library are live at once — the HOST one
+    ;; and the paal-compiled one in cache/paal-vm-bc.pbc — and whichever copy is
+    ;; running the VM must supply both the exception catch and the callback,
+    ;; since each can only enter closures its own copy created.
+    ;;
+    ;; Both markers are interned symbols on purpose.  A record type or a fresh
+    ;; (list 'tag) allocated per copy would not be eq? across the boundary, so
+    ;; the paal-compiled VM would fail to recognize a marker installed by the
+    ;; HOST library — and vice versa.  Symbols intern to one object in both.
+
+    (define %paal-guard-run-marker '%paal-vm-guard-run)
+
+    ;; paal `raise` is the HOST procedure paal-vm-raise-escape!, which raises a
+    ;; HOST exception carrying the paal value in a tagged wrapper.  The wrapper
+    ;; keeps arbitrary raised values (strings, numbers, records) distinguishable
+    ;; from HOST conditions, so a handler receives exactly what was raised.
+    ;; paal-vm-condition strips it; HOST conditions (say, a type error from
+    ;; `car`) pass through untouched, so paal `guard` catches primitive errors
+    ;; too, as R7RS requires.
+
+    (define %paal-escape-tag '%paal-vm-escape)
+
+    (define (paal-vm-escape? e)
+      (and (vector? e) (= (vector-length e) 2)
+           (eq? (vector-ref e 0) %paal-escape-tag)))
+
+    (define (paal-vm-raise-escape! obj)
+      (raise (vector %paal-escape-tag obj)))
+
+    (define (paal-vm-condition e)
+      (if (paal-vm-escape? e) (vector-ref e 1) e))
 
     ;; ---------------------------------------------------------------
     ;; Global environment (simple association list, mutable via set!)
@@ -48,7 +93,49 @@
              (top-closure (make-closure fn (vector)))
              (top-frame   (make-frame top-closure 0 0))
              (frames  (list top-frame)))
-        (run! regs globals frames)))
+        ; An escape that reached the top was raised by paal code with no guard
+        ; around it.  Strip the wrapper and re-raise so the caller sees the value
+        ; the program actually raised rather than VM plumbing.
+        (guard (e ((paal-vm-escape? e) (raise (vector-ref e 1))))
+          (run! regs globals frames))))
+
+    ;; ---------------------------------------------------------------
+    ;; Re-entrant call — enter a paal closure from HOST code
+    ;; ---------------------------------------------------------------
+    ;;
+    ;; Runs `callee` on `args` in a nested dispatch loop whose frame list is a
+    ;; singleton, so `return` hands the value straight back here instead of
+    ;; falling through into the program that was interrupted.
+    ;;
+    ;; `base` must be a register index at or above the caller's high-water mark;
+    ;; the emitter allocates a call's base as the next free register, so anything
+    ;; at or above a call's base+1+nargs is unused by every live frame.  The
+    ;; nested run therefore cannot clobber the suspended one.  Closure upvalues
+    ;; and boxes live in heap objects rather than registers, so values shared
+    ;; across the boundary stay intact.
+
+    (define (paal-call-value regs globals base callee args)
+      (cond
+        ((closure? callee)
+         (let* ((fn        (closure-function callee))
+                (arity     (bytecode-function-arity fn))
+                (variadic? (bytecode-function-variadic? fn)))
+           (let loop ((i 0) (as args))
+             (cond
+               ((< i arity)
+                (when (null? as)
+                  (error "paal-bc: too few arguments" (bytecode-function-name fn)))
+                (vector-set! regs (+ base i) (car as))
+                (loop (+ i 1) (cdr as)))
+               (variadic?
+                (vector-set! regs (+ base arity) as))
+               ((not (null? as))
+                (error "paal-bc: too many arguments" (bytecode-function-name fn)))))
+           (run! regs globals (list (make-frame callee base base)))))
+
+        ((procedure? callee) (apply callee args))
+
+        (else (error "paal-bc: not a callable" callee))))
 
     ;; ---------------------------------------------------------------
     ;; Dispatch loop
@@ -206,6 +293,39 @@
     ;; Call dispatch (shared by call and tail-call)
     ;; ---------------------------------------------------------------
 
+    ;; Run a guard's body thunk; if it raises, apply the handler to the
+    ;; condition.  Both run at register base `nbase`, above the live frames.
+    ;;
+    ;; Kept out of do-call! deliberately: inlining it there made do-call! a
+    ;; single closure large and deeply nested enough that kaappi's reader could
+    ;; no longer read back the serialized cache/paal-vm-bc.pbc, which broke
+    ;; `make pbc-pipeline` with an opaque "read error".
+    (define (run-guard! regs globals nbase body handler)
+      (guard (e (#t (paal-call-value regs globals nbase handler
+                                     (list (paal-vm-condition e)))))
+        (paal-call-value regs globals nbase body '())))
+
+    ;; Hand `result` back to the caller of a completed HOST call or guard.
+    (define (deliver-result! regs globals frames frame abs-base result tail?)
+      (if tail?
+          ; Tail call: deliver to the caller's dst, or return if there is none.
+          (let ((rest (cdr frames)))
+            (if (null? rest)
+                result
+                (begin
+                  (vector-set! regs (frame-dst frame) result)
+                  (run! regs globals rest))))
+          (begin
+            (vector-set! regs abs-base result)
+            (run! regs globals frames))))
+
+    ;; Collect the nargs arguments sitting above the callee slot.
+    (define (call-args regs abs-base nargs)
+      (let loop ((i nargs) (acc '()))
+        (if (= i 0)
+            acc
+            (loop (- i 1) (cons (vector-ref regs (+ abs-base i)) acc)))))
+
     (define (do-call! regs globals frames frame callee abs-base nargs base-off tail?)
       (cond
         ; Paal closure
@@ -243,24 +363,18 @@
                      (run! regs globals (cons reused (cdr frames)))))
                  (run! regs globals (cons new-frame frames))))))
 
+        ; guard — (%paal-guard-run body-thunk handler); see run-guard! above.
+        ((eq? callee %paal-guard-run-marker)
+         (deliver-result! regs globals frames frame abs-base
+                          (run-guard! regs globals (+ abs-base nargs 1)
+                                      (vector-ref regs (+ abs-base 1))
+                                      (vector-ref regs (+ abs-base 2)))
+                          tail?))
+
         ; Host (Scheme) procedure
         ((procedure? callee)
-         (let* ((args (let loop ((i 0) (acc '()))
-                        (if (= i nargs) (reverse acc)
-                            (loop (+ i 1)
-                                  (cons (vector-ref regs (+ abs-base 1 i)) acc)))))
-                (result (apply callee args)))
-           (if tail?
-               ; Tail call to host: deliver result to caller's dst
-               (let ((rest (cdr frames)))
-                 (if (null? rest)
-                     result
-                     (begin
-                       (vector-set! regs (frame-dst frame) result)
-                       (run! regs globals rest))))
-               (begin
-                 (vector-set! regs abs-base result)
-                 (run! regs globals frames)))))
+         (let ((result (apply callee (call-args regs abs-base nargs))))
+           (deliver-result! regs globals frames frame abs-base result tail?)))
 
         (else
          (error "paal-bc: not a callable" callee))))))

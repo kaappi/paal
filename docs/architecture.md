@@ -66,9 +66,10 @@ needed for paal's own source and most R7RS programs.
 booleans (`#t` `#f` `#true` `#false`), characters (`#\space` `#\newline` `#\xHH` etc.),
 strings with `\n \t \r \a \b \" \\ \xHH;` escapes, numbers (via `string->number`),
 symbols, line comments (`;`), block comments (`#| … |#` nested), datum comments (`#;`),
-radix prefixes (`#b` `#o` `#x` `#d`), exactness prefixes (`#e` `#i`).
+radix prefixes (`#b` `#o` `#x` `#d`), exactness prefixes (`#e` `#i`),
+bytevectors (`#u8( … )`), `|…|` bar-quoted symbols.
 
-**Not yet supported:** `|…|` symbol quoting, `#u8(`, datum labels (`#N=` `#N#`).
+**Not yet supported:** datum labels (`#N=` `#N#`).
 
 Key exports: `paal-read-string`, `paal-read-file`, `paal-read-all`, `paal-read`
 
@@ -119,6 +120,7 @@ structural — it transforms S-expressions to S-expressions with no semantic ana
 | `(define-record-type name (ctor f…) pred (f acc [mut])…)` | `begin` of `define`s using vector storage |
 | `(define-library name decl…)` | `begin` of the library's `(begin …)` bodies |
 | `(import …)` / `(export …)` | `(quote #f)` — no-op during bootstrap |
+| `(guard (v clause…) body…)` | `(%paal-guard-run (lambda () body…) (lambda (v) (cond clause… [else (raise v)])))` |
 
 **Internal defines:** `expand-body` processes a lambda/let body and hoists any leading
 `(define …)` forms to `letrec*` (R7RS §5.3.2). Both the `lambda` and shorthand
@@ -236,6 +238,72 @@ defines work without needing `letrec` semantics.
 list operations, vectors, strings, characters, I/O, exceptions, `call/cc`,
 `dynamic-wind`, `call-with-values`. Also provides `gensym` as a Scheme-implemented
 counter (kaappi has no built-in `gensym`).
+
+### The trampoline boundary
+
+A paal lambda whose body is a tail call returns a *thunk*, not a value; the caller
+forces it. That contract holds for paal-to-paal calls, where `ir:call` does the
+forcing — but a HOST higher-order procedure invoking a paal closure knows nothing
+about it and receives the raw thunk.
+
+Any HOST binding in `paal-initial-env` that calls a paal closure must therefore
+trampoline the result itself, and must do so *inside* whatever dynamic context it is
+establishing. Two bindings need this:
+
+- `call-with-values` — forces the producer with `trampoline-values`, which forces in a
+  multiple-value context so `(values …)` in tail position survives. Plain `trampoline`
+  would collapse it to one value, and the unforced thunk would reach the consumer as a
+  single argument, so `(lambda (x y) …)` would be applied to one argument.
+- `%paal-guard-run` — forces body and handler with `trampoline` *within* the `guard`.
+  Returning an unforced thunk would defer the body's real work until after the guard's
+  extent had exited, letting any exception escape uncaught.
+
+The same limitation is why `map`, `for-each`, `apply` and friends are paal-compiled in
+`pkaappi-make-globals` for the bytecode path rather than inherited from the host.
+
+---
+
+## Exceptions in the bytecode VM
+
+`guard` cannot be an ordinary binding in the bytecode path. A HOST procedure cannot
+invoke a paal closure — paal closures are `<closure>` records that only the dispatch
+loop knows how to enter — and `guard` must run a body thunk and then, on an exception,
+a handler. So the expander compiles `(guard …)` into a call to `%paal-guard-run`, whose
+value in globals is a *marker*, and `do-call!` performs the whole operation itself.
+
+**Re-entrant calls.** `paal-call-value` enters a paal closure from HOST code by running
+a nested dispatch loop whose frame list is a singleton, so `return` hands the value
+straight back rather than falling through into the interrupted program. Its register
+base must sit at or above the caller's high-water mark; since the emitter allocates a
+call's base as the next free register, everything at or above `base + 1 + nargs` is
+unused by every live frame. Closure upvalues and boxes are heap objects, so values
+shared across the boundary stay intact.
+
+**raise.** paal's `raise` is a HOST procedure that raises a HOST exception carrying the
+paal value in a tagged wrapper. The wrapper keeps arbitrary raised values (strings,
+numbers, records) distinguishable from HOST conditions, so a handler receives exactly
+what was raised. Unwrapping leaves HOST conditions untouched, so `guard` also catches
+errors from primitives such as `car`, as R7RS requires. An escape that reaches the top
+of `paal-run-bc` is unwrapped and re-raised, so callers see the value the program
+actually raised rather than VM plumbing.
+
+**Why interned symbols.** Both markers — the guard marker and the raise wrapper's tag —
+are interned symbols rather than record types or freshly allocated `(list 'tag)` pairs.
+Self-hosting keeps two copies of `(kaappi paal vm-bc)` live at once: the HOST one and
+the paal-compiled one in `cache/paal-vm-bc.pbc`. A record type defined in one copy is
+unrelated to the record type defined in the other, so the paal-compiled VM would fail
+to recognize a marker installed by the HOST library. Symbols intern to a single object
+in both. For the same reason the *logic* stays in `do-call!`: whichever copy is running
+the VM must supply both the exception catch and the closure callbacks, since each can
+only enter closures its own copy created.
+
+**Known limits.** Nesting is bounded by the host: kaappi v0.22.0 mishandles more than
+63 dynamically nested `guard` forms — at depth 64 the innermost handler is skipped and
+an outer one catches instead. It reproduces in plain kaappi with no paal involved, and
+paal inherits it by delegating to HOST `guard`; paal's effective ceiling is a few
+levels lower still, since `paal-run-bc` and `run-guard!` consume host levels of their
+own. `raise-continuable` cannot resume, so it behaves as `raise`, and an unmatched
+clause re-raises from the handler's dynamic environment rather than the original one.
 
 ---
 

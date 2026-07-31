@@ -83,16 +83,38 @@
              ; cmd-cell is a HOST mutable pair; (car cmd-cell) = current command-line list.
              ; command-line is a HOST lambda closing over cmd-cell — safe to call from
              ; any pipeline (HOST or self-hosted) without closure-tag mismatch.
-             (cmd-cell  (list cmd-args))
+             (cmd-cell    (list cmd-args))
+             ; Build a genuine HOST error object (so error-object? and friends
+             ; recognize it) without raising past this point: HOST error raises it,
+             ; and the guard hands the object back as an ordinary value.
+             (make-host-error (lambda (msg irritants)
+                                (guard (e (#t e)) (apply error msg irritants))))
              (base-alist (map (lambda (pair) (cons (car pair) (vector-ref (cdr pair) 0)))
                               (paal-initial-env)))
              (g (paal-make-globals
-                  (cons (cons 'pkaappi-make-globals pkaappi-make-globals)
-                        (cons (cons 'pkaappi-set-command-line! pkaappi-set-command-line!)
-                              ; Override command-line with HOST lambda and expose cmd-cell.
-                              (cons (cons 'command-line (lambda () (car cmd-cell)))
-                                    (cons (cons '%paal-cmd-cell cmd-cell)
-                                          base-alist)))))))
+                  (append
+                    `((pkaappi-make-globals       . ,pkaappi-make-globals)
+                      (pkaappi-set-command-line!  . ,pkaappi-set-command-line!)
+                      ; command-line HOST lambda closes over cmd-cell (safe across pipelines).
+                      (command-line               . ,(lambda () (car cmd-cell)))
+                      (%paal-cmd-cell             . ,cmd-cell)
+
+                      ;; --- Exceptions (bytecode path) ---
+                      ; raise wraps the value so any paal datum survives the trip
+                      ; through the HOST condition system; paal-vm-condition unwraps.
+                      (raise                      . ,paal-vm-raise-escape!)
+                      ; No restart support yet: a handler can never resume, so
+                      ; raise-continuable behaves exactly like raise.
+                      (raise-continuable          . ,paal-vm-raise-escape!)
+                      (error                      . ,(lambda (msg . irritants)
+                                                       (paal-vm-raise-escape!
+                                                         (make-host-error msg irritants))))
+                      ; Target of the expander's `guard` desugaring.  Only a marker:
+                      ; do-call! implements the operation, so whichever copy of the
+                      ; VM is running supplies the catch and the closure callbacks
+                      ; (see vm-bc.sld).
+                      (%paal-guard-run            . ,%paal-guard-run-marker))
+                    base-alist))))
         ; Install paal-native promise system (separate from HOST tree-walking path).
         ; %paal-delay-impl creates a lazy promise vector; force/promise?/make-promise
         ; use the same paal-allocated tag.  Bytecode VM paal closures work here.

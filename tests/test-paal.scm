@@ -957,4 +957,142 @@
     15
     (pkaappi-run-bc-string "(apply (lambda (a b c) (+ a b c)) '(4 5 6))")))
 
+;; ---------------------------------------------------------------
+;; Phase 1: guard / raise / error
+;; ---------------------------------------------------------------
+
+(test-group "guard: basic raise"
+  (test-equal "guard catches raised value"
+    "caught"
+    (pkaappi-run-bc-string
+      "(guard (exn (#t \"caught\")) (raise \"oops\"))"))
+  (test-equal "guard: no exception — normal return"
+    42
+    (pkaappi-run-bc-string
+      "(guard (exn (#t \"caught\")) 42)"))
+  (test-equal "guard: condition predicate matches"
+    "got: hello"
+    (pkaappi-run-bc-string
+      "(guard (exn ((string? exn) (string-append \"got: \" exn)))
+         (raise \"hello\"))"))
+  (test-equal "guard: multiple clauses — second matches"
+    "string"
+    (pkaappi-run-bc-string
+      "(guard (exn
+               ((number? exn) \"number\")
+               ((string? exn) \"string\"))
+         (raise \"x\"))"))
+  (test-equal "guard: else re-raises to outer"
+    "outer"
+    (pkaappi-run-bc-string
+      "(guard (outer (#t \"outer\"))
+         (guard (inner ((number? inner) \"number\"))
+           (raise \"string-val\")))"))
+  (test-equal "guard: nested — inner catches"
+    "inner"
+    (pkaappi-run-bc-string
+      "(guard (outer (#t \"outer\"))
+         (guard (inner (#t \"inner\"))
+           (raise \"x\")))"))
+  (test-equal "guard: side effects before raise"
+    1
+    (pkaappi-run-bc-string
+      "(let ((x 0))
+         (guard (exn (#t x))
+           (set! x 1)
+           (raise \"stop\")
+           (set! x 2)))"))
+  (test-equal "guard: error-object? predicate on (error ...)"
+    "boom"
+    (pkaappi-run-bc-string
+      "(guard (exn ((error-object? exn) (error-object-message exn)))
+         (error \"boom\" 42))"))
+  (test-equal "guard: error-object-irritants"
+    '(1 2 3)
+    (pkaappi-run-bc-string
+      "(guard (exn ((error-object? exn) (error-object-irritants exn)))
+         (error \"msg\" 1 2 3))"))
+  (test-equal "guard: catches a primitive error, not just paal raise"
+    'caught
+    (pkaappi-run-bc-string
+      "(guard (exn ((error-object? exn) 'caught)) (car '()))"))
+  (test-equal "guard: explicit else clause is not duplicated"
+    "fallback"
+    (pkaappi-run-bc-string
+      "(guard (exn ((number? exn) \"number\") (else \"fallback\")) (raise \"s\"))"))
+  (test-equal "guard: raise propagates up through intervening frames"
+    '(caught deep)
+    (pkaappi-run-bc-string
+      "(define (deep n) (if (= n 0) (raise 'deep) (+ 0 (deep (- n 1)))))
+       (guard (e (#t (list 'caught e))) (deep 20))"))
+  (test-equal "guard: repeated entry in a loop reuses registers"
+    50
+    (pkaappi-run-bc-string
+      "(let loop ((i 0) (acc 0))
+         (if (= i 50) acc (loop (+ i 1) (+ acc (guard (e (#t 1)) (raise 'x))))))"))
+  (test-equal "guard: tree-walking pipeline"
+    "caught"
+    (pkaappi-run-string "(guard (exn (#t \"caught\")) (raise \"oops\"))")))
+
+;; ---------------------------------------------------------------
+;; Mutable variables captured by closures
+;; ---------------------------------------------------------------
+;;
+;; A variable that a closure assigns must be boxed, so every closure over it —
+;; and the frame that owns it — share one cell.  Without boxing each closure
+;; captures a private copy and the assignment is silently lost.
+
+(test-group "closure mutation"
+  (test-equal "set! through a closure is visible to the owner"
+    42
+    (pkaappi-run-bc-string
+      "(let ((x 0)) (let ((f (lambda () (set! x 42)))) (f) x))"))
+  (test-equal "repeated mutation accumulates"
+    3
+    (pkaappi-run-bc-string
+      "(let ((n 0))
+         (let ((bump (lambda () (set! n (+ n 1)))))
+           (bump) (bump) (bump) n))"))
+  (test-equal "sibling closures share the variable"
+    'after
+    (pkaappi-run-bc-string
+      "(let ((v 'before))
+         (let ((setter (lambda () (set! v 'after)))
+               (getter (lambda () v)))
+           (setter) (getter)))"))
+  (test-equal "mutation inside a nested lambda two levels down"
+    7
+    (pkaappi-run-bc-string
+      "(let ((x 0))
+         (let ((outer (lambda () (lambda () (set! x 7)))))
+           ((outer)) x))"))
+  (test-equal "counter closure returns increasing values"
+    '(1 2 3)
+    (pkaappi-run-bc-string
+      "(let ((n 0))
+         (let ((next (lambda () (set! n (+ n 1)) n)))
+           (list (next) (next) (next))))"))
+  (test-equal "tree-walking pipeline"
+    42
+    (pkaappi-run-string
+      "(let ((x 0)) (let ((f (lambda () (set! x 42)))) (f) x))")))
+
+;; ---------------------------------------------------------------
+;; Bytevector literals (#u8)
+;; ---------------------------------------------------------------
+
+(test-group "reader: bytevector literals"
+  (test-equal "empty"        (bytevector)      (car (paal-read-string "#u8()")))
+  (test-equal "three bytes"  (bytevector 1 2 3) (car (paal-read-string "#u8(1 2 3)")))
+  (test-equal "byte bounds"  (bytevector 0 255) (car (paal-read-string "#u8(0 255)")))
+  (test-equal "inside a list"
+    (list 'a (bytevector 7))
+    (car (paal-read-string "(a #u8(7))")))
+  (test-equal "evaluates as a literal"
+    (bytevector 65 66)
+    (pkaappi-run-string "(bytevector-append #u8(65) #u8(66))"))
+  (test-equal "round-trips through utf8->string"
+    "paal"
+    (pkaappi-run-bc-string "(utf8->string #u8(112 97 97 108))")))
+
 (test-exit)

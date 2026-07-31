@@ -201,6 +201,26 @@
           ((char=? ch #\()
            (list->vector (read-list port)))
 
+          ;; Bytevector: #u8( ...
+          ;; Filled element by element rather than via (apply bytevector elts):
+          ;; self-hosted `apply` caps out at 8 arguments, and literals are longer.
+          ((char=? ch #\u)
+           (let ((eight (read-char port))
+                 (open  (read-char port)))
+             (if (not (and (eqv? eight #\8) (eqv? open #\()))
+                 (error "paal-read: malformed bytevector, expected #u8(")
+                 (let* ((elts (read-list port))
+                        (bv   (make-bytevector (length elts) 0)))
+                   (let loop ((i 0) (es elts))
+                     (if (null? es)
+                         bv
+                         (let ((b (car es)))
+                           (if (not (and (integer? b) (exact? b) (<= 0 b 255)))
+                               (error "paal-read: bytevector element out of range" b)
+                               (begin
+                                 (bytevector-u8-set! bv i b)
+                                 (loop (+ i 1) (cdr es)))))))))))
+
           ;; Block comment: #| ... |#
           ((char=? ch #\|)
            (skip-block-comment! port 0)

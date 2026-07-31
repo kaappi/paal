@@ -3,7 +3,7 @@
 Goal: make `pkaappi` a correct R7RS-small Scheme implementation that runs the
 same programs as `kaappi`, with the same CLI conventions.
 
-Current: Stage 6 complete (self-hosting). **260 tests pass** (was 194 before Phase 1–2).
+Current: Stage 6 complete (self-hosting). **296 tests pass** (was 194 before Phase 1–2).
 
 ---
 
@@ -43,19 +43,35 @@ Missing primitives added to `paal-initial-env` (`lib/kaappi/paal/vm.sld`):
 - [x] `apply` (paal-compiled, up to 8 args — see limitation below)
 - [x] `values` / `call-with-values` (paal-compiled MVR-tagged, up to 4 return values)
 - [x] `force`, `make-promise`, `promise?` (custom vector-based implementation)
+- [x] `guard` / `raise` / `error` — both pipelines. The bytecode VM handles
+      `%paal-guard-run` as a marker in `do-call!` and re-enters itself via
+      `paal-call-value` to run the body and handler; the tree-walking VM binds a
+      HOST procedure that trampolines both inside the guard. Catches paal `raise`
+      *and* primitive errors. See `docs/architecture.md` § Exceptions in the
+      bytecode VM.
 
 **Known limitations (still open):**
 
-- [ ] `guard` — requires paal VM-level continuation support; HOST `call/cc` and
-      `with-exception-handler` cannot call paal closures as callbacks
-- [ ] `parameterize` — requires paal-native `dynamic-wind`; same boundary issue as `guard`
+- [ ] `guard` nesting depth — kaappi v0.22.0 mishandles more than 63 dynamically
+      nested `guard` forms (at depth 64 the innermost handler is skipped and an
+      outer one catches instead). Reproduces in plain kaappi with no paal
+      involved, so this is a core-repo bug; paal inherits it by delegating to
+      HOST `guard`, with a ceiling a few levels lower still. Repro:
+      `(define (f n) (guard (e (#t n)) (if (= n 0) (raise 'b) (f (- n 1))))) (f 64)`
+      → returns `1`, should return `0`. Worth filing against kaappi.
+- [ ] `parameterize` — requires paal-native `dynamic-wind`; same boundary issue as
+      `guard` had. The `paal-call-value` re-entry mechanism added for `guard` is
+      the piece that was missing, so this is now tractable.
 - [ ] `define-syntax` hygiene — introduced bindings are not renamed (non-hygienic);
       macros that introduce `let` bindings can capture user variables
 - [ ] `define-syntax` nested ellipsis — only single-level `...` is supported
 - [ ] `let-syntax` / `letrec-syntax` true mutual recursion — sequential binding only
 - [ ] `apply` arity limit — crashes with more than 8 arguments
 - [ ] `call-with-values` value count limit — crashes with more than 4 return values
-- [ ] `with-exception-handler` restart behavior (raise-continuable path)
+- [ ] `with-exception-handler` restart behavior (raise-continuable path) —
+      `raise-continuable` currently behaves exactly like `raise`
+- [ ] `guard` re-raise environment — an unmatched clause re-raises from the
+      handler's dynamic environment, not the original one (R7RS requires the latter)
 - [ ] `floor/` and `truncate/` — return two values; currently HOST procs that return
       actual multiple-values (incompatible with paal MVR encoding in bytecode path)
 
@@ -94,8 +110,9 @@ User programs call `(import (scheme inexact))` etc. Currently `import` is a no-o
 
 Gaps in `lib/kaappi/paal/reader.sld`:
 
-- [ ] `#u8(...)` bytevector literals (e.g. `#u8(1 2 3)`)
-- [ ] `#e` / `#i` exactness prefix on numeric literals (`#e1.5` → exact 3/2)
+- [x] `#u8(...)` bytevector literals (e.g. `#u8(1 2 3)`)
+- [x] `#e` / `#i` exactness prefix on numeric literals (`#e1.5` → exact 3/2)
+      — already present; this entry was stale
 - [ ] Datum labels `#N=` / `#N#` — shared/circular structure notation
 
 ---
@@ -175,6 +192,52 @@ Requires significant new infrastructure; no fixed timeline.
 - [ ] **Native backend** — LLVM or alternative native code generation
 - [ ] **GC** — standalone binary needs its own garbage collector
 - [ ] **Bignum / rationals / complex** — arbitrary-precision arithmetic
+
+---
+
+## Cross-cutting correctness
+
+Issues that span stages rather than belonging to one phase.
+
+**Fixed:**
+
+- [x] **Closure mutation was silently dropped** (`emitter.sld`) — `collect-set-targets`
+      stopped at lambda boundaries, so a variable assigned only from inside a closure
+      was never boxed. Each closure captured a private copy and the write vanished:
+      `(let ((x 0)) (let ((f (lambda () (set! x 42)))) (f) x))` returned `0`.
+      Now a `set!` target anywhere inside a nested lambda forces boxing, and a `set!`
+      target counts as a use when deciding whether a variable is captured.
+- [x] **`call-with-values` dropped multiple values** (`vm.sld`) — a paal producer whose
+      body is a tail call returns a trampoline thunk, and HOST `call-with-values`
+      applied the consumer to that thunk as a single argument. `define-values`,
+      `let-values` and `let*-values` all failed on the tree-walking path with a `car`
+      type error. Now forced with `trampoline-values`, which preserves value count.
+- [x] **Test suite silently skipped tests and exited nonzero** — an uncaught error
+      aborts the rest of its `test-group` without counting the remaining tests, so
+      `make test` reported "all passed" while exiting 1 and running 10 fewer tests
+      than it appeared to. Both underlying causes (`#u8`, `call-with-values`) are
+      fixed; the reporting weakness in `(kaappi test)` itself remains.
+
+**Open:**
+
+- [ ] **HOFs fail in the self-hosted path** — `map`, `apply`, `call-with-values`,
+      `vector-map` and the other procedures paal-compiles in `pkaappi-make-globals`
+      raise `not a callable` under `pkaappi-self-run-file`. The inner globals are
+      built by the HOST `pkaappi-make-globals`, so those closures belong to the HOST
+      VM's `<closure>` record type while the VM executing the program is the
+      paal-compiled copy, whose `closure?` rejects them. Pre-existing and independent
+      of the exception work; plain code and `guard` are unaffected. Likely fix: build
+      the inner globals with the paal-compiled `pkaappi-make-globals`, or make
+      `<closure>` a tagged vector the way the exception markers now are.
+- [ ] **`(kaappi test)` should not lose tests to an aborting group** — a raised error
+      inside `test-group` should fail that test and continue, not skip the rest of the
+      group silently. Needs `test-equal` to guard around the expression.
+- [ ] **Large deeply-nested functions can produce unreadable `.pbc`** — kaappi's `read`
+      fails on `cache/paal-vm-bc.pbc` once a single top-level function grows large and
+      deeply nested enough (it did when the guard logic was inlined into `do-call!`,
+      breaking `make pbc-pipeline` with an opaque "read error"). Worked around by
+      keeping `run-guard!` a separate top-level procedure, but the ceiling is still
+      there for any future growth. Root cause is in kaappi's reader.
 
 ---
 

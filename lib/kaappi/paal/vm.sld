@@ -178,7 +178,14 @@
              ;; Control
              (apply . ,apply) (map . ,map) (for-each . ,for-each)
              (values . ,values)
-             (call-with-values . ,call-with-values)
+             ; A paal producer whose body is a tail call returns a trampoline
+             ; thunk rather than its values, so force it in a multiple-value
+             ; context before handing anything to the consumer.  Without this,
+             ; the consumer is applied to the thunk itself as a single argument.
+             (call-with-values . ,(lambda (producer consumer)
+                                    (call-with-values
+                                      (lambda () (trampoline-values (producer)))
+                                      consumer)))
              (call-with-current-continuation . ,call-with-current-continuation)
              (call/cc . ,call/cc)
              (dynamic-wind . ,dynamic-wind)
@@ -187,6 +194,18 @@
              (error . ,error)
              (with-exception-handler . ,with-exception-handler)
              (raise . ,raise) (raise-continuable . ,raise-continuable)
+             ;; Target of the expander's `guard` desugaring.  Tree-walking closures
+             ;; are HOST procedures, so body and handler are directly callable here;
+             ;; the bytecode pipeline handles the marker in do-call! instead.
+             ;;
+             ;; Both calls must be trampolined *inside* the guard.  A paal lambda
+             ;; whose body is a tail call returns a thunk rather than its value, so
+             ;; returning that thunk unforced would defer the body's real work until
+             ;; after the guard's dynamic extent had exited — and any exception it
+             ;; raised would escape uncaught.
+             (%paal-guard-run . ,(lambda (body handler)
+                                   (guard (e (#t (trampoline (handler e))))
+                                     (trampoline (body)))))
              (error-object? . ,error-object?)
              (error-object-message . ,error-object-message)
              (error-object-irritants . ,error-object-irritants)
@@ -331,6 +350,21 @@
     (define (trampoline v)
       (let loop ((v v))
         (if (thunk? v) (loop (thunk-force v)) v)))
+
+    ;; Like trampoline, but preserves multiple values from the final call.
+    ;;
+    ;; trampoline forces in a single-value context, which is fine for ordinary
+    ;; calls but destroys a (values ...) produced in tail position.  Forcing
+    ;; inside call-with-values keeps every value the last thunk yields; a lone
+    ;; value that is itself a thunk means the trampoline has another hop to make.
+    (define (trampoline-values v)
+      (if (thunk? v)
+          (call-with-values (lambda () (thunk-force v))
+            (lambda vals
+              (if (and (pair? vals) (null? (cdr vals)) (thunk? (car vals)))
+                  (trampoline-values (car vals))
+                  (apply values vals))))
+          v))
 
     ;; --- Evaluator ---
     ;;

@@ -337,6 +337,8 @@
             ((do)          (paal-expand (expand-do form)))
             ((define-record-type)
              (paal-expand (expand-define-record-type form)))
+            ((guard)
+             (paal-expand (expand-guard form)))
             ;; --- New derived forms ---
             ((case-lambda)
              (paal-expand (expand-case-lambda form)))
@@ -774,6 +776,42 @@
                        (cons 'letrec*
                          (cons (map define->binding (reverse defs))
                                rest)))))))))
+
+    ;; ---------------------------------------------------------------
+    ;; guard
+    ;; ---------------------------------------------------------------
+    ;;
+    ;; (guard (var clause ...) body ...)
+    ;;   => (%paal-guard-run (lambda () body ...)
+    ;;                       (lambda (var) (cond clause ... (else (raise var)))))
+    ;;
+    ;; %paal-guard-run runs the body thunk under a HOST guard and, on an
+    ;; exception, applies the handler to the condition.  Each pipeline provides
+    ;; it differently: the tree-walking VM binds a plain HOST procedure, since
+    ;; its closures are themselves HOST procedures, while the bytecode VM binds
+    ;; a marker that do-call! recognizes and acts on (see vm-bc.sld).
+    ;;
+    ;; The trailing else re-raises unmatched conditions, per R7RS — but from the
+    ;; handler's dynamic environment rather than the original one, so a
+    ;; raise-continuable that no clause matches cannot be resumed.
+
+    (define (expand-guard form)
+      (let* ((var-and-clauses (cadr form))
+             (var     (car var-and-clauses))
+             (clauses (cdr var-and-clauses))
+             (body    (cddr form))
+             ; An explicit else already handles everything; a second one is an error.
+             (has-else? (and (pair? clauses)
+                             (let loop ((cs clauses))
+                               (cond ((null? (cdr cs))
+                                      (and (pair? (car cs)) (eq? (caar cs) 'else)))
+                                     (else (loop (cdr cs)))))))
+             (all-clauses (if has-else?
+                              clauses
+                              (append clauses `((else (raise ,var)))))))
+        `(%paal-guard-run
+           (lambda () ,@body)
+           (lambda (,var) (cond ,@all-clauses)))))
 
     ;; ---------------------------------------------------------------
     ;; define-record-type desugaring
