@@ -58,7 +58,9 @@ Missing primitives added to `paal-initial-env` (`lib/kaappi/paal/vm.sld`):
       involved, so this is a core-repo bug; paal inherits it by delegating to
       HOST `guard`, with a ceiling a few levels lower still. Repro:
       `(define (f n) (guard (e (#t n)) (if (= n 0) (raise 'b) (f (- n 1))))) (f 64)`
-      → returns `1`, should return `0`. Worth filing against kaappi.
+      → returns `1`, should return `0`. Filed as kaappi/kaappi#1886 — the cap is
+      `MAX_HANDLERS = 64`, and exceeding it yields a *catchable* error, so an
+      enclosing `guard` swallows it. Revisit this entry when that lands.
 - [ ] `parameterize` — requires paal-native `dynamic-wind`; same boundary issue as
       `guard` had. The `paal-call-value` re-entry mechanism added for `guard` is
       the piece that was missing, so this is now tractable.
@@ -220,15 +222,18 @@ Issues that span stages rather than belonging to one phase.
 
 **Open:**
 
-- [ ] **HOFs fail in the self-hosted path** — `map`, `apply`, `call-with-values`,
-      `vector-map` and the other procedures paal-compiles in `pkaappi-make-globals`
-      raise `not a callable` under `pkaappi-self-run-file`. The inner globals are
-      built by the HOST `pkaappi-make-globals`, so those closures belong to the HOST
-      VM's `<closure>` record type while the VM executing the program is the
-      paal-compiled copy, whose `closure?` rejects them. Pre-existing and independent
-      of the exception work; plain code and `guard` are unaffected. Likely fix: build
-      the inner globals with the paal-compiled `pkaappi-make-globals`, or make
-      `<closure>` a tagged vector the way the exception markers now are.
+- [ ] **HOFs fail in the self-hosted path** (kaappi/paal#1) — `map`, `for-each`, `apply`,
+      `filter`, `vector-map`, `vector-for-each`, `string-map`, `string-for-each`,
+      `values`/`call-with-values` and the promise system all raise `not a callable`
+      under `pkaappi-self-run-file`, which is the path `pkaappi file.scm` takes.
+      The inner globals are built by the HOST `pkaappi-make-globals` (`paal.sld` is
+      not in `%paal-lib-files`, so no paal-compiled copy exists), so those closures
+      belong to the HOST VM's `<closure>` record type while the VM executing the
+      program is the paal-compiled copy, whose `closure?` rejects them. Pre-existing
+      and independent of the exception work; plain code and `guard` are unaffected.
+      Likely fix: build the inner globals with the paal-compiled pipeline, or make
+      `<closure>` and `<bytecode-function>` tagged vectors the way the exception
+      markers now are. See the issue for the full analysis.
 - [ ] **`(kaappi test)` should not lose tests to an aborting group** — a raised error
       inside `test-group` should fail that test and continue, not skip the rest of the
       group silently. Needs `test-equal` to guard around the expression.
@@ -237,7 +242,9 @@ Issues that span stages rather than belonging to one phase.
       deeply nested enough (it did when the guard logic was inlined into `do-call!`,
       breaking `make pbc-pipeline` with an opaque "read error"). Worked around by
       keeping `run-guard!` a separate top-level procedure, but the ceiling is still
-      there for any future growth. Root cause is in kaappi's reader.
+      there for any future growth. Root cause is in kaappi's reader; not filed yet,
+      since the exact trigger (size vs. nesting depth) has not been isolated —
+      `paal-expander.pbc` is larger and deeper and reads back fine.
 
 ---
 

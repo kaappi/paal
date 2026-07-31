@@ -299,11 +299,14 @@ only enter closures its own copy created.
 
 **Known limits.** Nesting is bounded by the host: kaappi v0.22.0 mishandles more than
 63 dynamically nested `guard` forms — at depth 64 the innermost handler is skipped and
-an outer one catches instead. It reproduces in plain kaappi with no paal involved, and
-paal inherits it by delegating to HOST `guard`; paal's effective ceiling is a few
-levels lower still, since `paal-run-bc` and `run-guard!` consume host levels of their
-own. `raise-continuable` cannot resume, so it behaves as `raise`, and an unmatched
-clause re-raises from the handler's dynamic environment rather than the original one.
+an outer one catches instead. It reproduces in plain kaappi with no paal involved —
+kaappi/kaappi#1886, where the `MAX_HANDLERS = 64` overflow surfaces as a *catchable*
+error, so an enclosing `guard` swallows it. Paal inherits the ceiling by delegating to
+HOST `guard`, and its own is a few levels lower still, since `paal-run-bc` and
+`run-guard!` consume host levels. Recheck this paragraph once that issue is fixed —
+no test covers the ceiling, since the threshold is host behavior rather than paal's.
+`raise-continuable` cannot resume, so it behaves as `raise`, and an unmatched clause
+re-raises from the handler's dynamic environment rather than the original one.
 
 ---
 
