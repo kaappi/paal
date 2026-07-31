@@ -999,7 +999,41 @@
     (pkaappi-run-bc-string "(apply + 1 2 '(3 4))"))
   (test-equal "apply with closure"
     15
-    (pkaappi-run-bc-string "(apply (lambda (a b c) (+ a b c)) '(4 5 6))")))
+    (pkaappi-run-bc-string "(apply (lambda (a b c) (+ a b c)) '(4 5 6))"))
+  ;; apply is a VM marker that spreads the list into argument registers, so
+  ;; there is no arity ceiling. It used to be a hand-unrolled cond capped at 16.
+  (test-equal "apply with 17 arguments — past the old ceiling"
+    153
+    (pkaappi-run-bc-string
+      "(apply + (list 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17))"))
+  (test-equal "apply with 1000 arguments"
+    1000
+    (pkaappi-run-bc-string
+      "(apply + (let loop ((i 0) (acc '()))
+                  (if (= i 1000) acc (loop (+ i 1) (cons 1 acc)))))"))
+  (test-equal "apply with an empty list"
+    0
+    (pkaappi-run-bc-string "(apply + '())"))
+  (test-equal "apply to a variadic closure"
+    5
+    (pkaappi-run-bc-string "(apply (lambda args (length args)) '(1 2 3 4 5))"))
+  (test-equal "apply to a closure with a rest parameter"
+    '(1 3)
+    (pkaappi-run-bc-string
+      "(apply (lambda (a . rest) (list a (length rest))) 1 '(2 3 4))"))
+  (test-equal "apply to a host procedure"
+    "abc"
+    (pkaappi-run-bc-string "(apply string-append '(\"a\" \"b\" \"c\"))"))
+  ;; do-call! re-dispatches rather than entering a nested loop, so apply in tail
+  ;; position stays a tail call. A nested loop would overflow the host stack.
+  (test-equal "apply in tail position keeps the call a tail call"
+    'done
+    (pkaappi-run-bc-string
+      "(define (loop n) (if (= n 0) 'done (apply loop (list (- n 1)))))
+       (loop 100000)"))
+  (test-equal "apply tree-walking pipeline"
+    6
+    (pkaappi-run-string "(apply + '(1 2 3))")))
 
 ;; ---------------------------------------------------------------
 ;; Phase 1: guard / raise / error

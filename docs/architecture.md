@@ -264,8 +264,9 @@ establishing. Two bindings need this:
   Returning an unforced thunk would defer the body's real work until after the guard's
   extent had exited, letting any exception escape uncaught.
 
-The same limitation is why `map`, `for-each`, `apply` and friends are paal-compiled in
+The same limitation is why `map`, `for-each` and friends are paal-compiled in
 `pkaappi-make-globals` for the bytecode path rather than inherited from the host.
+`apply` cannot even be written that way — see below.
 
 ---
 
@@ -293,7 +294,7 @@ errors from primitives such as `car`, as R7RS requires. An escape that reaches t
 of `paal-run-bc` is unwrapped and re-raised, so callers see the value the program
 actually raised rather than VM plumbing.
 
-**Why interned symbols.** Both markers — the guard marker and the raise wrapper's tag —
+**Why interned symbols.** The markers — guard, apply, and the raise wrapper's tag —
 are interned symbols rather than record types or freshly allocated `(list 'tag)` pairs,
 so that both copies of the library agree on them. See "Values that cross the HOST
 boundary" below. The *logic* stays in `do-call!` for a related reason: whichever copy
@@ -310,6 +311,26 @@ HOST `guard`, and its own is a few levels lower still, since `paal-run-bc` and
 no test covers the ceiling, since the threshold is host behavior rather than paal's.
 `raise-continuable` cannot resume, so it behaves as `raise`, and an unmatched clause
 re-raises from the handler's dynamic environment rather than the original one.
+
+---
+
+## apply
+
+`apply` is a marker too, for a different reason: the `call` instruction carries a fixed
+`nargs` operand, so no procedure written in paal can issue a call whose argument count
+is only known at run time. Written in paal it has to dispatch on `(length args)` through
+a hand-unrolled `cond`, one arm per arity — which is where its old 16-argument ceiling
+came from.
+
+`do-call!` instead rewrites the call in place: the callee slot gets the real procedure,
+the spread arguments follow it, and `do-call!` runs again on the real callee. Writing
+above `abs-base + nargs` is safe for the same reason `paal-call-value`'s window is —
+the emitter allocates a call's base as the next free register — and `abs-base + 1` is
+exactly where the callee's frame expects its arguments.
+
+Re-dispatching rather than calling `paal-call-value` is deliberate: it keeps `tail?`
+meaningful, so `(apply f args)` in tail position stays a tail call. Entering a nested
+dispatch loop would have grown the host stack once per iteration.
 
 ---
 
@@ -374,6 +395,7 @@ copies compile the same explicit `vector` / `vector-ref` code.
 | closure | `%paal-closure` | `frame.sld` |
 | bytecode function | `%paal-bytecode-function` | `bytecode.sld` |
 | guard marker | `%paal-vm-guard-run` | `vm-bc.sld` |
+| apply marker | `%paal-vm-apply` | `vm-bc.sld` |
 | raise wrapper | `%paal-vm-escape` | `vm-bc.sld` |
 
 `<frame>` stays a `define-record-type`: frames are created and consumed inside a single

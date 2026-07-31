@@ -8,7 +8,7 @@
 (define-library (kaappi paal vm-bc)
   (import (scheme base) (kaappi paal bytecode) (kaappi paal frame))
   (export paal-run-bc paal-make-globals
-          %paal-guard-run-marker paal-vm-raise-escape!)
+          %paal-guard-run-marker %paal-apply-marker paal-vm-raise-escape!)
   (begin
 
     (define REGS-SIZE 16384)
@@ -36,6 +36,14 @@
     ;; HOST library — and vice versa.  Symbols intern to one object in both.
 
     (define %paal-guard-run-marker '%paal-vm-guard-run)
+
+    ;; apply is a marker for the same reason: the `call` instruction carries a
+    ;; fixed nargs operand, so no procedure written in paal can call another
+    ;; with an argument count known only at run time.  Written in paal it has to
+    ;; dispatch on (length args) through a hand-unrolled cond, which is where
+    ;; the old 16-argument ceiling came from.  do-call! can just spread the list
+    ;; into argument registers and issue the call.
+    (define %paal-apply-marker '%paal-vm-apply)
 
     ;; paal `raise` is the HOST procedure paal-vm-raise-escape!, which raises a
     ;; HOST exception carrying the paal value in a tagged wrapper.  The wrapper
@@ -323,6 +331,13 @@
             (vector-set! regs abs-base result)
             (run! regs globals frames))))
 
+    ;; (a1 ... an lst) -> (a1 ... an . lst).  apply's final argument holds the
+    ;; trailing arguments; everything before it is passed through as given.
+    (define (flatten-apply-args as)
+      (if (null? (cdr as))
+          (car as)
+          (cons (car as) (flatten-apply-args (cdr as)))))
+
     ;; Collect the nargs arguments sitting above the callee slot.
     (define (call-args regs abs-base nargs)
       (let loop ((i nargs) (acc '()))
@@ -366,6 +381,37 @@
                    (let ((reused (make-frame callee caller-base caller-dst)))
                      (run! regs globals (cons reused (cdr frames)))))
                  (run! regs globals (cons new-frame frames))))))
+
+        ; apply — (apply f a1 ... an lst).  Rewrites the call in place: the
+        ; callee slot gets f, the spread arguments follow it, and do-call! runs
+        ; again on the real callee.  Re-dispatching rather than using
+        ; paal-call-value keeps `tail?` meaningful, so (apply f args) in tail
+        ; position stays a tail call instead of growing the host stack.
+        ;
+        ; Writing above abs-base+nargs is safe: the emitter allocates a call's
+        ; base as the next free register, so everything at or above it is unused
+        ; by every live frame — and abs-base+1 is exactly where the callee's
+        ; frame expects its arguments.
+        ((eq? callee %paal-apply-marker)
+         (if (< nargs 2)
+             (error "paal-bc: apply needs a procedure and an argument list")
+             (let* ((given  (call-args regs abs-base nargs))
+                    (f      (car given))
+                    (spread (flatten-apply-args (cdr given))))
+               (if (not (list? spread))
+                   (error "paal-bc: apply: last argument must be a proper list")
+                   (let ((n (length spread)))
+                     (if (>= (+ abs-base 1 n) REGS-SIZE)
+                         (error "paal-bc: apply: argument list too long" n)
+                         (begin
+                           (vector-set! regs abs-base f)
+                           (let loop ((i 1) (as spread))
+                             (if (null? as)
+                                 (do-call! regs globals frames frame
+                                           f abs-base n base-off tail?)
+                                 (begin
+                                   (vector-set! regs (+ abs-base i) (car as))
+                                   (loop (+ i 1) (cdr as))))))))))))
 
         ; guard — (%paal-guard-run body-thunk handler); see run-guard! above.
         ((eq? callee %paal-guard-run-marker)

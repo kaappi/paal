@@ -3,7 +3,7 @@
 Goal: make `pkaappi` a correct R7RS-small Scheme implementation that runs the
 same programs as `kaappi`, with the same CLI conventions.
 
-Current: Stage 6 complete (self-hosting). **314 tests pass** (was 194 before Phase 1–2).
+Current: Stage 6 complete (self-hosting). **324 tests pass** (was 194 before Phase 1–2).
 
 ---
 
@@ -40,7 +40,7 @@ Missing primitives added to `paal-initial-env` (`lib/kaappi/paal/vm.sld`):
 - [x] `make-parameter` (paal-native cell-based objects — see `parameterize` below)
 - [x] `features`
 - [x] `write-shared`, `write-simple`
-- [x] `apply` (paal-compiled, up to 8 args — see limitation below)
+- [x] `apply` (VM marker in `do-call!`; no arity ceiling, keeps tail position)
 - [x] `values` / `call-with-values` (paal-compiled MVR-tagged, up to 4 return values)
 - [x] `force`, `make-promise`, `promise?` (custom vector-based implementation)
 - [x] `guard` / `raise` / `error` — both pipelines. The bytecode VM handles
@@ -74,7 +74,6 @@ Missing primitives added to `paal-initial-env` (`lib/kaappi/paal/vm.sld`):
       macros that introduce `let` bindings can capture user variables
 - [ ] `define-syntax` nested ellipsis — only single-level `...` is supported
 - [ ] `let-syntax` / `letrec-syntax` true mutual recursion — sequential binding only
-- [ ] `apply` arity limit — crashes with more than 8 arguments
 - [ ] `call-with-values` value count limit — crashes with more than 4 return values
 - [ ] `with-exception-handler` restart behavior (raise-continuable path) —
       `raise-continuable` currently behaves exactly like `raise`

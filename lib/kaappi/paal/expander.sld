@@ -247,7 +247,9 @@
                           (loop (cdr cls))))))))))
 
     ;; ---------------------------------------------------------------
-    ;; append-map — avoids (apply append (map f lst)) which hits apply arity limits
+    ;; append-map — kept from when apply was capped at 16 arguments and
+    ;; (apply append (map f lst)) overflowed it while self-compiling.  apply is
+    ;; a VM marker now with no ceiling, so this is only a clarity choice.
     ;; when compiled to paal bytecode.
     ;; ---------------------------------------------------------------
 

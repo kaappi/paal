@@ -109,6 +109,10 @@
                       (error                      . ,(lambda (msg . irritants)
                                                        (paal-vm-raise-escape!
                                                          (make-host-error msg irritants))))
+                      ; Marker handled by do-call!, which spreads the argument
+                      ; list into real argument registers.  No arity ceiling, and
+                      ; a tail-position (apply f args) stays a tail call.
+                      (apply                      . ,%paal-apply-marker)
                       ; Target of the expander's `guard` desugaring.  Only a marker:
                       ; do-call! implements the operation, so whichever copy of the
                       ; VM is running supplies the catch and the closure callbacks
@@ -152,72 +156,15 @@
         ; Install paal-native HOFs and multiple-values support,
         ; replacing HOST stubs that cannot call paal closures.
         ;
-        ; apply: limited to 16 args (uses list-ref for clarity); extend if needed.
+        ; apply is not here — it is a VM marker (see vm-bc.sld), since no paal
+        ; procedure can issue a call whose argument count is only known at run
+        ; time.  It used to be a hand-unrolled cond, capped at 16 arguments.
         ; values/call-with-values: MVR-tagged encoding, up to 4 return values.
         ; map, for-each, filter: 1-or-2-list version covering paal's own usage.
         ; vector-map, vector-for-each, string-map, string-for-each: 1-vector/string.
         (paal-run-bc
           (pkaappi-compile
-            "(define (apply f . args)
-               (define (spread a)
-                 (if (null? (cdr a)) (car a) (cons (car a) (spread (cdr a)))))
-               (let ((flat (if (null? args) '() (spread args))))
-                 (let ((n (length flat)))
-                   (cond
-                     ((= n 0) (f))
-                     ((= n 1) (f (list-ref flat 0)))
-                     ((= n 2) (f (list-ref flat 0) (list-ref flat 1)))
-                     ((= n 3) (f (list-ref flat 0) (list-ref flat 1) (list-ref flat 2)))
-                     ((= n 4) (f (list-ref flat 0) (list-ref flat 1) (list-ref flat 2)
-                                  (list-ref flat 3)))
-                     ((= n 5) (f (list-ref flat 0) (list-ref flat 1) (list-ref flat 2)
-                                  (list-ref flat 3) (list-ref flat 4)))
-                     ((= n 6) (f (list-ref flat 0) (list-ref flat 1) (list-ref flat 2)
-                                  (list-ref flat 3) (list-ref flat 4) (list-ref flat 5)))
-                     ((= n 7) (f (list-ref flat 0) (list-ref flat 1) (list-ref flat 2)
-                                  (list-ref flat 3) (list-ref flat 4) (list-ref flat 5)
-                                  (list-ref flat 6)))
-                     ((= n 8) (f (list-ref flat 0) (list-ref flat 1) (list-ref flat 2)
-                                  (list-ref flat 3) (list-ref flat 4) (list-ref flat 5)
-                                  (list-ref flat 6) (list-ref flat 7)))
-                     ((= n 9) (f (list-ref flat 0) (list-ref flat 1) (list-ref flat 2)
-                                  (list-ref flat 3) (list-ref flat 4) (list-ref flat 5)
-                                  (list-ref flat 6) (list-ref flat 7) (list-ref flat 8)))
-                     ((= n 10) (f (list-ref flat 0) (list-ref flat 1) (list-ref flat 2)
-                                   (list-ref flat 3) (list-ref flat 4) (list-ref flat 5)
-                                   (list-ref flat 6) (list-ref flat 7) (list-ref flat 8)
-                                   (list-ref flat 9)))
-                     ((= n 11) (f (list-ref flat 0) (list-ref flat 1) (list-ref flat 2)
-                                   (list-ref flat 3) (list-ref flat 4) (list-ref flat 5)
-                                   (list-ref flat 6) (list-ref flat 7) (list-ref flat 8)
-                                   (list-ref flat 9) (list-ref flat 10)))
-                     ((= n 12) (f (list-ref flat 0) (list-ref flat 1) (list-ref flat 2)
-                                   (list-ref flat 3) (list-ref flat 4) (list-ref flat 5)
-                                   (list-ref flat 6) (list-ref flat 7) (list-ref flat 8)
-                                   (list-ref flat 9) (list-ref flat 10) (list-ref flat 11)))
-                     ((= n 13) (f (list-ref flat 0) (list-ref flat 1) (list-ref flat 2)
-                                   (list-ref flat 3) (list-ref flat 4) (list-ref flat 5)
-                                   (list-ref flat 6) (list-ref flat 7) (list-ref flat 8)
-                                   (list-ref flat 9) (list-ref flat 10) (list-ref flat 11)
-                                   (list-ref flat 12)))
-                     ((= n 14) (f (list-ref flat 0) (list-ref flat 1) (list-ref flat 2)
-                                   (list-ref flat 3) (list-ref flat 4) (list-ref flat 5)
-                                   (list-ref flat 6) (list-ref flat 7) (list-ref flat 8)
-                                   (list-ref flat 9) (list-ref flat 10) (list-ref flat 11)
-                                   (list-ref flat 12) (list-ref flat 13)))
-                     ((= n 15) (f (list-ref flat 0) (list-ref flat 1) (list-ref flat 2)
-                                   (list-ref flat 3) (list-ref flat 4) (list-ref flat 5)
-                                   (list-ref flat 6) (list-ref flat 7) (list-ref flat 8)
-                                   (list-ref flat 9) (list-ref flat 10) (list-ref flat 11)
-                                   (list-ref flat 12) (list-ref flat 13) (list-ref flat 14)))
-                     ((= n 16) (f (list-ref flat 0) (list-ref flat 1) (list-ref flat 2)
-                                   (list-ref flat 3) (list-ref flat 4) (list-ref flat 5)
-                                   (list-ref flat 6) (list-ref flat 7) (list-ref flat 8)
-                                   (list-ref flat 9) (list-ref flat 10) (list-ref flat 11)
-                                   (list-ref flat 12) (list-ref flat 13) (list-ref flat 14)
-                                   (list-ref flat 15)))
-                     (else (error \"apply: too many arguments (max 16)\" n))))))
-             (define %paal-mvr-tag (list 'paal-mvr))
+            "(define %paal-mvr-tag (list 'paal-mvr))
              (define (values . vals) (cons %paal-mvr-tag vals))
              (define (call-with-values producer consumer)
                (let ((r (producer)))
