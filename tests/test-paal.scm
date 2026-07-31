@@ -1101,12 +1101,72 @@
        (define x 1) (define tmp 2)
        (swap! x tmp)
        (list x tmp)"))
-  ;; Documents the half that is NOT implemented: a free identifier in a template
-  ;; resolves at the use site, so a local binding there shadows the one visible
-  ;; where the macro was defined. R7RS would give 30.
-  (test-equal "free identifiers are not referentially transparent (known gap)"
-    -3
+  ;; Referential transparency: a free identifier in a template resolves where
+  ;; the macro was defined, so a local of the same name at the use site cannot
+  ;; capture it. This returned -3 before free identifiers were marked.
+  (test-equal "a use-site local does not capture a template's free identifier"
+    30
     (pkaappi-run-bc-string
+      "(define (helper x) (* x 10))
+       (define-syntax use-helper (syntax-rules () ((_ v) (helper v))))
+       (let ((helper (lambda (x) (- x))))
+         (use-helper 3))"))
+  (test-equal "same for a lambda parameter at the use site"
+    30
+    (pkaappi-run-bc-string
+      "(define (helper x) (* x 10))
+       (define-syntax use-helper (syntax-rules () ((_ v) (helper v))))
+       ((lambda (helper) (use-helper 3)) 'shadow)"))
+  (test-equal "a template's free identifier still sees a later redefinition"
+    100
+    (pkaappi-run-bc-string
+      "(define (helper x) (* x 10))
+       (define-syntax use-helper (syntax-rules () ((_ v) (helper v))))
+       (define (helper x) (* x 100))
+       (use-helper 1)"))
+  (test-equal "arguments are still evaluated at the use site"
+    7
+    (pkaappi-run-bc-string
+      "(define (idm x) x)
+       (define-syntax pass (syntax-rules () ((_ v) (idm v))))
+       (let ((local 7)) (pass local))"))
+  ;; set! through a template targets the top-level binding too, not the local.
+  (test-equal "set! on a template's free identifier hits the top-level binding"
+    2
+    (pkaappi-run-bc-string
+      "(define counter 0)
+       (define-syntax bump (syntax-rules () ((_) (set! counter (+ counter 1)))))
+       (let ((counter 999)) (bump) (bump))
+       counter"))
+  (test-equal "a macro may reference a macro defined after it"
+    12
+    (pkaappi-run-bc-string
+      "(define-syntax a (syntax-rules () ((_ v) (b v))))
+       (define-syntax b (syntax-rules () ((_ v) (* v 3))))
+       (a 4)"))
+  (test-equal "a recursive macro's global reference survives shadowing"
+    3
+    (pkaappi-run-bc-string
+      "(define (add1 n) (+ n 1))
+       (define-syntax cnt (syntax-rules () ((_ ()) 0) ((_ (x . r)) (add1 (cnt r)))))
+       (let ((add1 'shadow)) (cnt (a b c)))"))
+  (test-equal "symbols inside a quoted template datum are untouched"
+    '(helper foo)
+    (pkaappi-run-bc-string
+      "(define-syntax q (syntax-rules () ((_) '(helper foo)))) (q)"))
+  (test-equal "a macro defining a macro still works"
+    '(1 2 3)
+    (pkaappi-run-bc-string
+      "(define-syntax def-listor
+         (syntax-rules ()
+           ((_ name)
+            (define-syntax name
+              (syntax-rules () ((_ x (... ...)) (list x (... ...))))))))
+       (def-listor my-l2)
+       (my-l2 1 2 3)"))
+  (test-equal "tree-walking pipeline"
+    30
+    (pkaappi-run-string
       "(define (helper x) (* x 10))
        (define-syntax use-helper (syntax-rules () ((_ v) (helper v))))
        (let ((helper (lambda (x) (- x))))

@@ -16,7 +16,7 @@
 
 (define-library (kaappi paal expander)
   (import (scheme base) (scheme file) (scheme read))
-  (export paal-expand paal-expand-all paal-macros-reset!)
+  (export paal-expand paal-expand-all paal-macros-reset! gref-name)
   (begin
 
     ;; ---------------------------------------------------------------
@@ -381,6 +381,85 @@
              (cons s (fresh-name (string-append "%h-" (symbol->string s) "-"))))
            (template-bound-ids tmpl pattern-vars literals)))
 
+    ;; ---------------------------------------------------------------
+    ;; Referential transparency: free identifiers resolve at the macro's
+    ;; definition site, not the use site
+    ;; ---------------------------------------------------------------
+    ;;
+    ;;   (define (helper x) (* x 10))
+    ;;   (define-syntax use-helper (syntax-rules () ((_ v) (helper v))))
+    ;;   (let ((helper (lambda (x) (- x)))) (use-helper 3))
+    ;;
+    ;; R7RS says 30 — the template's `helper` is the one visible where the macro
+    ;; was defined.  Without this it picked up the use site's local and gave -3.
+    ;;
+    ;; A free template identifier is rewritten to %gref%<name>, which the emitter
+    ;; and the tree-walking VM both resolve straight to the top level, skipping
+    ;; any binding the use site happens to have introduced.  That is exact when
+    ;; the macro was defined at top level, which is where paal's macros live —
+    ;; the macro table is global, so a macro has no other definition environment
+    ;; to refer to.
+    ;;
+    ;; Keywords must not be rewritten: `let` in a template is syntax, not a
+    ;; variable.  Neither must macro names, or the use would stop expanding —
+    ;; paal-expand additionally unmarks a marked head that turns out to name a
+    ;; macro, which covers one defined after this one.
+
+    (define %expander-keywords
+      '(quote lambda define set! if begin
+        let let* letrec letrec* and or when unless cond case do
+        quasiquote unquote unquote-splicing else =>
+        define-record-type define-library import export
+        guard parameterize case-lambda
+        define-values let-values let*-values
+        delay delay-force include include-ci cond-expand syntax-error
+        define-syntax let-syntax letrec-syntax syntax-rules
+        ... _))
+
+    (define %gref-prefix "%gref%")
+
+    (define (gref-symbol name)
+      (string->symbol (string-append %gref-prefix (symbol->string name))))
+
+    ;; Free identifiers of a template: symbols that are not pattern variables,
+    ;; not bound by the template, not literals, not keywords, and not currently
+    ;; macros.
+    (define (template-free-ids tmpl pattern-vars bound literals)
+      (let ((acc '()))
+        (define (note! s)
+          (when (and (symbol? s)
+                     (not (memq s pattern-vars))
+                     (not (memq s bound))
+                     (not (memq s literals))
+                     (not (memq s %expander-keywords))
+                     ;; Already marked — a template that came from an enclosing
+                     ;; macro's expansion.  Marking twice yields %gref%%gref%x,
+                     ;; which strips to a name nothing is bound to.
+                     (not (gref-name s))
+                     (not (paal-macro-get s))
+                     (not (memq s acc)))
+            (set! acc (cons s acc))))
+        (define (walk t)
+          (cond
+            ((symbol? t) (note! t))
+            ((pair? t)
+             (cond
+               ;; (quote datum) contributes no references
+               ((eq? (car t) 'quote) #f)
+               ;; A nested syntax-rules belongs to the macro being *defined*
+               ;; here, not to this one: its pattern variables and `_` are not
+               ;; free identifiers of this template, and its own free
+               ;; identifiers should resolve where that inner macro is defined.
+               ((eq? (car t) 'syntax-rules) #f)
+               (else (walk (car t)) (walk (cdr t)))))
+            (else #f)))
+        (walk tmpl)
+        acc))
+
+    (define (referential-renames tmpl pattern-vars bound literals)
+      (map (lambda (s) (cons s (gref-symbol s)))
+           (template-free-ids tmpl pattern-vars bound literals)))
+
     ;; Build a transformer from a syntax-rules spec.
     (define (make-transformer spec)
       (if (not (and (pair? spec) (eq? (car spec) 'syntax-rules)))
@@ -401,11 +480,18 @@
                           ;; macro never share an introduced name.  They go into
                           ;; the same env instantiate-template already consults,
                           ;; after the pattern bindings so those take precedence.
-                          (let ((renames (hygiene-renames
-                                           template
-                                           (map car env)
-                                           literals)))
-                            (instantiate-template template (append env renames)))
+                          (let* ((pvars   (map car env))
+                                 (bound   (template-bound-ids template pvars literals))
+                                 (renames (map (lambda (s)
+                                                 (cons s (fresh-name
+                                                           (string-append
+                                                             "%h-" (symbol->string s) "-"))))
+                                               bound))
+                                 (frees   (referential-renames
+                                            template pvars bound literals)))
+                            (instantiate-template
+                              template
+                              (append env renames frees)))
                           (loop (cdr cls))))))))))
 
     ;; ---------------------------------------------------------------
@@ -578,9 +664,26 @@
             ;; --- User-defined macro or procedure call ---
             (else
              (let ((macro (paal-macro-get (car form))))
-               (if (and (symbol? (car form)) macro)
-                   (paal-expand (macro form))
-                   (map paal-expand form)))))))
+               (cond
+                 ((and (symbol? (car form)) macro)
+                  (paal-expand (macro form)))
+                 ;; A template's free identifier was marked %gref% before we knew
+                 ;; whether it named a macro — it may name one defined after the
+                 ;; macro that referenced it.  Unmark and expand as a macro use.
+                 ((and (symbol? (car form))
+                       (gref-name (car form))
+                       (paal-macro-get (gref-name (car form))))
+                  (paal-expand (cons (gref-name (car form)) (cdr form))))
+                 (else (map paal-expand form))))))))
+
+    ;; Strip the %gref% marker, or #f when the symbol does not carry one.
+    ;; Shared with the emitter and the tree-walking VM, which resolve a marked
+    ;; identifier straight to the top level.
+    (define (gref-name sym)
+      (let ((s (symbol->string sym)))
+        (and (> (string-length s) 6)
+             (string=? (substring s 0 6) "%gref%")
+             (string->symbol (substring s 6 (string-length s))))))
 
     (define (paal-expand-all forms)
       (let splice ((fs forms))

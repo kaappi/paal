@@ -3,7 +3,7 @@
 Goal: make `pkaappi` a correct R7RS-small Scheme implementation that runs the
 same programs as `kaappi`, with the same CLI conventions.
 
-Current: Stage 6 complete (self-hosting). **409 tests pass** (was 194 before Phase 1–2).
+Current: Stage 6 complete (self-hosting). **418 tests pass** (was 194 before Phase 1–2).
 
 ---
 
@@ -12,9 +12,15 @@ Current: Stage 6 complete (self-hosting). **409 tests pass** (was 194 before Pha
 Special forms and expander gaps.
 
 - [x] `define-syntax` + `syntax-rules` — nested ellipsis to arbitrary depth,
-      `x ... ...` splicing, and the `(... <template>)` escape. Template-introduced
-      bindings are renamed per expansion so they cannot capture. Referential
-      transparency is the one remaining gap — see below.
+      `x ... ...` splicing, and the `(... <template>)` escape. Hygienic in both
+      directions: template-introduced bindings are renamed per expansion so they
+      cannot capture, and a template's *free* identifiers are marked `%gref%` so
+      they resolve at the top level rather than being captured by a same-named
+      binding at the use site. Exact while macros are defined at top level, which
+      is where paal's are — the macro table is global, so a macro has no other
+      definition environment to refer to. A macro defined inside a local scope
+      and referring to a local of that scope would still resolve to the top
+      level; nothing in paal creates one today.
 - [x] `let-syntax` / `letrec-syntax` — correct R7RS 4.3.1 regions. `letrec-syntax`
       bindings may refer to each other and to themselves (mutual recursion already
       worked — the old entry claiming otherwise was wrong); `let-syntax` bindings
@@ -96,26 +102,6 @@ Missing primitives added to `paal-initial-env` (`lib/kaappi/paal/vm.sld`):
       `kaappi` on `PATH` here is v0.22.0. Paal running against an older kaappi
       still has the old ceiling, so this is a note about *which* kaappi you run
       paal with, not about paal.
-- [ ] `define-syntax` **referential transparency** — the capture half is done: a
-      template's own binding identifiers (`lambda` formals, `let`/`let*`/`letrec`/
-      `let-values` bindings, named-let loop names, `do` variables, `guard`
-      variables) are renamed per expansion, so `(let ((tmp a)) …)` in a template
-      no longer shadows a user's `tmp`. Pattern variables keep their names, since
-      those come from the use site.
-
-      What remains is the other half: a *free* identifier in a template resolves
-      at the use site rather than where the macro was defined.
-
-      ```scheme
-      (define (helper x) (* x 10))
-      (define-syntax use-helper (syntax-rules () ((_ v) (helper v))))
-      (let ((helper (lambda (x) (- x)))) (use-helper 3))
-      ```
-      R7RS says `30`; paal says `-3`. Fixing it means every identifier carrying
-      its definition environment through the expander — syntactic closures or
-      explicit renaming — which this purely structural S-expr → S-expr design has
-      nowhere to put. A test pins the current answer so the gap is visible rather
-      than forgotten.
 - [ ] `guard` re-raise **dynamic environment** — partially addressed. An unmatched
       clause now re-raises with `raise-continuable` rather than `raise`, and a
       `guard` is now correctly the innermost handler while its body runs, so an

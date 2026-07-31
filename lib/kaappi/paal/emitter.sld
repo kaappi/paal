@@ -13,7 +13,8 @@
 ;;;   global           — top-level define or initial-env binding
 
 (define-library (kaappi paal emitter)
-  (import (scheme base) (kaappi paal ir) (kaappi paal bytecode))
+  (import (scheme base) (kaappi paal ir) (kaappi paal bytecode)
+          (kaappi paal expander))
   (export paal-emit-program)
   (begin
 
@@ -223,6 +224,15 @@
         (else           (e-emit! e `(load-const ,dst ,val)))))
 
     (define (emit-ref! e name dst)
+      ;; A %gref% identifier came from a macro template's free position, so it
+      ;; must resolve where the macro was defined — the top level — rather than
+      ;; through whatever locals the use site introduced.
+      (let ((g (gref-name name)))
+        (if g
+            (e-emit! e `(get-global ,dst ,g))
+            (emit-local-ref! e name dst))))
+
+    (define (emit-local-ref! e name dst)
       (let ((res (resolve e name)))
         (case (car res)
           ((local)
@@ -288,7 +298,12 @@
         ((ir:set!? node)
          (let ((val-reg (e-alloc-reg! e)))
            (emit-node! e (ir:set!-val node) val-reg #f)
-           (let ((res (resolve e (ir:set!-name node))))
+           ;; Like emit-ref!, a %gref% target assigns the top-level binding the
+           ;; macro saw, not a same-named local at the use site.
+           (let ((res (let ((g (gref-name (ir:set!-name node))))
+                        (if g
+                            (cons 'global g)
+                            (resolve e (ir:set!-name node))))))
              (case (car res)
                ((local)
                 (e-emit! e `(move ,(cdr res) ,val-reg)))

@@ -17,27 +17,39 @@
 ;;; replaced by a bytecode emitter + register-based VM.
 
 (define-library (kaappi paal vm)
-  (import (scheme base) (scheme read) (kaappi paal ir))
+  (import (scheme base) (scheme read) (kaappi paal ir) (kaappi paal expander))
   (export paal-eval paal-eval-program paal-initial-env)
   (begin
 
     ;; --- Mutable boxed environments ---
     ;; Each frame: (name . #(val))  — the vector is mutable in place.
 
+    ;; The top-level environment as paal-eval-program has threaded it so far.
+    ;; A %gref% identifier — a macro template's free reference — resolves here
+    ;; rather than through the caller's locals, so a binding at the use site
+    ;; cannot shadow what the macro saw where it was defined.
+    (define %paal-toplevel-env '())
+
     (define (env-lookup env name)
       (let ((pair (assq name env)))
-        (if pair
-            (vector-ref (cdr pair) 0)
-            (error "paal: unbound variable" name))))
+        (cond
+          (pair (vector-ref (cdr pair) 0))
+          ;; Only reached on a miss, so ordinary lookups pay nothing: a marked
+          ;; name is synthetic and never appears in a local frame.
+          ((gref-name name)
+           => (lambda (g) (env-lookup %paal-toplevel-env g)))
+          (else (error "paal: unbound variable" name)))))
 
     (define (env-extend env name val)
       (cons (cons name (vector val)) env))
 
     (define (env-set! env name val)
       (let ((pair (assq name env)))
-        (if pair
-            (vector-set! (cdr pair) 0 val)
-            (error "paal: set! on unbound variable" name))))
+        (cond
+          (pair (vector-set! (cdr pair) 0 val))
+          ((gref-name name)
+           => (lambda (g) (env-set! %paal-toplevel-env g val)))
+          (else (error "paal: set! on unbound variable" name)))))
 
     ;; Bind a parameter list against actual arguments.
     ;; Handles proper lists, pure variadic (symbol params), and
@@ -469,7 +481,8 @@
     ;; into the environment with forward-visible mutable boxes so that
     ;; recursive and mutually-recursive definitions work.
     (define (paal-eval-program nodes)
-      (let loop ((ns nodes) (env (paal-initial-env)) (last #f))
+      (set! %paal-toplevel-env (paal-initial-env))
+      (let loop ((ns nodes) (env %paal-toplevel-env) (last #f))
         (if (null? ns)
             last
             (let ((node (car ns)))
@@ -477,7 +490,11 @@
                   (let* ((name (ir:define-name node))
                          (box  (vector #f))
                          (env* (cons (cons name box) env))
-                         (val  (trampoline (paal-eval (ir:define-val node) env* #f))))
+                         (val  (begin
+                                 ;; Publish before evaluating, so a %gref% inside
+                                 ;; this definition sees it and recursion works.
+                                 (set! %paal-toplevel-env env*)
+                                 (trampoline (paal-eval (ir:define-val node) env* #f)))))
                     (vector-set! box 0 val)
                     (loop (cdr ns) env* val))
                   (loop (cdr ns) env

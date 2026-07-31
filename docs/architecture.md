@@ -156,12 +156,30 @@ substitution costs nothing extra.
 Without it, a template introducing `(let ((tmp a)) …)` shadows a user's `tmp`:
 `swap!` written the textbook way silently did nothing when called as `(swap! x tmp)`.
 
-This is the capture half of hygiene. Templates are *not* referentially transparent —
-a free identifier resolves at the use site, so a macro whose template calls `helper`
-picks up a local `helper` at the call site rather than the one visible where the macro
-was defined. That needs each identifier to carry its definition environment through
-the expander (syntactic closures, or explicit renaming), which a structural
-S-expression → S-expression pass has nowhere to record.
+That is the capture half. The other half — referential transparency — is handled by
+marking a template's *free* identifiers `%gref%<name>`, which the emitter and the
+tree-walking VM both resolve straight to the top level, past any binding the use site
+introduced:
+
+```scheme
+(define (helper x) (* x 10))
+(define-syntax use-helper (syntax-rules () ((_ v) (helper v))))
+(let ((helper (lambda (x) (- x)))) (use-helper 3))   ; 30, not -3
+```
+
+The marking excludes pattern variables, template-bound identifiers, syntactic keywords
+(a template's `let` is syntax, not a variable), names that already carry the marker
+(double-marking yields `%gref%%gref%x`, which strips to nothing bound), and names that
+are currently macros — plus `paal-expand` unmarks a marked head that turns out to name
+a macro, covering one defined *after* the macro that referenced it. A nested
+`syntax-rules` is skipped entirely: its pattern variables and `_` are not free
+identifiers of the enclosing template, and its own free identifiers belong where that
+inner macro is defined.
+
+Resolving to the top level is exact while macros are defined at top level, which is
+where paal's are — the macro table is global, so a macro has no other definition
+environment to point at. A macro defined inside a local scope and referring to a local
+of that scope would resolve to the top level instead; nothing in paal creates one.
 
 **Local macro scope:** `letrec-syntax` installs all its bindings before expanding
 anything, so its transformers may refer to each other and to themselves. `let-syntax`
