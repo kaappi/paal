@@ -170,9 +170,12 @@ before any of the bindings were installed — R7RS 4.3.1 gives its keywords the 
 their region, not the bindings, so a template naming a sibling keyword must resolve to
 the outer binding. That wrapper is the only difference between the two forms here.
 
-The macro table itself is a module-level global that is never reset, so macros persist
-across independent `pkaappi-run-*` calls and can shadow a later program's procedure of
-the same name. See `docs/TODO.md`.
+The macro table is module-level state, so its lifetime has to be managed explicitly:
+`paal-macros-reset!` runs wherever a fresh globals table is created, giving macros the
+same lifetime as the definitions they sit alongside. Entry points that add to an
+existing table — `pkaappi-load-file`, `pkaappi-run-string-in` — deliberately do not
+reset, which is what keeps a loaded file's macros visible and lets the REPL accumulate
+them across inputs.
 
 **Ellipsis:** `syntax-rules` supports nesting to arbitrary depth — a pattern variable
 bound under two ellipses instantiates under two in the template. Each ellipsis past the

@@ -16,7 +16,7 @@
 
 (define-library (kaappi paal expander)
   (import (scheme base) (scheme file) (scheme read))
-  (export paal-expand paal-expand-all)
+  (export paal-expand paal-expand-all paal-macros-reset!)
   (begin
 
     ;; ---------------------------------------------------------------
@@ -45,6 +45,16 @@
     (define (paal-macro-get name)
       (let ((entry (assq name %paal-macros)))
         (and entry (cdr entry))))
+
+    ;; Drop every macro definition.  %paal-macros is module state, so without
+    ;; this a define-syntax in one program stays installed for the next and
+    ;; silently shadows a procedure of the same name there.  Callers reset it
+    ;; when they create a fresh globals table, giving macros the same lifetime
+    ;; as the definitions they sit alongside — `load`-style entry points that
+    ;; add to an existing table deliberately do not reset, so macros accumulate
+    ;; across loaded files and across REPL inputs.
+    (define (paal-macros-reset!)
+      (set! %paal-macros '()))
 
     ;; ---------------------------------------------------------------
     ;; Feature list for cond-expand

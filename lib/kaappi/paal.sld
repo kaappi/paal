@@ -18,7 +18,7 @@
     ;; Reader
     paal-read paal-read-string paal-read-all paal-read-file
     ;; Expander
-    paal-expand paal-expand-all
+    paal-expand paal-expand-all paal-macros-reset!
     ;; Compiler (analyzer)
     paal-analyze paal-analyze-all
     ;; Tree-walking VM
@@ -42,13 +42,21 @@
 
     ;; --- Tree-walking pipeline ---
 
+    ;; Each of these runs a self-contained program against a fresh environment,
+    ;; so it starts with a fresh macro table too — otherwise a define-syntax
+    ;; here would still be installed for the next caller.  The `-in`/`load`
+    ;; entry points below deliberately do not reset: those add to an existing
+    ;; table, and macros should accumulate alongside the definitions.
+
     (define (pkaappi-run-string src)
+      (paal-macros-reset!)
       (paal-eval-program
         (paal-analyze-all
           (paal-expand-all
             (paal-read-string src)))))
 
     (define (pkaappi-run-file path)
+      (paal-macros-reset!)
       (paal-eval-program
         (paal-analyze-all
           (paal-expand-all
@@ -62,13 +70,18 @@
     (define (pkaappi-compile src)
       (pkaappi-compile-forms (paal-read-string src)))
 
+    ;; Globals first, then compile — pkaappi-make-globals resets the macro table,
+    ;; and argument evaluation order is unspecified, so building it inline would
+    ;; leave whether the reset precedes the user's expansion up to the host.
     (define (pkaappi-run-bc-string src)
       ;; Use pkaappi-make-globals so paal-compiled HOF (values, apply, map, etc.)
       ;; are available — HOST versions cannot call paal closures.
-      (paal-run-bc (pkaappi-compile src) (pkaappi-make-globals)))
+      (let ((g (pkaappi-make-globals)))
+        (paal-run-bc (pkaappi-compile src) g)))
 
     (define (pkaappi-run-bc-file path)
-      (paal-run-bc (pkaappi-compile-forms (paal-read-file path)) (pkaappi-make-globals)))
+      (let ((g (pkaappi-make-globals)))
+        (paal-run-bc (pkaappi-compile-forms (paal-read-file path)) g)))
 
     ;; --- Multi-file sequential loading ---
 
@@ -79,6 +92,12 @@
     ;; Optional: pass a list of strings as the first argument to pre-set
     ;; (command-line) for user programs.  Example: (pkaappi-make-globals '("f.scm" "a"))
     (define (pkaappi-make-globals . opts)
+      ;; A fresh globals table starts a fresh program, so the macro table starts
+      ;; fresh with it — macros get the same lifetime as the definitions they
+      ;; sit alongside.  pkaappi-load-file and pkaappi-run-string-in add to an
+      ;; existing table and so leave macros in place, which is what lets a
+      ;; loaded file's macros stay visible and the REPL accumulate them.
+      (paal-macros-reset!)
       (let* ((cmd-args  (if (null? opts) '() (car opts)))
              ; cmd-cell is a HOST mutable pair; (car cmd-cell) = current command-line list.
              ; command-line is a HOST lambda closing over cmd-cell — safe to call from

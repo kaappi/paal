@@ -3,7 +3,7 @@
 Goal: make `pkaappi` a correct R7RS-small Scheme implementation that runs the
 same programs as `kaappi`, with the same CLI conventions.
 
-Current: Stage 6 complete (self-hosting). **405 tests pass** (was 194 before Phase 1–2).
+Current: Stage 6 complete (self-hosting). **409 tests pass** (was 194 before Phase 1–2).
 
 ---
 
@@ -289,6 +289,14 @@ Issues that span stages rather than belonging to one phase.
       failed with `type error in 'map': expected procedure`. Now uses
       `pkaappi-make-globals` like the other entry points. Pre-existing and separate
       from #1; surfaced by the new `hof.scm` fixture.
+- [x] **Macros leaked between independent programs** — `%paal-macros` is module
+      state in the expander and was never reset, so a `define-syntax` in one
+      program stayed installed for the next and silently shadowed a procedure of
+      the same name there. Reset now happens wherever a fresh globals table is
+      created, giving macros the same lifetime as the definitions they sit
+      alongside. `pkaappi-load-file` and `pkaappi-run-string-in` add to an
+      existing table and deliberately do not reset, so a loaded file's macros
+      stay visible and the REPL still accumulates them across inputs.
 - [x] **Test suite silently skipped tests and exited nonzero** — an uncaught error
       aborted the rest of its `test-group` without counting the remaining tests, so
       `make test` reported "all passed" while exiting 1 and running 10 fewer tests
@@ -299,23 +307,6 @@ Issues that span stages rather than belonging to one phase.
       signal again — a green run no longer hides skipped tests.
 
 **Open:**
-
-- [ ] **Macros leak between independent programs** — `%paal-macros` is a module
-      global in the expander and is never reset, so a `define-syntax` in one
-      program is still installed for the next. Worse, it silently shadows a
-      procedure of the same name:
-
-      ```scheme
-      (pkaappi-run-bc-string "(define-syntax zz (syntax-rules () ((_) 'from-macro))) (zz)")
-      ; => from-macro
-      (pkaappi-run-bc-string "(define (zz) 'from-procedure) (zz)")
-      ; => from-macro   — the macro from the previous, unrelated program won
-      ```
-      Pre-existing; surfaced by a test whose macro name collided with a later
-      test's variable. Any host embedding paal to run more than one program hits
-      it. The fix is to reset the table per top-level expansion, but the
-      self-hosted loader deliberately shares state across `pkaappi-load-file`
-      calls, so "per program" needs defining before changing anything.
 
 - [ ] **`.pbc` files can become unreadable depending on byte offsets**
       (kaappi/kaappi#1920) — kaappi's `read` on a *file port* mis-handles a dotted

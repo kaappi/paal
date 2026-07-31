@@ -1185,6 +1185,41 @@
 ;; bindings as well as the body, so its transformers may refer to one another;
 ;; let-syntax covers the body only, so a binding must NOT see its siblings.
 
+;; ---------------------------------------------------------------
+;; Macro table lifetime
+;; ---------------------------------------------------------------
+;;
+;; %paal-macros is module state in the expander. It is reset whenever a fresh
+;; globals table is made, so macros live exactly as long as the definitions
+;; they sit alongside. Entry points that add to an existing table do not reset,
+;; so a loaded file's macros stay visible and the REPL accumulates them.
+
+(test-group "macros do not leak between programs"
+  ;; Defining zzleak as a macro in one program must not shadow a procedure of
+  ;; that name in the next — it silently returned the macro's value before.
+  (test-equal "a macro from a previous program is gone"
+    'from-procedure
+    (begin
+      (pkaappi-run-bc-string
+        "(define-syntax zzleak (syntax-rules () ((_) 'from-macro))) (zzleak)")
+      (pkaappi-run-bc-string "(define (zzleak) 'from-procedure) (zzleak)")))
+  (test-equal "same on the tree-walking pipeline"
+    'from-procedure
+    (begin
+      (pkaappi-run-string
+        "(define-syntax zzleak2 (syntax-rules () ((_) 'from-macro))) (zzleak2)")
+      (pkaappi-run-string "(define (zzleak2) 'from-procedure) (zzleak2)")))
+  ;; The other half: a shared globals table must keep accumulating.
+  (test-equal "macros accumulate within one globals table"
+    'accumulated
+    (let ((g (pkaappi-make-globals)))
+      (pkaappi-run-string-in g
+        "(define-syntax zzacc (syntax-rules () ((_) 'accumulated)))")
+      (pkaappi-run-string-in g "(zzacc)")))
+  (test-equal "a later fresh table does not see it"
+    'fresh
+    (pkaappi-run-bc-string "(define (zzacc) 'fresh) (zzacc)")))
+
 (test-group "letrec-syntax: recursion between bindings"
   (test-equal "mutually recursive macros"
     '(#t #t)
