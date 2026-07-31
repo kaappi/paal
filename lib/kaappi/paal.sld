@@ -159,25 +159,22 @@
         ; apply is not here — it is a VM marker (see vm-bc.sld), since no paal
         ; procedure can issue a call whose argument count is only known at run
         ; time.  It used to be a hand-unrolled cond, capped at 16 arguments.
-        ; values/call-with-values: MVR-tagged encoding, up to 4 return values.
+        ; values/call-with-values: MVR-tagged encoding; no value-count limit
+        ; since call-with-values hands the values to apply.
         ; map, for-each, filter: 1-or-2-list version covering paal's own usage.
         ; vector-map, vector-for-each, string-map, string-for-each: 1-vector/string.
         (paal-run-bc
           (pkaappi-compile
             "(define %paal-mvr-tag (list 'paal-mvr))
              (define (values . vals) (cons %paal-mvr-tag vals))
+             ; The consumer's arity is only known at run time, which is exactly
+             ; what apply now handles — so no unrolled dispatch and no ceiling.
+             ; Both arms stay in tail position, so apply re-dispatches as a tail
+             ; call and a producer/consumer loop does not grow the host stack.
              (define (call-with-values producer consumer)
                (let ((r (producer)))
                  (if (and (pair? r) (eq? (car r) %paal-mvr-tag))
-                     (let ((v (cdr r)))
-                       (let ((n (length v)))
-                         (cond
-                           ((= n 0) (consumer))
-                           ((= n 1) (consumer (car v)))
-                           ((= n 2) (consumer (car v) (cadr v)))
-                           ((= n 3) (consumer (car v) (cadr v) (caddr v)))
-                           ((= n 4) (consumer (car v) (cadr v) (caddr v) (cadddr v)))
-                           (else (error \"call-with-values: too many values\" n)))))
+                     (apply consumer (cdr r))
                      (consumer r))))
              (define (map f lst . rest)
                (if (null? lst)

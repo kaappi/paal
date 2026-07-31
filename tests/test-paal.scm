@@ -991,6 +991,49 @@
   (test-equal "values two"
     30
     (pkaappi-run-bc-string "(call-with-values (lambda () (values 10 20)) +)"))
+  ;; call-with-values hands the values to apply, so the consumer's arity is
+  ;; resolved at run time. It used to be an unrolled cond capped at 4 values.
+  (test-equal "five values — past the old ceiling"
+    15
+    (pkaappi-run-bc-string "(call-with-values (lambda () (values 1 2 3 4 5)) +)"))
+  (test-equal "ten values"
+    55
+    (pkaappi-run-bc-string
+      "(call-with-values (lambda () (values 1 2 3 4 5 6 7 8 9 10)) +)"))
+  (test-equal "fifty values"
+    50
+    (pkaappi-run-bc-string
+      "(call-with-values
+         (lambda () (apply values (let loop ((i 0) (a '()))
+                                    (if (= i 50) a (loop (+ i 1) (cons 1 a))))))
+         +)"))
+  (test-equal "zero values"
+    0
+    (pkaappi-run-bc-string
+      "(call-with-values (lambda () (values)) (lambda args (length args)))"))
+  (test-equal "producer returning a single plain value"
+    42
+    (pkaappi-run-bc-string "(call-with-values (lambda () 42) (lambda (x) x))"))
+  (test-equal "variadic consumer"
+    '(1 2 3)
+    (pkaappi-run-bc-string
+      "(call-with-values (lambda () (values 1 2 3)) (lambda args args))"))
+  (test-equal "let-values with five bindings"
+    15
+    (pkaappi-run-bc-string
+      "(let-values (((a b c d e) (values 1 2 3 4 5))) (+ a b c d e))"))
+  (test-equal "define-values with five names"
+    '(1 2 3 4 5)
+    (pkaappi-run-bc-string
+      "(define-values (a b c d e) (values 1 2 3 4 5)) (list a b c d e)"))
+  ;; Both arms of call-with-values are in tail position, so apply re-dispatches
+  ;; as a tail call and this loop does not grow the host stack.
+  (test-equal "call-with-values in tail position stays a tail call"
+    'done
+    (pkaappi-run-bc-string
+      "(define (loop n)
+         (if (= n 0) 'done (call-with-values (lambda () (values (- n 1))) loop)))
+       (loop 50000)"))
   (test-equal "apply basic"
     6
     (pkaappi-run-bc-string "(apply + '(1 2 3))"))

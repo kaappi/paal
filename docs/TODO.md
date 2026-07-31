@@ -3,7 +3,7 @@
 Goal: make `pkaappi` a correct R7RS-small Scheme implementation that runs the
 same programs as `kaappi`, with the same CLI conventions.
 
-Current: Stage 6 complete (self-hosting). **324 tests pass** (was 194 before Phase 1–2).
+Current: Stage 6 complete (self-hosting). **333 tests pass** (was 194 before Phase 1–2).
 
 ---
 
@@ -41,7 +41,8 @@ Missing primitives added to `paal-initial-env` (`lib/kaappi/paal/vm.sld`):
 - [x] `features`
 - [x] `write-shared`, `write-simple`
 - [x] `apply` (VM marker in `do-call!`; no arity ceiling, keeps tail position)
-- [x] `values` / `call-with-values` (paal-compiled MVR-tagged, up to 4 return values)
+- [x] `values` / `call-with-values` (paal-compiled, MVR-tagged; no value-count
+      limit — the consumer is invoked through `apply`)
 - [x] `force`, `make-promise`, `promise?` (custom vector-based implementation)
 - [x] `guard` / `raise` / `error` — both pipelines. The bytecode VM handles
       `%paal-guard-run` as a marker in `do-call!` and re-enters itself via
@@ -74,7 +75,6 @@ Missing primitives added to `paal-initial-env` (`lib/kaappi/paal/vm.sld`):
       macros that introduce `let` bindings can capture user variables
 - [ ] `define-syntax` nested ellipsis — only single-level `...` is supported
 - [ ] `let-syntax` / `letrec-syntax` true mutual recursion — sequential binding only
-- [ ] `call-with-values` value count limit — crashes with more than 4 return values
 - [ ] `with-exception-handler` restart behavior (raise-continuable path) —
       `raise-continuable` currently behaves exactly like `raise`
 - [ ] `guard` re-raise environment — an unmatched clause re-raises from the
