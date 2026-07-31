@@ -132,8 +132,10 @@ Missing primitives added to `paal-initial-env` (`lib/kaappi/paal/vm.sld`):
           (guard (e ((number? e) 'no-match)) (raise 'boom))))
       ```
       A guard that *declines* leaves its own dynamic environment in place, so the
-      next guard out evaluates its clauses in the wrong one. Not yet filed
-      upstream.
+      next guard out evaluates its clauses in the wrong one. Filed as
+      kaappi/kaappi#1988; also visible through `dynamic-wind`, whose `after`
+      thunk runs after the outer clauses instead of before them. Reproduces on
+      `main` @ ea2e2e49 as well as v0.22.0.
 
       Still not R7RS, and unchanged by this work: an unmatched `raise-continuable`
       is not resumable — the clauses run after the host stack has unwound, so

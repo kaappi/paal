@@ -506,6 +506,12 @@ the next guard out runs its clauses in the wrong one. Paal answers `1` here and 
 every variation tested. This is the one place paal is deliberately not
 bug-compatible with its host.
 
+Filed as kaappi/kaappi#1988. It comes from `compileGuard` evaluating the `cond` and
+then escaping with its *value*, where R7RS escapes first and evaluates the clauses in
+the guard's continuation — so the extents between are still installed while the
+clauses run. The same ordering shows up in `dynamic-wind`, whose `after` thunk runs
+after the outer clauses rather than before them.
+
 ---
 
 ## Parameter objects
