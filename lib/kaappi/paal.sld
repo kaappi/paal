@@ -176,6 +176,31 @@
                  (if (and (pair? r) (eq? (car r) %paal-mvr-tag))
                      (apply consumer (cdr r))
                      (consumer r))))
+             ; The three R7RS procedures that return two values need paal
+             ; definitions here.  The HOST ones inherited from paal-initial-env
+             ; return real kaappi multiple values, which arrive in the VM's
+             ; single-value context as one opaque #<values> object — so
+             ; call-with-values saw a non-MVR value and passed that object
+             ; through as a single argument, and (let-values (((q r) (floor/ 7 2)))
+             ; ...) bound both q and r to it.  Rebuilt on the single-value
+             ; quotient/remainder primitives and paal's own `values`.
+             (define (floor/ n d)
+               (values (floor-quotient n d) (floor-remainder n d)))
+             (define (truncate/ n d)
+               (values (truncate-quotient n d) (truncate-remainder n d)))
+             ; Newton's method on integers: from x = n, x' = (x + n/x)/2 descends
+             ; to floor(sqrt n) and then stops falling.  Avoids going through a
+             ; flonum sqrt, which would lose exactness on large inputs.
+             (define (exact-integer-sqrt n)
+               (if (< n 0)
+                   (error \"exact-integer-sqrt: negative argument\" n)
+                   (if (= n 0)
+                       (values 0 0)
+                       (let loop ((x n))
+                         (let ((y (quotient (+ x (quotient n x)) 2)))
+                           (if (< y x)
+                               (loop y)
+                               (values x (- n (* x x)))))))))
              (define (map f lst . rest)
                (if (null? lst)
                    '()

@@ -3,7 +3,7 @@
 Goal: make `pkaappi` a correct R7RS-small Scheme implementation that runs the
 same programs as `kaappi`, with the same CLI conventions.
 
-Current: Stage 6 complete (self-hosting). **333 tests pass** (was 194 before Phase 1–2).
+Current: Stage 6 complete (self-hosting). **350 tests pass** (was 194 before Phase 1–2).
 
 ---
 
@@ -25,9 +25,10 @@ Special forms and expander gaps.
 Missing primitives added to `paal-initial-env` (`lib/kaappi/paal/vm.sld`):
 
 - [x] `exact-integer?`, `square`, `finite?`, `infinite?`, `nan?`
-- [x] `floor/`, `floor-quotient`, `floor-remainder`
-- [x] `truncate/`, `truncate-quotient`, `truncate-remainder`
-- [x] `numerator`, `denominator`, `exact-integer-sqrt`
+- [x] `floor/` (paal-native — returns two values), `floor-quotient`, `floor-remainder`
+- [x] `truncate/` (paal-native — returns two values), `truncate-quotient`,
+      `truncate-remainder`
+- [x] `numerator`, `denominator`, `exact-integer-sqrt` (paal-native — returns two values)
 - [x] `make-list`, `list-set!`
 - [x] `vector-map`, `vector-for-each` (paal-compiled in `pkaappi-make-globals`)
 - [x] `string-map`, `string-for-each` (paal-compiled in `pkaappi-make-globals`)
@@ -79,8 +80,6 @@ Missing primitives added to `paal-initial-env` (`lib/kaappi/paal/vm.sld`):
       `raise-continuable` currently behaves exactly like `raise`
 - [ ] `guard` re-raise environment — an unmatched clause re-raises from the
       handler's dynamic environment, not the original one (R7RS requires the latter)
-- [ ] `floor/` and `truncate/` — return two values; currently HOST procs that return
-      actual multiple-values (incompatible with paal MVR encoding in bytecode path)
 
 ---
 

@@ -780,6 +780,58 @@
   (test-equal "truncate-quotient"  3 (pkaappi-run-string "(truncate-quotient 10 3)"))
   (test-equal "truncate-remainder" 1 (pkaappi-run-string "(truncate-remainder 10 3)")))
 
+;; ---------------------------------------------------------------
+;; The R7RS procedures that return two values
+;; ---------------------------------------------------------------
+;;
+;; These are paal definitions built on the single-value quotient/remainder
+;; primitives, so they return MVR-tagged values the bytecode VM understands.
+;; The inherited HOST versions returned real kaappi multiple values, which
+;; reach the VM's single-value context as one opaque #<values> object: the
+;; consumer got that object as a single argument, and (let-values (((q r) ...)))
+;; bound both names to it. Every case is checked on both pipelines.
+
+(test-group "floor/ truncate/ exact-integer-sqrt"
+  (test-equal "floor/ positive"        '(3 1)
+    (pkaappi-run-bc-string "(call-with-values (lambda () (floor/ 7 2)) list)"))
+  (test-equal "floor/ negative dividend" '(-4 1)
+    (pkaappi-run-bc-string "(call-with-values (lambda () (floor/ -7 2)) list)"))
+  (test-equal "floor/ negative divisor"  '(-4 -1)
+    (pkaappi-run-bc-string "(call-with-values (lambda () (floor/ 7 -2)) list)"))
+  (test-equal "floor/ exact division"    '(2 0)
+    (pkaappi-run-bc-string "(call-with-values (lambda () (floor/ 8 4)) list)"))
+  (test-equal "truncate/ positive"       '(3 1)
+    (pkaappi-run-bc-string "(call-with-values (lambda () (truncate/ 7 2)) list)"))
+  (test-equal "truncate/ negative dividend" '(-3 -1)
+    (pkaappi-run-bc-string "(call-with-values (lambda () (truncate/ -7 2)) list)"))
+  (test-equal "truncate/ negative divisor"  '(-3 1)
+    (pkaappi-run-bc-string "(call-with-values (lambda () (truncate/ 7 -2)) list)"))
+  (test-equal "exact-integer-sqrt 17"    '(4 1)
+    (pkaappi-run-bc-string "(call-with-values (lambda () (exact-integer-sqrt 17)) list)"))
+  (test-equal "exact-integer-sqrt 0"     '(0 0)
+    (pkaappi-run-bc-string "(call-with-values (lambda () (exact-integer-sqrt 0)) list)"))
+  (test-equal "exact-integer-sqrt 1"     '(1 0)
+    (pkaappi-run-bc-string "(call-with-values (lambda () (exact-integer-sqrt 1)) list)"))
+  (test-equal "exact-integer-sqrt perfect square" '(4 0)
+    (pkaappi-run-bc-string "(call-with-values (lambda () (exact-integer-sqrt 16)) list)"))
+  (test-equal "exact-integer-sqrt large" '(316 143)
+    (pkaappi-run-bc-string "(call-with-values (lambda () (exact-integer-sqrt 99999)) list)"))
+  ;; let-values is where the old breakage was most visible: both names bound
+  ;; to the same #<values> object instead of to the two values.
+  (test-equal "let-values over floor/"   '(3 1)
+    (pkaappi-run-bc-string "(let-values (((q r) (floor/ 7 2))) (list q r))"))
+  (test-equal "let-values over truncate/" '(-3 -1)
+    (pkaappi-run-bc-string "(let-values (((q r) (truncate/ -7 2))) (list q r))"))
+  (test-equal "define-values over exact-integer-sqrt" '(4 1)
+    (pkaappi-run-bc-string
+      "(define-values (s r) (exact-integer-sqrt 17)) (list s r)"))
+  ;; The tree-walking pipeline keeps the HOST versions, which return real
+  ;; multiple values and always worked — pinned so the two agree.
+  (test-equal "tree-walking floor/"      '(3 1)
+    (pkaappi-run-string "(call-with-values (lambda () (floor/ 7 2)) list)"))
+  (test-equal "tree-walking exact-integer-sqrt" '(4 1)
+    (pkaappi-run-string "(let-values (((s r) (exact-integer-sqrt 17))) (list s r))")))
+
 (test-group "R7RS primitives: lists and strings"
   (test-equal "make-list"    '(0 0 0) (pkaappi-run-string "(make-list 3 0)"))
   (test-equal "list-set!"    '(a X c) (pkaappi-run-string "(let ((l (list 'a 'b 'c))) (list-set! l 1 'X) l)"))
