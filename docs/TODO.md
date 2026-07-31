@@ -3,46 +3,61 @@
 Goal: make `pkaappi` a correct R7RS-small Scheme implementation that runs the
 same programs as `kaappi`, with the same CLI conventions.
 
-Current: Stage 6 complete (self-hosting). 194 tests pass.
+Current: Stage 6 complete (self-hosting). **244 tests pass** (was 194 before Phase 1).
 
 ---
 
-## Phase 1 — R7RS Language Core
+## Phase 1 — R7RS Language Core ✅ (mostly complete)
 
-Special forms and expander gaps (blocking real programs).
+Special forms and expander gaps.
 
-- [ ] `define-syntax` + `syntax-rules` — full hygienic macro system (any library
-      using macros fails to load without this; #1 blocker)
-- [ ] `let-syntax` / `letrec-syntax` — local macro binding scopes
-- [ ] `case-lambda` — multi-arity dispatch (explicitly deferred; common in portable libraries)
-- [ ] `guard` — standard exception-handling form (`guard` exists in HOST but is not
-      exposed in user programs via the paal pipeline)
-- [ ] `parameterize` — dynamic binding (needs `make-parameter` in initial-env first)
-- [ ] `define-values` / `let-values` / `let*-values` — multiple-value binding forms
-      (`values` and `call-with-values` are present but the binding syntax is not)
-- [ ] `delay` / `delay-force` — lazy evaluation primitives (prerequisite for `(scheme lazy)`)
-- [ ] `include` / `include-ci` — source file inclusion forms
-- [ ] `cond-expand` — feature-conditional code (needed for portable library compatibility)
-- [ ] `syntax-error` — compile-time error reporting from within macros
+- [x] `define-syntax` + `syntax-rules` — basic hygienic macro system (single-level
+      ellipsis; no nested ellipsis or hygiene renaming yet)
+- [x] `let-syntax` / `letrec-syntax` — local macro binding (save/restore global macro env)
+- [x] `case-lambda` — multi-arity dispatch via let-destructuring (no `apply`)
+- [x] `define-values` / `let-values` / `let*-values` — multiple-value binding forms
+- [x] `delay` / `delay-force` — lazy evaluation using custom vector-based promises
+- [x] `include` / `include-ci` — splice forms from files at expansion time
+- [x] `cond-expand` — feature-conditional code (`pkaappi`, `r7rs`, `scheme` supported)
+- [x] `syntax-error` — compile-time error from macros
+- [x] `case-lambda`, `define-values`, `let-values`, `let*-values` bytecode support
 
-Missing primitives in `paal-initial-env` (`lib/kaappi/paal/vm.sld`):
+Missing primitives added to `paal-initial-env` (`lib/kaappi/paal/vm.sld`):
 
-- [ ] `exact-integer?`, `square`, `finite?`, `infinite?`, `nan?`
-- [ ] `floor/`, `floor-quotient`, `floor-remainder`
-- [ ] `truncate/`, `truncate-quotient`, `truncate-remainder`
-- [ ] `numerator`, `denominator`, `exact-integer-sqrt`
-- [ ] `make-list`, `list-set!`
-- [ ] `vector-map`, `vector-for-each`
-- [ ] `string-map`, `string-for-each`, `string-set!`, `string-copy!`, `string-fill!`
-- [ ] `string->utf8`, `utf8->string`, `string->vector`, `vector->string`
-- [ ] `bytevector-copy!`
-- [ ] `close-port`, `textual-port?`, `binary-port?`, `input-port-open?`, `output-port-open?`
-- [ ] `read-u8`, `peek-u8`, `u8-ready?`, `write-u8`
-- [ ] `read-error?`, `file-error?`
-- [ ] `make-parameter`
-- [ ] `features`
-- [ ] `write-shared`, `write-simple`
+- [x] `exact-integer?`, `square`, `finite?`, `infinite?`, `nan?`
+- [x] `floor/`, `floor-quotient`, `floor-remainder`
+- [x] `truncate/`, `truncate-quotient`, `truncate-remainder`
+- [x] `numerator`, `denominator`, `exact-integer-sqrt`
+- [x] `make-list`, `list-set!`
+- [x] `vector-map`, `vector-for-each` (paal-compiled in `pkaappi-make-globals`)
+- [x] `string-map`, `string-for-each` (paal-compiled in `pkaappi-make-globals`)
+- [x] `string-set!`, `string-copy!`, `string-fill!`
+- [x] `string->utf8`, `utf8->string`, `string->vector`, `vector->string`
+- [x] `bytevector-copy!`
+- [x] `close-port`, `textual-port?`, `binary-port?`, `input-port-open?`, `output-port-open?`
+- [x] `read-u8`, `peek-u8`, `u8-ready?`, `write-u8`
+- [x] `read-error?`, `file-error?`
+- [x] `make-parameter`
+- [x] `features`
+- [x] `write-shared`, `write-simple`
+- [x] `apply` (paal-compiled, up to 8 args — see limitation below)
+- [x] `values` / `call-with-values` (paal-compiled MVR-tagged, up to 4 return values)
+- [x] `force`, `make-promise`, `promise?` (custom vector-based implementation)
+
+**Known limitations (still open):**
+
+- [ ] `guard` — requires paal VM-level continuation support; HOST `call/cc` and
+      `with-exception-handler` cannot call paal closures as callbacks
+- [ ] `parameterize` — requires paal-native `dynamic-wind`; same boundary issue as `guard`
+- [ ] `define-syntax` hygiene — introduced bindings are not renamed (non-hygienic);
+      macros that introduce `let` bindings can capture user variables
+- [ ] `define-syntax` nested ellipsis — only single-level `...` is supported
+- [ ] `let-syntax` / `letrec-syntax` true mutual recursion — sequential binding only
+- [ ] `apply` arity limit — crashes with more than 8 arguments
+- [ ] `call-with-values` value count limit — crashes with more than 4 return values
 - [ ] `with-exception-handler` restart behavior (raise-continuable path)
+- [ ] `floor/` and `truncate/` — return two values; currently HOST procs that return
+      actual multiple-values (incompatible with paal MVR encoding in bytecode path)
 
 ---
 
@@ -56,6 +71,7 @@ User programs call `(import (scheme inexact))` etc. Currently `import` is a no-o
 - [ ] `(scheme char)` — `char-ci=?` and all case-insensitive char/string comparisons,
       `char-foldcase`, `string-foldcase`, `digit-value`
 - [ ] `(scheme lazy)` — `delay`, `force`, `delay-force`, `make-promise`, `promise?`
+      (paal has custom implementations; need import resolution for portability)
 - [ ] `(scheme time)` — `current-second`, `current-jiffy`, `jiffies-per-second`
 - [ ] `(scheme process-context)` — `command-line`, `exit`, `emergency-exit`,
       `get-environment-variable`, `get-environment-variables`

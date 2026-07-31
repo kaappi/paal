@@ -61,20 +61,12 @@
       (pkaappi-compile-forms (paal-read-string src)))
 
     (define (pkaappi-run-bc-string src)
-      (let* ((fn      (pkaappi-compile src))
-             (globals (paal-make-globals
-                        (map (lambda (pair)
-                               (cons (car pair) (vector-ref (cdr pair) 0)))
-                             (paal-initial-env)))))
-        (paal-run-bc fn globals)))
+      ;; Use pkaappi-make-globals so paal-compiled HOF (values, apply, map, etc.)
+      ;; are available — HOST versions cannot call paal closures.
+      (paal-run-bc (pkaappi-compile src) (pkaappi-make-globals)))
 
     (define (pkaappi-run-bc-file path)
-      (let* ((fn      (pkaappi-compile-forms (paal-read-file path)))
-             (globals (paal-make-globals
-                        (map (lambda (pair)
-                               (cons (car pair) (vector-ref (cdr pair) 0)))
-                             (paal-initial-env)))))
-        (paal-run-bc fn globals)))
+      (paal-run-bc (pkaappi-compile-forms (paal-read-file path)) (pkaappi-make-globals)))
 
     ;; --- Multi-file sequential loading ---
 
@@ -88,12 +80,87 @@
                               (paal-initial-env)))
              (g (paal-make-globals (cons (cons 'pkaappi-make-globals pkaappi-make-globals)
                                          base-alist))))
-        ; Install paal-native map/for-each/filter, replacing the HOST stubs.
-        ; HOST map cannot call paal closures; these paal-compiled versions can.
-        ; map handles 1 or 2 list args (covers all usage in paal's own source).
+        ; Install paal-native promise system (separate from HOST tree-walking path).
+        ; %paal-delay-impl creates a lazy promise vector; force/promise?/make-promise
+        ; use the same paal-allocated tag.  Bytecode VM paal closures work here.
         (paal-run-bc
           (pkaappi-compile
-            "(define (map f lst . rest)
+            "(define %paal-promise-tag (list 'paal-promise-tag))
+             (define (%paal-delay-impl thunk)
+               (let ((v (make-vector 3)))
+                 (vector-set! v 0 %paal-promise-tag)
+                 (vector-set! v 1 #f)
+                 (vector-set! v 2 thunk)
+                 v))
+             (define (promise? x)
+               (and (vector? x) (= (vector-length x) 3)
+                    (eq? (vector-ref x 0) %paal-promise-tag)))
+             (define (make-promise x)
+               (if (promise? x)
+                   x
+                   (let ((v (make-vector 3)))
+                     (vector-set! v 0 %paal-promise-tag)
+                     (vector-set! v 1 #t)
+                     (vector-set! v 2 x)
+                     v)))
+             (define (force p)
+               (if (not (promise? p))
+                   p
+                   (if (vector-ref p 1)
+                       (vector-ref p 2)
+                       (let ((r ((vector-ref p 2))))
+                         (vector-set! p 1 #t)
+                         (vector-set! p 2 r)
+                         r))))")
+          g)
+
+        ; Install paal-native HOFs and multiple-values support,
+        ; replacing HOST stubs that cannot call paal closures.
+        ;
+        ; apply: limited to 8 args (covers virtually all real programs).
+        ; values/call-with-values: MVR-tagged encoding, up to 4 return values.
+        ; map, for-each, filter: 1-or-2-list version covering paal's own usage.
+        ; vector-map, vector-for-each, string-map, string-for-each: 1-vector/string.
+        (paal-run-bc
+          (pkaappi-compile
+            "(define (apply f . args)
+               (define (spread a)
+                 (if (null? (cdr a)) (car a) (cons (car a) (spread (cdr a)))))
+               (let ((flat (if (null? args) '() (spread args))))
+                 (let ((n (length flat)))
+                   (cond
+                     ((= n 0) (f))
+                     ((= n 1) (f (car flat)))
+                     ((= n 2) (f (car flat) (cadr flat)))
+                     ((= n 3) (f (car flat) (cadr flat) (caddr flat)))
+                     ((= n 4) (f (car flat) (cadr flat) (caddr flat) (cadddr flat)))
+                     ((= n 5) (f (car flat) (cadr flat) (caddr flat) (cadddr flat)
+                                  (car (cddddr flat))))
+                     ((= n 6) (f (car flat) (cadr flat) (caddr flat) (cadddr flat)
+                                  (car (cddddr flat)) (cadr (cddddr flat))))
+                     ((= n 7) (f (car flat) (cadr flat) (caddr flat) (cadddr flat)
+                                  (car (cddddr flat)) (cadr (cddddr flat))
+                                  (caddr (cddddr flat))))
+                     ((= n 8) (f (car flat) (cadr flat) (caddr flat) (cadddr flat)
+                                  (car (cddddr flat)) (cadr (cddddr flat))
+                                  (caddr (cddddr flat)) (cadddr (cddddr flat))))
+                     (else (error \"apply: too many arguments\" n))))))
+             (define %paal-mvr-tag (list 'paal-mvr))
+             (define (values . vals) (cons %paal-mvr-tag vals))
+             (define (call-with-values producer consumer)
+               (let ((r (producer)))
+                 (if (and (pair? r) (eq? (car r) %paal-mvr-tag))
+                     (let ((v (cdr r)))
+                       (let ((n (length v)))
+                         (cond
+                           ((= n 0) (consumer))
+                           ((= n 1) (consumer (car v)))
+                           ((= n 2) (consumer (car v) (cadr v)))
+                           ((= n 3) (consumer (car v) (cadr v) (caddr v)))
+                           ((= n 4) (consumer (car v) (cadr v) (caddr v) (cadddr v)))
+                           (else (error \"call-with-values: too many values\" n)))))
+                     (consumer r))))
+             (define (map f lst . rest)
                (if (null? lst)
                    '()
                    (if (null? rest)
@@ -115,7 +182,26 @@
                    '()
                    (if (pred (car lst))
                        (cons (car lst) (filter pred (cdr lst)))
-                       (filter pred (cdr lst)))))")
+                       (filter pred (cdr lst)))))
+             (define (vector-map f v)
+               (let* ((n (vector-length v))
+                      (result (make-vector n)))
+                 (let loop ((i 0))
+                   (if (= i n)
+                       result
+                       (begin
+                         (vector-set! result i (f (vector-ref v i)))
+                         (loop (+ i 1)))))))
+             (define (vector-for-each f v)
+               (let ((n (vector-length v)))
+                 (let loop ((i 0))
+                   (if (< i n)
+                       (begin (f (vector-ref v i)) (loop (+ i 1)))
+                       (if #f #f)))))
+             (define (string-map f s)
+               (list->string (map f (string->list s))))
+             (define (string-for-each f s)
+               (for-each f (string->list s)))")
           g)
         g))
 

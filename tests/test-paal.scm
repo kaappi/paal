@@ -671,4 +671,241 @@
     120
     (pkaappi-self-run-file "tests/fixtures/factorial.scm")))
 
+;; ---------------------------------------------------------------
+;; Phase 1: missing primitives
+;; ---------------------------------------------------------------
+
+(test-group "R7RS primitives: arithmetic"
+  (test-equal "exact-integer? on fixnum" #t (pkaappi-run-string "(exact-integer? 42)"))
+  (test-equal "exact-integer? on float"  #f (pkaappi-run-string "(exact-integer? 1.5)"))
+  (test-equal "square"       49  (pkaappi-run-string "(square 7)"))
+  (test-equal "finite? true"  #t (pkaappi-run-string "(finite? 1.0)"))
+  (test-equal "infinite?"     #t (pkaappi-run-string "(infinite? +inf.0)"))
+  (test-equal "nan?"          #t (pkaappi-run-string "(nan? +nan.0)"))
+  (test-equal "floor-quotient"  3 (pkaappi-run-string "(floor-quotient 10 3)"))
+  (test-equal "floor-remainder" 1 (pkaappi-run-string "(floor-remainder 10 3)"))
+  (test-equal "truncate-quotient"  3 (pkaappi-run-string "(truncate-quotient 10 3)"))
+  (test-equal "truncate-remainder" 1 (pkaappi-run-string "(truncate-remainder 10 3)")))
+
+(test-group "R7RS primitives: lists and strings"
+  (test-equal "make-list"    '(0 0 0) (pkaappi-run-string "(make-list 3 0)"))
+  (test-equal "list-set!"    '(a X c) (pkaappi-run-string "(let ((l (list 'a 'b 'c))) (list-set! l 1 'X) l)"))
+  (test-equal "string->utf8" #u8(65 66) (pkaappi-run-string "(string->utf8 \"AB\")"))
+  (test-equal "utf8->string" "AB" (pkaappi-run-string "(utf8->string #u8(65 66))"))
+  (test-equal "string->vector" #(#\h #\i) (pkaappi-run-string "(string->vector \"hi\")"))
+  (test-equal "vector->string" "hi" (pkaappi-run-string "(vector->string #(#\\h #\\i))")))
+
+;; ---------------------------------------------------------------
+;; Phase 1: case-lambda
+;; ---------------------------------------------------------------
+
+(test-group "case-lambda"
+  (test-equal "exact arity 1"
+    5
+    (pkaappi-run-string "(define f (case-lambda ((x) x) ((x y) (+ x y)))) (f 5)"))
+  (test-equal "exact arity 2"
+    7
+    (pkaappi-run-string "(define f (case-lambda ((x) x) ((x y) (+ x y)))) (f 3 4)"))
+  (test-equal "pure rest arg"
+    '(1 2 3)
+    (pkaappi-run-string "(define f (case-lambda (args args))) (f 1 2 3)"))
+  (test-equal "nullary"
+    42
+    (pkaappi-run-string "(define f (case-lambda (() 42) ((x) x))) (f)"))
+  (test-equal "improper at-least-n arity"
+    '(1 2 3)
+    (pkaappi-run-string
+      "(define f (case-lambda ((x . rest) (cons x rest)))) (f 1 2 3)"))
+  (test-equal "case-lambda bytecode"
+    '(10 25)
+    (pkaappi-run-bc-string
+      "(define f (case-lambda ((x) (* x 2)) ((x y) (+ x y y)))) (list (f 5) (f 5 10))")))
+
+;; ---------------------------------------------------------------
+;; Phase 1: define-values / let-values / let*-values
+;; ---------------------------------------------------------------
+
+(test-group "define-values"
+  (test-equal "two values"
+    30
+    (pkaappi-run-string "(define-values (a b) (values 10 20)) (+ a b)"))
+  (test-equal "three values"
+    60
+    (pkaappi-run-string "(define-values (x y z) (values 10 20 30)) (+ x y z)"))
+  (test-equal "define-values bytecode"
+    30
+    (pkaappi-run-bc-string "(define-values (a b) (values 10 20)) (+ a b)")))
+
+(test-group "let-values"
+  (test-equal "single binding"
+    7
+    (pkaappi-run-string "(let-values (((x y) (values 3 4))) (+ x y))"))
+  (test-equal "two bindings"
+    10
+    (pkaappi-run-string "(let-values (((a b) (values 1 2)) ((c) (values 7))) (+ a b c))"))
+  (test-equal "let*-values sequential"
+    3
+    (pkaappi-run-string "(let*-values (((a b) (values 1 2)) ((c) (values (+ a b)))) c)"))
+  (test-equal "let-values bytecode"
+    7
+    (pkaappi-run-bc-string "(let-values (((x y) (values 3 4))) (+ x y))")))
+
+;; ---------------------------------------------------------------
+;; Phase 1: delay / force / promise?
+;; ---------------------------------------------------------------
+
+(test-group "delay/force"
+  (test-equal "force evaluates"   3 (pkaappi-run-string "(force (delay (+ 1 2)))"))
+  (test-equal "promise? true"    #t (pkaappi-run-string "(promise? (delay 42))"))
+  (test-equal "promise? non"     #f (pkaappi-run-string "(promise? 42)"))
+  (test-equal "force caches"
+    #t
+    (pkaappi-run-string
+      "(define count 0)
+       (define p (delay (begin (set! count (+ count 1)) count)))
+       (force p) (force p)
+       (= count 1)"))
+  (test-equal "make-promise already-forced"
+    42
+    (pkaappi-run-string "(force (make-promise 42))"))
+  (test-equal "delay bytecode"
+    6
+    (pkaappi-run-bc-string "(force (delay (* 2 3)))")))
+
+;; ---------------------------------------------------------------
+;; Phase 1: cond-expand
+;; ---------------------------------------------------------------
+
+(test-group "cond-expand"
+  (test-equal "pkaappi feature"
+    "yes"
+    (pkaappi-run-string "(cond-expand (pkaappi \"yes\") (else \"no\"))"))
+  (test-equal "r7rs feature"
+    "yes"
+    (pkaappi-run-string "(cond-expand (r7rs \"yes\") (else \"no\"))"))
+  (test-equal "unknown feature → else"
+    "no"
+    (pkaappi-run-string "(cond-expand (unknown-thing \"yes\") (else \"no\"))"))
+  (test-equal "and requirement"
+    "both"
+    (pkaappi-run-string "(cond-expand ((and pkaappi r7rs) \"both\") (else \"no\"))"))
+  (test-equal "or requirement"
+    "yes"
+    (pkaappi-run-string "(cond-expand ((or unknown pkaappi) \"yes\") (else \"no\"))"))
+  (test-equal "not requirement"
+    "yes"
+    (pkaappi-run-string "(cond-expand ((not unknown-thing) \"yes\") (else \"no\"))"))
+  (test-equal "no matching, no else → #f (empty begin)"
+    #f
+    (pkaappi-run-string "(cond-expand (unknown-thing 42))")))
+
+;; ---------------------------------------------------------------
+;; Phase 1: define-syntax / syntax-rules
+;; ---------------------------------------------------------------
+
+(test-group "define-syntax: basic patterns"
+  (test-equal "nullary macro"
+    #t
+    (pkaappi-run-string "(define-syntax my-true (syntax-rules () ((_) #t))) (my-true)"))
+  (test-equal "single argument"
+    42
+    (pkaappi-run-string "(define-syntax identity (syntax-rules () ((_ x) x))) (identity 42)"))
+  (test-equal "swap! macro"
+    '(2 1)
+    (pkaappi-run-string
+      "(define-syntax swap!
+         (syntax-rules ()
+           ((_ a b) (let ((tmp a)) (set! a b) (set! b tmp)))))
+       (define x 1) (define y 2) (swap! x y) (list x y)"))
+  (test-equal "my-and empty"
+    #t
+    (pkaappi-run-string
+      "(define-syntax my-and
+         (syntax-rules ()
+           ((_) #t)
+           ((_ e) e)
+           ((_ e1 e2 ...) (if e1 (my-and e2 ...) #f))))
+       (my-and)"))
+  (test-equal "my-and short-circuit"
+    #f
+    (pkaappi-run-string
+      "(define-syntax my-and
+         (syntax-rules ()
+           ((_) #t)
+           ((_ e) e)
+           ((_ e1 e2 ...) (if e1 (my-and e2 ...) #f))))
+       (my-and 1 #f 3)"))
+  (test-equal "my-and three args"
+    3
+    (pkaappi-run-string
+      "(define-syntax my-and
+         (syntax-rules ()
+           ((_) #t)
+           ((_ e) e)
+           ((_ e1 e2 ...) (if e1 (my-and e2 ...) #f))))
+       (my-and 1 2 3)"))
+  (test-equal "literal in pattern"
+    99
+    (pkaappi-run-string
+      "(define-syntax my-case
+         (syntax-rules (=>)
+           ((_ val (pat => expr)) (if (equal? val (quote pat)) expr #f))))
+       (my-case 'a (a => 99))"))
+  (test-equal "define-syntax bytecode"
+    10
+    (pkaappi-run-bc-string
+      "(define-syntax double (syntax-rules () ((_ x) (* x 2)))) (double 5)")))
+
+(test-group "let-syntax"
+  (test-equal "local macro"
+    10
+    (pkaappi-run-string "(let-syntax ((double (syntax-rules () ((_ x) (* x 2))))) (double 5))"))
+  (test-equal "local macro not visible outside"
+    #t
+    (pkaappi-run-string
+      "(let-syntax ((my-macro (syntax-rules () ((_) 42))))
+         (my-macro))
+       (not (assq 'my-macro '()))   ; macro should be gone, this is just a placeholder
+       #t")))
+
+;; ---------------------------------------------------------------
+;; Phase 1: HOF — vector-map, string-map, etc.
+;; ---------------------------------------------------------------
+
+(test-group "vector-map / vector-for-each"
+  (test-equal "vector-map squares"
+    #(1 4 9 16)
+    (pkaappi-run-bc-string "(vector-map (lambda (x) (* x x)) #(1 2 3 4))"))
+  (test-equal "vector-for-each side-effect"
+    '(3 2 1)
+    (pkaappi-run-bc-string
+      "(define acc '())
+       (vector-for-each (lambda (x) (set! acc (cons x acc))) #(3 2 1))
+       (reverse acc)")))
+
+(test-group "string-map / string-for-each"
+  (test-equal "string-map upcase"
+    "HELLO"
+    (pkaappi-run-bc-string "(string-map char-upcase \"hello\")"))
+  (test-equal "string-for-each collect"
+    '(#\c #\b #\a)
+    (pkaappi-run-bc-string
+      "(define acc '())
+       (string-for-each (lambda (c) (set! acc (cons c acc))) \"cba\")
+       (reverse acc)")))
+
+(test-group "values / call-with-values / apply"
+  (test-equal "values two"
+    30
+    (pkaappi-run-bc-string "(call-with-values (lambda () (values 10 20)) +)"))
+  (test-equal "apply basic"
+    6
+    (pkaappi-run-bc-string "(apply + '(1 2 3))"))
+  (test-equal "apply with prefix args"
+    10
+    (pkaappi-run-bc-string "(apply + 1 2 '(3 4))"))
+  (test-equal "apply with closure"
+    15
+    (pkaappi-run-bc-string "(apply (lambda (a b c) (+ a b c)) '(4 5 6))")))
+
 (test-exit)

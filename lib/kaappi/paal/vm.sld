@@ -59,6 +59,12 @@
       (string->symbol
         (string-append "__paal_" (number->string %paal-gensym-counter))))
 
+    ;; --- Promise tag (HOST side) ---
+    ;; Unique pair used to tag paal promise vectors in the tree-walking VM.
+    ;; The bytecode VM path allocates its own tag in pkaappi-make-globals.
+
+    (define %paal-promise-tag (list 'paal-promise-tag))
+
     ;; --- Initial environment seeded with host primitives ---
 
     (define (paal-initial-env)
@@ -186,6 +192,91 @@
              (bytevector-u8-set! . ,bytevector-u8-set!)
              (bytevector-copy . ,bytevector-copy)
              (bytevector-append . ,bytevector-append)
+
+             ;; Arithmetic — R7RS extras
+             (exact-integer? . ,exact-integer?)
+             (square . ,square)
+             (finite? . ,finite?) (infinite? . ,infinite?) (nan? . ,nan?)
+             (floor/ . ,floor/) (floor-quotient . ,floor-quotient) (floor-remainder . ,floor-remainder)
+             (truncate/ . ,truncate/) (truncate-quotient . ,truncate-quotient) (truncate-remainder . ,truncate-remainder)
+             (numerator . ,numerator) (denominator . ,denominator)
+             (exact-integer-sqrt . ,exact-integer-sqrt)
+
+             ;; Lists — R7RS extras
+             (make-list . ,make-list) (list-set! . ,list-set!)
+
+             ;; Strings — R7RS extras (non-HOF)
+             (string-set! . ,string-set!)
+             (string-copy! . ,string-copy!)
+             (string-fill! . ,string-fill!)
+             (string->utf8 . ,string->utf8) (utf8->string . ,utf8->string)
+             (string->vector . ,string->vector) (vector->string . ,vector->string)
+
+             ;; Bytevectors — R7RS extras
+             (bytevector-copy! . ,bytevector-copy!)
+
+             ;; Ports — R7RS extras
+             (close-port . ,close-port)
+             (textual-port? . ,textual-port?) (binary-port? . ,binary-port?)
+             (input-port-open? . ,input-port-open?) (output-port-open? . ,output-port-open?)
+
+             ;; Binary I/O
+             (read-u8 . ,read-u8) (peek-u8 . ,peek-u8)
+             (u8-ready? . ,u8-ready?) (write-u8 . ,write-u8)
+
+             ;; File operations
+             (file-exists? . ,file-exists?)
+             (delete-file . ,delete-file)
+             (call-with-input-file . ,call-with-input-file)
+             (call-with-output-file . ,call-with-output-file)
+             (with-input-from-file . ,with-input-from-file)
+             (with-output-to-file . ,with-output-to-file)
+             (open-binary-input-file . ,open-binary-input-file)
+             (open-binary-output-file . ,open-binary-output-file)
+
+             ;; Exception predicates
+             (read-error? . ,read-error?) (file-error? . ,file-error?)
+
+             ;; Parameters
+             (make-parameter . ,make-parameter)
+
+             ;; Features
+             (features . ,features)
+
+             ;; Write extras
+             (write-shared . ,write-shared) (write-simple . ,write-simple)
+
+             ;; Promises — custom vector-based implementation so that delay/force
+             ;; work correctly in the tree-walking VM.  (The bytecode VM path in
+             ;; pkaappi-make-globals installs separate paal-compiled versions.)
+             (%paal-delay-impl . ,(lambda (thunk)
+               (let ((v (make-vector 3)))
+                 (vector-set! v 0 %paal-promise-tag)
+                 (vector-set! v 1 #f)
+                 (vector-set! v 2 thunk)
+                 v)))
+             (promise? . ,(lambda (x)
+               (and (vector? x) (= (vector-length x) 3)
+                    (eq? (vector-ref x 0) %paal-promise-tag))))
+             (make-promise . ,(lambda (x)
+               (if (and (vector? x) (= (vector-length x) 3)
+                        (eq? (vector-ref x 0) %paal-promise-tag))
+                   x
+                   (let ((v (make-vector 3)))
+                     (vector-set! v 0 %paal-promise-tag)
+                     (vector-set! v 1 #t)
+                     (vector-set! v 2 x)
+                     v))))
+             (force . ,(lambda (p)
+               (if (not (and (vector? p) (= (vector-length p) 3)
+                             (eq? (vector-ref p 0) %paal-promise-tag)))
+                   p
+                   (if (vector-ref p 1)
+                       (vector-ref p 2)
+                       (let ((r ((vector-ref p 2))))
+                         (vector-set! p 1 #t)
+                         (vector-set! p 2 r)
+                         r)))))
 
              ;; Misc
              (void . ,(lambda () (if #f #f)))
