@@ -329,6 +329,16 @@
     ;;
     ;; The stack is restored before the clauses run, so an unmatched clause
     ;; re-raises to the *outer* handler rather than back into this one.
+    ;;
+    ;; Everything past the catch is one call into %paal-guard-catch, which is
+    ;; paal source (see lib/kaappi/paal.sld).  It owns the R7RS 4.2.7 dance:
+    ;; the clauses are evaluated in the dynamic environment of the guard, but an
+    ;; unmatched condition is re-raised in that of the original raise.  It needs
+    ;; the wind stack as it stood when this guard was entered, which only this
+    ;; procedure can still see, so `winds` is passed in.  With no
+    ;; %paal-guard-catch — a globals table straight from paal-initial-env — the
+    ;; clauses are applied directly and an unmatched condition re-raised here.
+    ;;
     ;; The escape pushed onto the stack is taken from globals rather than being
     ;; this library's own paal-vm-raise-escape!.  Under self-hosting this file is
     ;; paal-compiled, so that name would be a paal closure — and a paal closure
@@ -342,18 +352,35 @@
     ;; paal-initial-env has neither name, and needs no push.
     (define (run-guard! regs globals nbase body handler)
       (let ((escape (globals-ref-default globals '%paal-vm-raise #f))
-            (saved  (globals-ref-default globals '%paal-handlers #f)))
+            (saved  (globals-ref-default globals '%paal-handlers #f))
+            (catch  (globals-ref-default globals '%paal-guard-catch #f))
+            (winds  (globals-ref-default globals '%paal-winds '())))
         (when (and escape saved)
           (globals-define! globals '%paal-handlers (cons escape saved)))
         (let ((result
                (guard (e (#t (when saved
                                (globals-define! globals '%paal-handlers saved))
-                             (paal-call-value regs globals nbase handler
-                                              (list (paal-vm-condition e)))))
+                             (let ((condition (paal-vm-condition e)))
+                               (if catch
+                                   (paal-call-value regs globals nbase catch
+                                                    (list condition handler winds))
+                                   (run-clauses-bare! regs globals nbase
+                                                      handler condition)))))
                  (paal-call-value regs globals nbase body '()))))
           (when saved
             (globals-define! globals '%paal-handlers saved))
           result)))
+
+    ;; Fallback for a globals table with no %paal-guard-catch: no wind stack to
+    ;; restore, so the clauses can be applied straight and an unmatched
+    ;; condition re-raised from here.  The escape comes from globals when there
+    ;; is one, for the reason given above.
+    (define (run-clauses-bare! regs globals nbase handler condition)
+      (let ((result (paal-call-value regs globals nbase handler (list condition))))
+        (if (eq? result (globals-ref-default globals '%paal-guard-no-match #f))
+            (let ((escape (globals-ref-default globals '%paal-vm-raise #f)))
+              (if escape (escape condition) (paal-vm-raise-escape! condition)))
+            result)))
 
     ;; Hand `result` back to the caller of a completed HOST call or guard.
     (define (deliver-result! regs globals frames frame abs-base result tail?)

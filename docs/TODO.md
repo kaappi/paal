@@ -3,7 +3,7 @@
 Goal: make `pkaappi` a correct R7RS-small Scheme implementation that runs the
 same programs as `kaappi`, with the same CLI conventions.
 
-Current: Stage 6 complete (self-hosting). **418 tests pass** (was 194 before Phase 1–2).
+Current: Stage 6 complete (self-hosting). **429 tests pass** (was 194 before Phase 1–2).
 
 ---
 
@@ -78,12 +78,14 @@ Missing primitives added to `paal-initial-env` (`lib/kaappi/paal/vm.sld`):
 - [x] `make-parameter` / `parameterize` — both pipelines. A parameter is a closure
       over a 2-slot cell `#(value converter)`; passing it `%paal-param-key` returns
       the cell, so `%paal-parameterize` can rebind it without a registry. No VM
-      marker was needed in the end: `guard` already provides the unwind protection
-      (restore, then re-raise), and since paal has no continuations for paal
-      closures, a raise is the only non-local exit from the extent. HOST
-      `make-parameter` could not be reused — a HOST parameter is only rebindable
-      through HOST `parameterize`, which is syntax, so nothing can install a value
-      procedurally. See `docs/architecture.md` § Parameter objects.
+      marker was needed: cells are ordinary vectors and the wind stack is an
+      ordinary list, so nothing here needs the VM. Restoring on a raise belongs
+      to the enclosing `guard` — see the dynamic-environment entry below — and
+      since paal has no continuations for paal closures, a raise is the only
+      non-local exit from the extent. HOST `make-parameter` could not be reused —
+      a HOST parameter is only rebindable through HOST `parameterize`, which is
+      syntax, so nothing can install a value procedurally. See
+      `docs/architecture.md` § Parameter objects.
 
 **Known limitations (still open):**
 
@@ -102,24 +104,43 @@ Missing primitives added to `paal-initial-env` (`lib/kaappi/paal/vm.sld`):
       `kaappi` on `PATH` here is v0.22.0. Paal running against an older kaappi
       still has the old ceiling, so this is a note about *which* kaappi you run
       paal with, not about paal.
-- [ ] `guard` re-raise **dynamic environment** — partially addressed. An unmatched
-      clause now re-raises with `raise-continuable` rather than `raise`, and a
-      `guard` is now correctly the innermost handler while its body runs, so an
-      enclosing `with-exception-handler` no longer swallows conditions belonging
-      to the guard. What remains is the environment itself: R7RS re-raises *at the
-      original raise point*, whereas paal has already unwound to the guard. It is
-      observable through `parameterize` —
+- [x] `guard` re-raise **dynamic environment** — done, and without the re-entrant
+      continuations this entry used to say it was blocked behind. R7RS 4.2.7
+      evaluates a guard's clauses in the dynamic environment of the `guard` but
+      re-raises an unmatched condition in that of the original `raise`; the
+      sample implementation jumps between the two with `call/cc` twice. Paal
+      moves between them by save and restore instead, which works because
+      parameterizations are its entire dynamic environment and each one is a
+      mutable cell rather than a stack frame — so a dynamic environment is data.
+      `%paal-parameterize` pushes a `#(cells news olds)` frame onto a shared-tail
+      wind stack, and the guard winds out to its own state for the clauses and
+      back in to the raise point's to re-raise. Two knock-on changes:
+      `parameterize` no longer has a cleanup handler (leaving the frames up is
+      what keeps the raise point reconstructable — the enclosing guard restores
+      them in one pass), and the expander emits an implicit
+      `(else %paal-guard-no-match)` rather than the re-raise itself, since the
+      re-raise now belongs to the machinery. See `docs/architecture.md` §
+      The wind stack.
+
+      **Paal is now more correct than its host here.** kaappi v0.22.0 answers
+      `2` where R7RS requires `1`:
 
       ```scheme
       (define p (make-parameter 1))
-      (with-exception-handler (lambda (e) (p))
-        (lambda () (guard (e ((number? e) 'num))
-                     (parameterize ((p 2)) (raise-continuable 'sym)))))
+      (guard (e (#t (p)))
+        (parameterize ((p 2))
+          (guard (e ((number? e) 'no-match)) (raise 'boom))))
       ```
-      R7RS says `2` (the re-raise happens inside the extent); paal says `1`.
-      Closing this needs re-entrant continuations: the R7RS sample `guard` uses
-      `call/cc` twice, jumping back to the raise point to re-raise there. Paal has
-      no `call/cc` over paal closures, so this is blocked behind that.
+      A guard that *declines* leaves its own dynamic environment in place, so the
+      next guard out evaluates its clauses in the wrong one. Not yet filed
+      upstream.
+
+      Still not R7RS, and unchanged by this work: an unmatched `raise-continuable`
+      is not resumable — the clauses run after the host stack has unwound, so
+      there is no raise point to return a value to. `(list 'got
+      (raise-continuable 'sym))` under a declining guard yields the outer
+      handler's value rather than `(got …)`. kaappi behaves the same way, and
+      closing it does need re-entrant continuations.
 
 ---
 

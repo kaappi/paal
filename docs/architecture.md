@@ -366,9 +366,8 @@ overflow is now an uncatchable `KP3008`. Paal is correct at every depth tested a
 a build of kaappi `main`. The fix is not in a release yet, so paal running against an
 older kaappi still inherits the old ceiling.
 
-See "Exception handlers" below for `raise-continuable`, and for the one part of
-`guard` that is still not R7RS — an unmatched clause re-raises from the guard's
-dynamic environment rather than the original raise point.
+See "Exception handlers" below for `raise-continuable`, and "The wind stack" for how
+a guard's two dynamic environments are kept apart.
 
 ---
 
@@ -431,19 +430,81 @@ conditions it exists for; and cleanup on a non-local exit is unnecessary, since 
 escape propagates to some enclosing guard whose `run-guard!` restores the stack to
 what it captured beforehand.
 
-**What is still not R7RS.** An unmatched clause re-raises with `raise-continuable`,
-as required — but from the guard's dynamic environment rather than the original
-raise point, because paal has already unwound by then. Visible through
-`parameterize`: a re-raise that R7RS performs inside the extent sees the
-parameterized value, while paal sees the restored one. The R7RS sample `guard` uses
-`call/cc` twice to jump back to the raise point; paal has no `call/cc` over paal
-closures, so this waits on that.
-
 The tree-walking VM keeps HOST `with-exception-handler` and inherits the host's own
 handler stack. It only needs the trampoline forced on both the thunk and the handler
 result: an unforced `(raise-continuable x)` in tail position would otherwise happen
 after the handler had been uninstalled, and an unforced handler result would become a
 thunk rather than the value of the raise.
+
+---
+
+## The wind stack
+
+R7RS 4.2.7 puts the two halves of a `guard` in two different dynamic environments.
+The clauses are evaluated in that of the `guard` expression; a condition no clause
+matched is re-raised in that of the *original* `raise`. The sample implementation
+gets there with `call/cc` twice — out to the guard to test the clauses, back to the
+raise point to re-raise — which paal cannot do, having no continuations over paal
+closures.
+
+It does not need them, because parameterizations are paal's entire dynamic
+environment and each one is a mutable cell rather than a stack frame. A dynamic
+environment is therefore *data*, and two of them can be moved between by save and
+restore rather than by jumping. `%paal-parameterize` pushes a frame
+`#(cells news olds)` onto `%paal-winds`; the frames form a shared-tail list, so the
+extents entered between two states W and W′ are exactly the frames of W that are not
+in W′, and `%paal-wind-out!` / `%paal-wind-in!` walk that difference.
+
+`run-guard!` reads `%paal-winds` on entry and hands it to `%paal-guard-catch`, which
+owns everything past the catch:
+
+```scheme
+(let ((w-raise %paal-winds))            ; host unwinding does not touch this
+  (%paal-wind-out! w-raise w-guard)     ; the guard's environment
+  (let ((result (clauses condition)))
+    (if (eq? result %paal-guard-no-match)
+        (begin (%paal-wind-in! w-raise w-guard)   ; back to the raise point
+               (raise-continuable condition))
+        result)))
+```
+
+Two consequences shape the rest of the design.
+
+**`parameterize` has no cleanup handler.** On a raise the frame stays on
+`%paal-winds` and the new values stay installed, which is exactly what makes the
+raise point still reconstructable when the guard looks. Restoring is the enclosing
+guard's job, and one `%paal-wind-out!` restores every extent between it and the raise
+in a single pass. Nothing else can leave a dynamic extent — a raise is paal's only
+non-local exit — so nothing else has to be caught. If paal ever gains `call/cc` over
+paal closures, this is the first place to revisit, along with `dynamic-wind`.
+
+**The expander stops emitting the re-raise.** A clause list with no `else` gets an
+implicit `(else %paal-guard-no-match)` instead of `(else (raise-continuable var))`.
+The re-raise has to be surrounded by the wind dance, so it belongs to the machinery,
+which knows both states; returning a sentinel is how the handler says "nothing
+matched, it is yours". The sentinel is a freshly allocated pair in
+`paal-initial-env`, so no value a program can write is `eq?` to it.
+
+Converters run once, when the extent is entered. The frame stores the converted
+values, so winding in again reuses them rather than converting a second time.
+
+Both pipelines implement this: the tree-walking VM as HOST procedures over a
+module-level `%paal-winds`, the bytecode VM as paal source compiled into globals.
+
+**Divergence from kaappi.** kaappi v0.22.0 answers `2` where R7RS requires `1`:
+
+```scheme
+(define p (make-parameter 1))
+(guard (e (#t (p)))                        ; this guard's environment has p = 1
+  (parameterize ((p 2))
+    (guard (e ((number? e) 'no-match))     ; declines
+      (raise 'boom))))
+```
+
+A guard that declines leaves the *declining* guard's dynamic environment in place, so
+the next guard out runs its clauses in the wrong one. Paal answers `1` here and in
+every variation tested. This is the one place paal is deliberately not
+bug-compatible with its host.
 
 ---
 
@@ -459,27 +520,17 @@ HOST `make-parameter` cannot be reused. A HOST parameter is only rebindable thro
 HOST `parameterize`, which is syntax rather than a procedure, so no paal-side code can
 install a value into one.
 
-`%paal-parameterize` reads the old values, installs the new ones through each
-parameter's converter, runs the thunk, and restores. Restoration happens on a raise
-as well, via `guard`:
-
-```scheme
-(let ((result (guard (e (#t (restore!) (raise e)))
-                (thunk))))
-  (restore!)
-  result)
-```
-
-This needs no VM marker of its own — unlike `guard`, which had to be one. `guard`
-already supplies the unwind protection, and a raise is the only non-local exit from a
-dynamic extent that paal has, since there are no continuations for paal closures. If
-paal ever gains `call/cc` over paal closures, this is one of the places that has to be
-revisited, along with `dynamic-wind`.
+`%paal-parameterize` reads the old values, converts the new ones through each
+parameter's converter, pushes a wind frame, installs, runs the thunk, and restores.
+It needs no VM marker of its own — unlike `guard`, which had to be one — because
+nothing here needs the VM: cells are ordinary vectors and the wind stack is an
+ordinary list. Restoration on a raise is the enclosing guard's job; see "The wind
+stack" above for why doing it here as well would be wrong.
 
 Both pipelines provide it: the tree-walking VM as HOST procedures in
-`paal-initial-env` (forcing the trampoline on the converter and on the thunk, the
-latter *inside* the guard), the bytecode VM as paal source compiled into globals by
-`pkaappi-make-globals`, which overrides the HOST bindings.
+`paal-initial-env` (forcing the trampoline on the converter and on the thunk), the
+bytecode VM as paal source compiled into globals by `pkaappi-make-globals`, which
+overrides the HOST bindings.
 
 ---
 

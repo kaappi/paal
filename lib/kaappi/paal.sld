@@ -334,13 +334,19 @@
         ; hands back the cell so %paal-parameterize can rebind it.  That avoids a
         ; registry mapping parameters to cells, which would leak.
         ;
-        ; The whole thing is paal source rather than a VM marker because `guard`
-        ; already gives the unwind protection parameterize needs: restore on a
-        ; raise, then re-raise.  Continuations are the other way out of a dynamic
-        ; extent, and paal has none for paal closures, so this covers every exit.
+        ; The whole thing is paal source rather than a VM marker because nothing
+        ; here needs the VM: cells are ordinary vectors and the wind stack is an
+        ; ordinary list.  A raise is the only non-local exit from the extent —
+        ; paal has no continuations for paal closures — and the enclosing guard
+        ; unwinds it, so parameterize itself needs no cleanup handler.
+        ;
+        ; %paal-winds is that stack, and the reason `guard` can honour R7RS
+        ; 4.2.7 without capturing a continuation.  See the long note beside its
+        ; HOST twin in lib/kaappi/paal/vm.sld.
         (paal-run-bc
           (pkaappi-compile
             "(define %paal-param-key (list 'paal-param-key))
+             (define %paal-winds '())
              (define (make-parameter init . rest)
                (let* ((conv (if (null? rest) (lambda (x) x) (car rest)))
                       (cell (vector (conv init) conv)))
@@ -359,30 +365,70 @@
                (if (null? cells)
                    '()
                    (cons (vector-ref (car cells) 0) (%paal-param-read (cdr cells)))))
-             ; Install converts through each parameter's own converter; restore
-             ; does not — the saved values were already converted when stored.
-             (define (%paal-param-install! cells vals)
+             ; Each converter runs once, when the extent is entered — winding
+             ; back in later reuses the converted values rather than converting
+             ; again, so %paal-param-write! is a plain write in both directions.
+             (define (%paal-param-convert cells vals)
+               (if (null? cells)
+                   '()
+                   (cons ((vector-ref (car cells) 1) (car vals))
+                         (%paal-param-convert (cdr cells) (cdr vals)))))
+             (define (%paal-param-write! cells vals)
                (if (null? cells)
                    (if #f #f)
                    (begin
-                     (vector-set! (car cells) 0
-                                  ((vector-ref (car cells) 1) (car vals)))
-                     (%paal-param-install! (cdr cells) (cdr vals)))))
-             (define (%paal-param-restore! cells olds)
-               (if (null? cells)
-                   (if #f #f)
+                     (vector-set! (car cells) 0 (car vals))
+                     (%paal-param-write! (cdr cells) (cdr vals)))))
+             (define (%paal-wind-out! from to)
+               (if (eq? from to)
+                   #t
                    (begin
-                     (vector-set! (car cells) 0 (car olds))
-                     (%paal-param-restore! (cdr cells) (cdr olds)))))
+                     (%paal-param-write! (vector-ref (car from) 0)
+                                         (vector-ref (car from) 2))
+                     (%paal-wind-out! (cdr from) to))))
+             (define (%paal-wind-in! from to)
+               (if (eq? from to)
+                   #t
+                   (begin
+                     (%paal-wind-in! (cdr from) to)
+                     (%paal-param-write! (vector-ref (car from) 0)
+                                         (vector-ref (car from) 1)))))
+             ; No cleanup handler around the thunk: on a raise the frame stays
+             ; on %paal-winds and the values stay installed, which is what makes
+             ; the raise point still reconstructable when the guard looks.
              (define (%paal-parameterize params vals thunk)
                (let* ((cells (%paal-param-cells params))
-                      (olds  (%paal-param-read cells)))
-                 (%paal-param-install! cells vals)
-                 (let ((result (guard (e (#t (%paal-param-restore! cells olds)
-                                             (raise e)))
-                                 (thunk))))
-                   (%paal-param-restore! cells olds)
-                   result)))")
+                      (olds  (%paal-param-read cells))
+                      (news  (%paal-param-convert cells vals))
+                      (saved %paal-winds))
+                 (set! %paal-winds (cons (vector cells news olds) saved))
+                 (%paal-param-write! cells news)
+                 (let ((result (thunk)))
+                   (%paal-param-write! cells olds)
+                   (set! %paal-winds saved)
+                   result)))
+             ; Everything a guard does once its body has raised.  run-guard!
+             ; calls this with the wind stack as it stood when the guard was
+             ; entered; %paal-winds still holds the raise point's, because
+             ; unwinding the host stack does not touch it.
+             (define (%paal-guard-catch condition clauses w-guard)
+               (let ((w-raise %paal-winds))
+                 (%paal-wind-out! w-raise w-guard)
+                 (set! %paal-winds w-guard)
+                 (let ((result (clauses condition)))
+                   (if (eq? result %paal-guard-no-match)
+                       (begin
+                         ; Back to the raise point to re-raise there, per R7RS.
+                         ; If an outer handler returns, the raise-continuable
+                         ; that got us here returns its value and the extent
+                         ; carries on, so wind out again before handing it back.
+                         (%paal-wind-in! w-raise w-guard)
+                         (set! %paal-winds w-raise)
+                         (let ((v (raise-continuable condition)))
+                           (%paal-wind-out! w-raise w-guard)
+                           (set! %paal-winds w-guard)
+                           v))
+                       result))))")
           g)
         g))
 

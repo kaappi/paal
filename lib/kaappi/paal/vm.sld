@@ -83,6 +83,53 @@
 
     (define %paal-param-key (list 'paal-param-key))
 
+    ;; --- Dynamic extent: the wind stack (HOST side) ---
+    ;;
+    ;; Paal's whole dynamic environment is the parameterizations in effect, and
+    ;; each one lives in a mutable cell.  Cells alone say what the values *are*,
+    ;; not how to get back to an earlier state, so every %paal-parameterize also
+    ;; pushes a frame #(cells news olds) here.  The stack is a shared-tail list,
+    ;; so any two states are related by walking one down to the other: the
+    ;; frames of W that are not in W' are exactly the extents entered between.
+    ;;
+    ;; This is what lets `guard` re-raise an unmatched condition in the dynamic
+    ;; environment of the original raise, as R7RS requires, without capturing a
+    ;; continuation: wind out to the guard's state to run the clauses, wind back
+    ;; in to the raise point's state to re-raise.  See %paal-guard-run below.
+    ;;
+    ;; The `news` are stored converted, so winding in again never re-runs a
+    ;; parameter's converter — R7RS converts once, when the extent is entered.
+
+    (define %paal-winds '())
+
+    (define (paal-wind-write! cells vals)
+      (for-each (lambda (c v) (vector-set! c 0 v)) cells vals))
+
+    ;; Leave the extents in `from` that are not in `to`, innermost first.
+    (define (paal-wind-out! from to)
+      (if (eq? from to)
+          #t
+          (let ((frame (car from)))
+            (paal-wind-write! (vector-ref frame 0) (vector-ref frame 2))
+            (paal-wind-out! (cdr from) to))))
+
+    ;; Re-enter them, outermost first — the mirror image of paal-wind-out!.
+    (define (paal-wind-in! from to)
+      (if (eq? from to)
+          #t
+          (begin
+            (paal-wind-in! (cdr from) to)
+            (let ((frame (car from)))
+              (paal-wind-write! (vector-ref frame 0) (vector-ref frame 1))))))
+
+    ;; --- guard's "no clause matched" sentinel (HOST side) ---
+    ;; The expander gives a clause list with no else an implicit
+    ;; (else %paal-guard-no-match), so the machinery — not the handler — owns
+    ;; the re-raise and can put the dynamic environment back first.  A fresh
+    ;; pair, so no value a program can write is eq? to it.
+
+    (define %paal-guard-no-match (list 'paal-guard-no-match))
+
     ;; --- Command-line for user programs ---
     ;; Set by pkaappi-set-command-line! before running a user file.
     ;; The paal-initial-env binds (command-line) to read this variable.
@@ -231,9 +278,34 @@
              ;; returning that thunk unforced would defer the body's real work until
              ;; after the guard's dynamic extent had exited — and any exception it
              ;; raised would escape uncaught.
-             (%paal-guard-run . ,(lambda (body handler)
-                                   (guard (e (#t (trampoline (handler e))))
-                                     (trampoline (body)))))
+             ;;
+             ;; The wind dance around the clauses is R7RS 4.2.7: the clauses are
+             ;; evaluated in the dynamic environment of the `guard`, but an
+             ;; unmatched condition is re-raised in the dynamic environment of the
+             ;; original raise.  Unwinding the host stack does not touch the wind
+             ;; stack, so on arrival here it still describes the raise point;
+             ;; winding out gives the guard's environment for the clauses and
+             ;; winding back in gives the raise point's for the re-raise.
+             (%paal-guard-run
+               . ,(lambda (body handler)
+                    (let ((w-guard %paal-winds))
+                      (guard (e (#t (let ((w-raise %paal-winds))
+                                      (paal-wind-out! w-raise w-guard)
+                                      (set! %paal-winds w-guard)
+                                      (let ((r (trampoline (handler e))))
+                                        (if (eq? r %paal-guard-no-match)
+                                            (begin
+                                              (paal-wind-in! w-raise w-guard)
+                                              (set! %paal-winds w-raise)
+                                              (let ((v (raise-continuable e)))
+                                                (paal-wind-out! w-raise w-guard)
+                                                (set! %paal-winds w-guard)
+                                                v))
+                                            r)))))
+                        (trampoline (body))))))
+             ;; Named in the implicit else the expander gives a clause list, so
+             ;; both pipelines compare against the same object.
+             (%paal-guard-no-match . ,%paal-guard-no-match)
              (error-object? . ,error-object?)
              (error-object-message . ,error-object-message)
              (error-object-irritants . ,error-object-irritants)
@@ -300,9 +372,7 @@
              ;; pipeline installs a paal-compiled equivalent over the top.
              ;;
              ;; Converter and thunk may be paal lambdas, which return trampoline
-             ;; thunks rather than values, so each call is forced — and the body
-             ;; is forced *inside* the guard, so a raise cannot escape the
-             ;; restore. Same reasoning as %paal-guard-run above.
+             ;; thunks rather than values, so each call is forced.
              (make-parameter
                . ,(lambda (init . rest)
                     (let* ((conv (if (null? rest) (lambda (x) x) (car rest)))
@@ -312,20 +382,26 @@
                           ((null? args) (vector-ref cell 0))
                           ((eq? (car args) %paal-param-key) cell)
                           (else (error "parameter: unexpected argument")))))))
+             ;;
+             ;; No cleanup guard around the thunk, deliberately.  Restoring on a
+             ;; raise is now the enclosing guard's job: it winds out to its own
+             ;; state before running its clauses, which restores every extent
+             ;; between it and the raise in one pass.  Doing it here as well
+             ;; would tear down the raise point before the guard could look at
+             ;; it, which is exactly the environment R7RS re-raises in.
              (%paal-parameterize
                . ,(lambda (params vals thunk)
                     (let* ((cells (map (lambda (p) (p %paal-param-key)) params))
                            (olds  (map (lambda (c) (vector-ref c 0)) cells))
-                           (restore (lambda ()
-                                      (for-each (lambda (c v) (vector-set! c 0 v))
-                                                cells olds))))
-                      (for-each (lambda (c v)
-                                  (vector-set! c 0
-                                               (trampoline ((vector-ref c 1) v))))
-                                cells vals)
-                      (let ((result (guard (e (#t (restore) (raise e)))
-                                      (trampoline (thunk)))))
-                        (restore)
+                           (news  (map (lambda (c v)
+                                         (trampoline ((vector-ref c 1) v)))
+                                       cells vals))
+                           (saved %paal-winds))
+                      (set! %paal-winds (cons (vector cells news olds) saved))
+                      (paal-wind-write! cells news)
+                      (let ((result (trampoline (thunk))))
+                        (paal-wind-write! cells olds)
+                        (set! %paal-winds saved)
                         result))))
 
              ;; Features
@@ -482,6 +558,10 @@
     ;; recursive and mutually-recursive definitions work.
     (define (paal-eval-program nodes)
       (set! %paal-toplevel-env (paal-initial-env))
+      ; Fresh program, fresh dynamic extent.  A previous program that died
+      ; inside a parameterize left its frames here; nothing can wind them out
+      ; now, and its cells are unreachable anyway.
+      (set! %paal-winds '())
       (let loop ((ns nodes) (env %paal-toplevel-env) (last #f))
         (if (null? ns)
             last

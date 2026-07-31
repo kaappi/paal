@@ -27,7 +27,7 @@ Stage 4: pkaappi can compile pkaappi
 Stage 5: pkaappi binary (no host dependency)
 ```
 
-## Current Status: Stage 6 complete — 418 tests pass
+## Current Status: Stage 6 complete — 429 tests pass
 
 Paal can load all 8 of its own library files through its bytecode pipeline and
 compile and execute arbitrary Scheme through its own loaded pipeline with no HOST

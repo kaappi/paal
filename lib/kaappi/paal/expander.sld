@@ -1060,7 +1060,7 @@
     ;;
     ;; (guard (var clause ...) body ...)
     ;;   => (%paal-guard-run (lambda () body ...)
-    ;;                       (lambda (var) (cond clause ... (else (raise var)))))
+    ;;                       (lambda (var) (cond clause ... (else %paal-guard-no-match))))
     ;;
     ;; %paal-guard-run runs the body thunk under a HOST guard and, on an
     ;; exception, applies the handler to the condition.  Each pipeline provides
@@ -1068,9 +1068,12 @@
     ;; its closures are themselves HOST procedures, while the bytecode VM binds
     ;; a marker that do-call! recognizes and acts on (see vm-bc.sld).
     ;;
-    ;; The trailing else re-raises unmatched conditions, per R7RS — but from the
-    ;; handler's dynamic environment rather than the original one, so a
-    ;; raise-continuable that no clause matches cannot be resumed.
+    ;; A clause list with no else gets an implicit (else %paal-guard-no-match)
+    ;; rather than an outright re-raise.  R7RS re-raises an unmatched condition
+    ;; in the dynamic environment of the original raise, not the guard's, so the
+    ;; re-raise has to be surrounded by the wind dance that gets back there —
+    ;; and that belongs to the machinery, which knows both states.  Returning a
+    ;; sentinel is how the handler says "nothing matched, it is yours".
 
     (define (expand-guard form)
       (let* ((var-and-clauses (cadr form))
@@ -1083,13 +1086,9 @@
                                (cond ((null? (cdr cs))
                                       (and (pair? (car cs)) (eq? (caar cs) 'else)))
                                      (else (loop (cdr cs)))))))
-             ; R7RS: with no clause matching and no else, the object is re-raised
-             ; with raise-continuable, not raise — so an outer handler that
-             ; returns a value supplies one rather than tripping the
-             ; "handler returned" secondary exception.
              (all-clauses (if has-else?
                               clauses
-                              (append clauses `((else (raise-continuable ,var)))))))
+                              (append clauses '((else %paal-guard-no-match))))))
         `(%paal-guard-run
            (lambda () ,@body)
            (lambda (,var) (cond ,@all-clauses)))))

@@ -1701,8 +1701,9 @@
     (pkaappi-run-bc-string
       "(define p (make-parameter 5 (lambda (x) (* x 2))))
        (parameterize ((p 10)) (p))"))
-  ;; The reason parameterize needed guard: a raise out of the body must still
-  ;; restore, otherwise the old value is lost for the rest of the program.
+  ;; A raise out of the body must still restore, otherwise the old value is
+  ;; lost for the rest of the program.  parameterize does not do this itself —
+  ;; the enclosing guard winds out to its own state; see the group below.
   (test-equal "value is restored when the body raises"
     1
     (pkaappi-run-bc-string
@@ -1743,6 +1744,115 @@
     (pkaappi-run-string
       "(define p (make-parameter 1))
        (guard (e (#t (p))) (parameterize ((p 99)) (raise 'boom)))")))
+
+;; ---------------------------------------------------------------
+;; guard and the dynamic environment
+;; ---------------------------------------------------------------
+;;
+;; R7RS 4.2.7 puts the two halves of a guard in two different dynamic
+;; environments: the clauses are evaluated in that of the `guard` expression,
+;; but a condition no clause matched is re-raised in that of the original
+;; `raise`.  parameterize is what makes the difference observable.
+;;
+;; The sample implementation gets there with call/cc twice — out to the guard
+;; to test the clauses, back to the raise point to re-raise.  Paal has no
+;; continuations over paal closures, so it does it by save and restore instead:
+;; a parameterize pushes a frame on %paal-winds, and since the frames form a
+;; shared-tail list, any two states are related by winding one down to the
+;; other.  That works only because parameterizations are paal's entire dynamic
+;; environment, and each one is a mutable cell rather than a stack frame.
+
+(define (both-pipelines src)
+  (list (pkaappi-run-bc-string src) (pkaappi-run-string src)))
+
+(test-group "guard: dynamic environment"
+  (test-equal "clauses run in the guard's environment, not the raise's"
+    '(1 1)
+    (both-pipelines
+      "(define p (make-parameter 1))
+       (guard (e (#t (p))) (parameterize ((p 2)) (raise 'x)))"))
+  ;; The item this group exists for.  Before, the guard had already unwound by
+  ;; the time it re-raised, so the outer handler saw 1.
+  (test-equal "unmatched condition is re-raised in the raise's environment"
+    '(2 2)
+    (both-pipelines
+      "(define p (make-parameter 1))
+       (with-exception-handler (lambda (e) (p))
+         (lambda () (guard (e ((number? e) 'num))
+                      (parameterize ((p 2)) (raise-continuable 'sym)))))"))
+  (test-equal "re-raise environment survives two nested extents"
+    '(3 3)
+    (both-pipelines
+      "(define p (make-parameter 1))
+       (with-exception-handler (lambda (e) (p))
+         (lambda () (guard (e ((number? e) 'num))
+                      (parameterize ((p 2))
+                        (parameterize ((p 3)) (raise-continuable 'sym))))))"))
+  ;; A guard that declines must leave the environment as it found it, so the
+  ;; next guard out still sees its own.  kaappi v0.22.0 answers 2 here; R7RS
+  ;; says the outer guard's clauses run in the outer guard's environment.
+  (test-equal "a declining guard does not disturb the guard outside it"
+    '(1 1)
+    (both-pipelines
+      "(define p (make-parameter 1))
+       (guard (e (#t (p)))
+         (parameterize ((p 2))
+           (guard (e ((number? e) 'no-match)) (raise 'boom))))"))
+  (test-equal "same, with the raise inside a further extent"
+    '(1 1)
+    (both-pipelines
+      "(define p (make-parameter 1))
+       (guard (e (#t (p)))
+         (parameterize ((p 2))
+           (guard (e ((number? e) 'no-match))
+             (parameterize ((p 3)) (raise 'boom)))))"))
+  (test-equal "a guard inside the extent keeps the extent's values"
+    '((2 2) (2 2))
+    (both-pipelines
+      "(define p (make-parameter 1))
+       (parameterize ((p 2)) (list (guard (e (#t (p))) (raise 'x)) (p)))"))
+  ;; A host-level error unwinds without consulting the paal handler stack, so
+  ;; this is the other way into run-guard!'s catch.
+  (test-equal "a primitive error winds out the same way"
+    '((1 1) (1 1))
+    (both-pipelines
+      "(define p (make-parameter 1))
+       (list (guard (e (#t (p))) (parameterize ((p 2)) (car '()))) (p))"))
+  ;; Winding back in must reuse the values converted on entry.  Converting
+  ;; again would double-apply the converter and change the parameter's value.
+  ;; calls is zeroed after make-parameter, which converts the initial value.
+  (test-equal "winding in again does not re-run the converter"
+    '((40 1) (40 1))
+    (both-pipelines
+      "(define calls 0)
+       (define r (make-parameter 0 (lambda (v) (set! calls (+ calls 1)) (* v 10))))
+       (set! calls 0)
+       (list (with-exception-handler (lambda (e) (r))
+               (lambda () (guard (e ((number? e) 'num))
+                            (parameterize ((r 4)) (raise-continuable 'sym)))))
+             calls)"))
+  (test-equal "the wind stack does not leak across iterations"
+    '((1 1) (1 1))
+    (both-pipelines
+      "(define p (make-parameter 1))
+       (let loop ((i 0))
+         (if (= i 20)
+             (list (p) (p))
+             (begin (guard (e (#t (p))) (parameterize ((p i)) (raise 'e)))
+                    (loop (+ i 1)))))"))
+  ;; An explicit else takes the sentinel path out of play entirely.
+  (test-equal "an explicit else still short-circuits the re-raise"
+    '(1 1)
+    (both-pipelines
+      "(define p (make-parameter 1))
+       (guard (e (else (p))) (parameterize ((p 2)) (raise 'x)))"))
+  (test-equal "a clause body that raises reaches the next guard out"
+    '((outer 1) (outer 1))
+    (both-pipelines
+      "(define p (make-parameter 1))
+       (guard (out (#t (list out (p))))
+         (parameterize ((p 2))
+           (guard (in (#t (raise 'outer))) (raise 'first))))")))
 
 ;; ---------------------------------------------------------------
 ;; Mutable variables captured by closures
