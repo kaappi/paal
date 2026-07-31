@@ -3,7 +3,7 @@
 Goal: make `paal` a correct R7RS-small Scheme implementation that runs the
 same programs as `kaappi`, with the same CLI conventions.
 
-Current: Stage 6 complete (self-hosting). **454 tests pass** (was 194 before Phase 1–2).
+Current: Stage 6 complete (self-hosting). **467 tests pass** (was 194 before Phase 1–2).
 
 ---
 
@@ -215,8 +215,10 @@ Gaps in `lib/kaappi/paal/reader.sld`:
 
 - [x] **Script args forwarding** — `paal file.scm arg1 arg2` sets `(command-line)`
       to `("file.scm" "arg1" "arg2")` inside user programs via HOST lambda in globals
-- [ ] **`--lib-path <dir>`** — allow user programs to `(import (foo bar))` from
-      an external directory (requires Phase 5 module system first)
+- [x] **`--lib-path <dir>`** — repeatable, consumed before the subcommand.
+      Directories are searched in the order given, after the default `.`.
+      Works on the HOST pipeline (`pkaappi-run-bc-string` and friends). **Not
+      yet on the self-hosted path** — see the entry below.
 - [x] **`check` subcommand** — `paal check <file>...` reads, expands, analyzes and
       *emits*, then throws the bytecode away. Emitting rather than stopping at
       the IR is the point: register allocation and upvalue resolution happen
@@ -238,15 +240,28 @@ Gaps in `lib/kaappi/paal/reader.sld`:
 `import` and `export` both expand to `(quote #f)` — they are no-ops. Real library
 resolution is needed before `--lib-path` or SRFI imports can work.
 
-- [ ] **Real `import` resolution** — search `--lib-path` + standard paths for
-      `(foo bar)` → `foo/bar.sld`; compile and load it into the current globals
-- [ ] **Real `export` filtering** — when a `define-library` body runs, only exported
-      names are visible to importers (not all definitions)
-- [ ] **Selective import forms** — `(import (only (scheme base) car cdr))`,
-      `(import (rename ...))`, `(import (except ...))`, `(import (prefix ...))`
-- [ ] **`cond-expand` feature list** — `(paal)`, `(r7rs)`, `(kaappi)` feature
-      identifiers for portability
-- [ ] **Circular import detection** — guard against infinite load loops
+- [x] **Real `import` resolution** — `(foo bar)` → `foo/bar.sld`, searched along
+      `--lib-path` after `.`. Paal links libraries **statically**: the library
+      is expanded, its top-level definitions renamed to names unique to it, and
+      the result spliced in front of the importing program, which then gets the
+      imported names as aliases of the renamed ones. That matches paal's flat
+      globals, and matches where the binary is going anyway — a bundled `paal`
+      carries its libraries with it.
+- [x] **Real `export` filtering** — a consequence of the renaming rather than a
+      separate mechanism: an unexported name exists only under its mangled
+      name, which nothing outside ever aliases. `(export (rename internal
+      external))` works too.
+- [x] **Selective import forms** — `only`, `except`, `rename`, `prefix`. Each
+      wraps a nested spec and transforms the alias list, so they compose in any
+      order: `(prefix (only (m math) square) x:)` is fine. `only`/`except`
+      naming a binding the library does not export is an error.
+- [x] **`cond-expand` feature list** — `paal`, `kaappi`, `r7rs`, `scheme`.
+      `kaappi` is included because paal targets the same language: a library
+      guarded by `(cond-expand (kaappi ...))` is written against primitives paal
+      also provides, and excluding ourselves would take such code down a
+      portable-fallback path for no reason.
+- [x] **Circular import detection** — a load-in-progress list; a cycle reports
+      the chain rather than looping.
 
 ---
 
@@ -350,6 +365,37 @@ Issues that span stages rather than belonging to one phase.
 
 **Open:**
 
+- [ ] **`--lib-path` does not reach the self-hosted path** — `paal file.scm`
+      loads a second copy of the expander from `cache/*.pbc`, and that copy has
+      its own `%paal-lib-paths`, still just `("."`). `--lib-path` is applied to
+      the HOST copy only, so a self-hosted `import` searches `.` alone, finds
+      nothing, and silently resolves to no aliases. Replaying the paths into
+      the loaded pipeline is the obvious fix and was attempted:
+      `(paal-lib-path-add! "dir")` run through `pkaappi-run-string-in` reports
+      `not a procedure`, so the name is not reachable in a loaded pipeline's
+      globals the way the other pipeline entry points are. Needs diagnosing
+      before it can be re-landed; the attempt is reverted, so the self-hosted
+      path behaves exactly as it did before the module system existed. The same
+      per-copy module state has bitten `%paal-macros`, `<closure>` and
+      `paal-vm-raise-escape!` before — see `docs/architecture.md` § Values that
+      cross the HOST boundary.
+- [ ] **A library not found on the path is a silent no-op** — resolving
+      `(foo bar)` to nothing rather than erroring is what `import` did before
+      there was a library system, and paal's own stages depend on it:
+      `pkaappi-load-file` deliberately loads every pipeline `.sld` into one
+      shared globals table, and each of them imports `(kaappi paal ir)`, a name
+      that is never on the search path. The cost is that a mistyped library
+      name does nothing instead of saying so. Making it an error needs the
+      pipeline's own loading to stop going through `import`.
+- [ ] **A library's private macros leak to its importer** — private *values*
+      are renamed, and the renaming is what hides them; macros are not.
+      Dropping unexported macros after loading was tried first and breaks an
+      *exported* macro whose template calls a private one — the template still
+      names it and the table no longer has it. Fixing it properly means
+      rewriting exported templates to name the private macro under a mangled
+      name, and by then a transformer is a closure over its rules rather than
+      data one can walk. The current trade leaks a name that can collide;
+      the alternative silently breaks working library code.
 - [ ] **Expander diagnostics name internal procedures, not the user's mistake** —
       `paal check` on `(let ((a)) a)` reports `type error in 'cadr': expected
       pair, got ()`, which says nothing about the malformed binding. The

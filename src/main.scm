@@ -23,6 +23,7 @@
   (display "  repl                    Start interactive REPL\n")
   (display "  eval <expr>             Evaluate an expression\n")
   (display "\nOptions:\n")
+  (display "  --lib-path <dir>        Add a directory to the library search path\n")
   (display "  -h, --help              Show this help\n")
   (display "  --version               Show version\n"))
 
@@ -33,7 +34,18 @@
         (pkaappi-run-pbc-file path)  ; .pbc: no command-line forwarding yet
         (apply pkaappi-self-run-file path extra-args))))
 
-(define (main args)
+;; --lib-path <dir> may appear any number of times, before the subcommand.
+;; Directories are searched in the order given, after the default ".".
+(define (strip-lib-paths args)
+  (let loop ((as args))
+    (if (and (pair? as) (string=? (car as) "--lib-path"))
+        (if (null? (cdr as))
+            (begin (display "error: --lib-path: missing directory\n") (exit 1))
+            (begin (paal-lib-path-add! (cadr as)) (loop (cddr as))))
+        as)))
+
+(define (main raw-args)
+  (define args (strip-lib-paths raw-args))
   (cond
     ; No args → REPL (matches kaappi's behavior)
     ((null? args)

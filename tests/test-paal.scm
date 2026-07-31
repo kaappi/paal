@@ -408,8 +408,10 @@
 ;; ----------------------------------------------------------------
 
 (test-group "define-library"
-  (test-assert "import expands to no-op"
-    (equal? '(quote #f)
+  ;; (scheme base) and friends have no file — their bindings are already in
+  ;; paal-initial-env — so importing one yields no aliases and no forms.
+  (test-assert "importing a built-in library yields nothing to run"
+    (equal? '(begin (begin))
             (paal-expand '(import (scheme base)))))
   (test-assert "export expands to no-op"
     (equal? '(quote #f)
@@ -2125,5 +2127,75 @@
   (test-equal "an empty file list is vacuously clean"
     #t
     (pkaappi-check-files '())))
+
+;; ---------------------------------------------------------------
+;; Module system
+;; ---------------------------------------------------------------
+;;
+;; Libraries are linked statically: `import` finds the .sld, expands it,
+;; renames its top-level definitions to names unique to that library, splices
+;; the result in front of the program, and defines the imported names as
+;; aliases of the renamed ones.  Export filtering is a consequence of the
+;; renaming rather than a separate mechanism — an unexported name exists only
+;; under its mangled name, which nothing outside ever aliases.
+
+;; Fixture libraries live in tests/libs/ so they are ordinary committed files
+;; rather than something the suite has to create — R7RS has no mkdir.
+
+(define (module-run src) (pkaappi-run-bc-string src))
+
+(paal-lib-path-add! "tests/libs")
+
+(test-group "module system"
+  (test-equal "a library's exports are visible, its internals are not"
+    '(25 27 unbound)
+    (module-run
+      "(import (m math))
+       (list (square 5) (cube 3) (guard (e (#t 'unbound)) (helper 2)))"))
+  (test-equal "imports are transitive through a library"
+    '("hi x" 16)
+    (module-run "(import (m greet)) (list (greet \"x\") (area 4))"))
+  (test-equal "only"
+    '(16 no-cube)
+    (module-run
+      "(import (only (m math) square))
+       (list (square 4) (guard (e (#t 'no-cube)) (cube 2)))"))
+  (test-equal "except"
+    '(16 no-cube)
+    (module-run
+      "(import (except (m math) cube))
+       (list (square 4) (guard (e (#t 'no-cube)) (cube 2)))"))
+  (test-equal "prefix"
+    '(16 8)
+    (module-run "(import (prefix (m math) m:)) (list (m:square 4) (m:cube 2))"))
+  (test-equal "rename"
+    '(16 8)
+    (module-run
+      "(import (rename (m math) (square sq))) (list (sq 4) (cube 2))"))
+  ;; The modifiers wrap a nested spec, so they compose in any order.
+  (test-equal "prefix composed with only"
+    36
+    (module-run "(import (prefix (only (m math) square) x:)) (x:square 6)"))
+  (test-equal "importing the same library twice is idempotent"
+    9
+    (module-run "(import (m math)) (import (m math)) (square 3)"))
+  (test-equal "only naming a non-export is an error"
+    'error
+    (guard (e (#t 'error)) (module-run "(import (only (m math) nope)) 1")))
+  (test-equal "a circular import is reported, not looped on"
+    'error
+    (guard (e (#t 'error)) (module-run "(import (c a)) (a-thing)")))
+  ;; A macro has no run-time value, so importing one is a macro-table entry
+  ;; rather than a define — (define swap! swap!) would be unbound.
+  (test-equal "an exported macro works at the use site"
+    '(2 1)
+    (module-run
+      "(import (m mac)) (define x 1) (define y 2) (swap! x y) (list x y)"))
+  (test-equal "an exported macro may use a private one"
+    500
+    (module-run "(import (m mac)) (twice 5)"))
+  (test-equal "a built-in library import yields nothing to run"
+    7
+    (module-run "(import (scheme base)) (+ 3 4)")))
 
 (test-exit)

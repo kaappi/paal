@@ -16,7 +16,8 @@
 
 (define-library (kaappi paal expander)
   (import (scheme base) (scheme file) (scheme read))
-  (export paal-expand paal-expand-all paal-macros-reset! gref-name)
+  (export paal-expand paal-expand-all paal-macros-reset! gref-name
+          paal-lib-path-add! paal-lib-paths-list paal-libraries-reset!)
   (begin
 
     ;; ---------------------------------------------------------------
@@ -53,14 +54,351 @@
     ;; as the definitions they sit alongside — `load`-style entry points that
     ;; add to an existing table deliberately do not reset, so macros accumulate
     ;; across loaded files and across REPL inputs.
+    ;; Loaded libraries are reset alongside the macros, and for the same
+    ;; reason: both are expander state scoped to one program.  A library's
+    ;; forms are spliced into the program that imports it, so a second program
+    ;; needs them spliced again — remembering that they had already been
+    ;; emitted would hand the next program aliases pointing at definitions that
+    ;; are not in its globals table.  Keeping the two in one procedure means a
+    ;; new call site cannot reset one and forget the other.
     (define (paal-macros-reset!)
-      (set! %paal-macros '()))
+      (set! %paal-macros '())
+      (paal-libraries-reset!))
 
     ;; ---------------------------------------------------------------
     ;; Feature list for cond-expand
     ;; ---------------------------------------------------------------
 
-    (define %paal-features '(paal r7rs scheme))
+    ;; `kaappi` is here because paal targets the same language: a library
+    ;; guarded by (cond-expand (kaappi ...)) is written against primitives paal
+    ;; also provides, and excluding ourselves would send such code down a
+    ;; portable-fallback path for no reason.
+    (define %paal-features '(paal kaappi r7rs scheme))
+
+    ;; ---------------------------------------------------------------
+    ;; Library system
+    ;; ---------------------------------------------------------------
+    ;;
+    ;; Paal links libraries statically.  `(import (foo bar))` finds foo/bar.sld
+    ;; on the library path, expands it, renames its top-level definitions to
+    ;; names unique to that library, and splices the result in front of the
+    ;; importing program — then defines the imported names as aliases of the
+    ;; renamed ones.
+    ;;
+    ;; Export filtering falls out of the renaming rather than needing a
+    ;; mechanism: a name the library did not export exists only under its
+    ;; mangled name, which nothing outside ever aliases.  Selective import is
+    ;; then just a transformation on the alias list, which is why `only`,
+    ;; `except`, `rename` and `prefix` compose in any order.
+    ;;
+    ;; Renaming runs *after* expansion, over core forms only, so `lambda` is the
+    ;; single binder the substitution has to know about.  Doing it before
+    ;; expansion would mean teaching it every derived binding form.
+    ;;
+    ;; Splicing rather than separate compilation matches paal's flat globals,
+    ;; and matches where the binary is going anyway — a bundled `paal` carries
+    ;; its libraries with it.
+
+    (define %paal-lib-paths '("."))
+    (define %paal-libraries '())      ; name -> alist of public-name -> internal
+    (define %paal-loading   '())      ; names being loaded, for cycle detection
+    (define %paal-pending   '())      ; library forms not yet handed to a program
+    (define %paal-emitted   '())      ; names whose forms have been handed over
+
+    (define (paal-lib-path-add! dir)
+      (unless (member dir %paal-lib-paths)
+        (set! %paal-lib-paths (append %paal-lib-paths (list dir)))))
+
+    ;; Read back for the self-hosted entry points.  Under self-hosting the
+    ;; loaded pipeline is a second copy of this library with its own
+    ;; %paal-lib-paths, and --lib-path was only ever applied to the HOST copy —
+    ;; so the loaded expander searched "." alone and silently found nothing.
+    (define (paal-lib-paths-list) %paal-lib-paths)
+
+    (define (paal-libraries-reset!)
+      (set! %paal-libraries '())
+      (set! %paal-loading '())
+      (set! %paal-pending '())
+      (set! %paal-emitted '()))
+
+    ;; `(scheme base)` and friends have no file: their bindings are already in
+    ;; paal-initial-env, so importing one is a no-op that yields no aliases.
+    (define (builtin-library? name)
+      (and (pair? name) (eq? (car name) 'scheme)))
+
+    (define (library-name->path name)
+      (let loop ((parts name) (acc ""))
+        (if (null? parts)
+            (string-append acc ".sld")
+            (loop (cdr parts)
+                  (if (string=? acc "")
+                      (symbol->string (car parts))
+                      (string-append acc "/" (symbol->string (car parts))))))))
+
+    (define (find-library-file name)
+      (let ((rel (library-name->path name)))
+        (let loop ((dirs %paal-lib-paths))
+          (cond
+            ((null? dirs) #f)
+            ((file-exists? (string-append (car dirs) "/" rel))
+             (string-append (car dirs) "/" rel))
+            (else (loop (cdr dirs)))))))
+
+    (define (library-name->tag name)
+      (let loop ((parts name) (acc "%"))
+        (if (null? parts)
+            acc
+            (loop (cdr parts)
+                  (string-append acc (symbol->string (car parts)) "%")))))
+
+    (define (read-forms-from path)
+      (call-with-input-file path
+        (lambda (port)
+          (let loop ((form (read port)) (acc '()))
+            (if (eof-object? form)
+                (reverse acc)
+                (loop (read port) (cons form acc)))))))
+
+    ;; --- import specs ---------------------------------------------------
+    ;;
+    ;; Each returns an alias list: (visible-name . internal-name).  The
+    ;; modifiers wrap a nested spec, so (prefix (only (m) a b) x:) works.
+
+    (define (resolve-import spec)
+      (cond
+        ((not (pair? spec)) (error "paal: malformed import spec" spec))
+        ((eq? (car spec) 'only)
+         (let ((base (resolve-import (cadr spec))) (names (cddr spec)))
+           (for-each (lambda (n)
+                       (unless (assq n base)
+                         (error "paal: `only` names a binding the library does not export" n)))
+                     names)
+           (filter (lambda (p) (memq (car p) names)) base)))
+        ((eq? (car spec) 'except)
+         (let ((base (resolve-import (cadr spec))) (names (cddr spec)))
+           (for-each (lambda (n)
+                       (unless (assq n base)
+                         (error "paal: `except` names a binding the library does not export" n)))
+                     names)
+           (filter (lambda (p) (not (memq (car p) names))) base)))
+        ((eq? (car spec) 'prefix)
+         (let ((base (resolve-import (cadr spec)))
+               (pfx  (symbol->string (caddr spec))))
+           (map (lambda (p)
+                  (cons (string->symbol
+                          (string-append pfx (symbol->string (car p))))
+                        (cdr p)))
+                base)))
+        ((eq? (car spec) 'rename)
+         (let ((base (resolve-import (cadr spec))) (pairs (cddr spec)))
+           (map (lambda (p)
+                  (let ((hit (assq (car p) pairs)))
+                    (if hit (cons (cadr hit) (cdr p)) p)))
+                base)))
+        (else (library-exports spec))))
+
+    ;; --- loading --------------------------------------------------------
+
+    (define (library-exports name)
+      (cond
+        ((builtin-library? name) '())
+        ((assoc name %paal-libraries) => cdr)
+        ((member name %paal-loading)
+         (error "paal: circular import" (reverse (cons name %paal-loading))))
+        (else (load-library! name))))
+
+    ;; A name with no file on the path resolves to no aliases rather than an
+    ;; error, which is what `import` did before there was a library system.
+    ;; Paal's own stages depend on that: pkaappi-load-file deliberately loads
+    ;; every pipeline .sld into one shared globals table, and each of them
+    ;; imports (kaappi paal ir) — a name that is never on the search path,
+    ;; because the table already holds what it would provide.
+    ;;
+    ;; The cost is that a mistyped library name does nothing instead of saying
+    ;; so.  Making it an error needs the pipeline's own loading to stop going
+    ;; through `import`; see docs/TODO.md.
+    (define (load-library! name)
+      (let ((path (find-library-file name)))
+        (if (not path)
+            (begin
+              (set! %paal-libraries (cons (cons name '()) %paal-libraries))
+              '())
+            (begin
+              (set! %paal-loading (cons name %paal-loading))
+              (let ((result (load-library-from name path)))
+                (set! %paal-loading (cdr %paal-loading))
+                result)))))
+
+    ;; A .sld holds exactly one define-library.  Anything else in the file is
+    ;; ignored, which is what makes a library file also loadable as a script.
+    (define (load-library-from name path)
+      (let ((form (let loop ((fs (read-forms-from path)))
+                    (cond
+                      ((null? fs)
+                       (error "paal: no define-library in file" path))
+                      ((and (pair? (car fs)) (eq? (caar fs) 'define-library))
+                       (car fs))
+                      (else (loop (cdr fs)))))))
+        (install-library! name (cddr form))))
+
+    (define (decls-of decls tag)
+      (filter (lambda (d) (and (pair? d) (eq? (car d) tag))) decls))
+
+    ;; (export a b (rename internal external)) -> alist external -> internal
+    (define (export-alist decls)
+      (let loop ((ds (decls-of decls 'export)) (acc '()))
+        (if (null? ds)
+            (reverse acc)
+            (loop (cdr ds)
+                  (let inner ((specs (cdr (car ds))) (acc acc))
+                    (cond
+                      ((null? specs) acc)
+                      ((symbol? (car specs))
+                       (inner (cdr specs) (cons (cons (car specs) (car specs)) acc)))
+                      ((and (pair? (car specs)) (eq? (caar specs) 'rename))
+                       (inner (cdr specs)
+                              (cons (cons (caddr (car specs)) (cadr (car specs)))
+                                    acc)))
+                      (else (error "paal: malformed export spec" (car specs)))))))))
+
+    (define (install-library! name decls)
+      (let* ((imports  (append-map cdr (decls-of decls 'import)))
+             ;; The library's own imports first: they may define macros its
+             ;; body uses, and expansion is where a macro takes effect.
+             (prologue (map expand-one-import imports))
+             (bodies   (append-map cdr (decls-of decls 'begin)))
+             (includes (decls-of decls 'include))
+             (included (append-map (lambda (d) (cdr (expand-include (cdr d) #f)))
+                                   includes))
+             (exports  (export-alist decls))
+             ;; Expand to core forms.  Renaming afterwards only has to know
+             ;; about `lambda`, since every other binder is gone by then.
+             (core     (paal-expand-all (append included bodies)))
+             (defined  (top-level-defined core))
+             (tag      (library-name->tag name))
+             (renames  (map (lambda (n)
+                              (cons n (string->symbol
+                                        (string-append tag (symbol->string n)))))
+                            defined))
+             (renamed  (map (lambda (f) (rename-core f renames)) core)))
+        ;; A library's macros all stay installed, including ones it did not
+        ;; export.  Dropping the private ones is what you want for hygiene, and
+        ;; it was the first thing tried — but an *exported* macro whose template
+        ;; calls a private one then breaks at the use site, because the
+        ;; template still names it and the table no longer has it.  Fixing that
+        ;; properly means rewriting exported templates to name the private
+        ;; macro under a mangled name, and by this point a transformer is a
+        ;; closure over its rules rather than data one can walk.
+        ;;
+        ;; So the trade is: a private macro name leaks into the importer, where
+        ;; it can collide.  The alternative silently breaks working library
+        ;; code, which is worse.  Private *values* are unaffected — those are
+        ;; renamed, and the renaming is what hides them.  See docs/TODO.md.
+        %paal-macros
+        (let ((export-map
+               (map (lambda (e)
+                      (let ((hit (assq (cdr e) renames)))
+                        (cons (car e) (if hit (cdr hit) (cdr e)))))
+                    exports)))
+          (set! %paal-libraries (cons (cons name export-map) %paal-libraries))
+          (set! %paal-pending
+                (append %paal-pending
+                        (list (cons name (append prologue renamed)))))
+          export-map)))
+
+    ;; The entries %paal-macros gained since `older` — it only ever grows by
+    ;; consing, so the new ones are exactly the prefix before the old head.
+    (define (take-until lst older)
+      (if (or (null? lst) (eq? lst older))
+          '()
+          (cons (car lst) (take-until (cdr lst) older))))
+
+    (define (top-level-defined forms)
+      (let loop ((fs forms) (acc '()))
+        (cond
+          ((null? fs) (reverse acc))
+          ((and (pair? (car fs)) (eq? (caar fs) 'define)
+                (pair? (cdar fs)) (symbol? (cadr (car fs)))
+                (not (memq (cadr (car fs)) acc)))
+           (loop (cdr fs) (cons (cadr (car fs)) acc)))
+          (else (loop (cdr fs) acc)))))
+
+    ;; --- capture-avoiding rename over core forms -------------------------
+
+    (define (formal-names f)
+      (cond ((symbol? f) (list f))
+            ((pair? f)   (append (formal-names (car f)) (formal-names (cdr f))))
+            (else '())))
+
+    (define (drop-renames renames shadowed)
+      (filter (lambda (p) (not (memq (car p) shadowed))) renames))
+
+    (define (rename-core form renames)
+      (cond
+        ((null? renames) form)
+        ((symbol? form)
+         (let ((hit (assq form renames))) (if hit (cdr hit) form)))
+        ((not (pair? form)) form)
+        ((eq? (car form) 'quote) form)
+        ((and (eq? (car form) 'lambda) (pair? (cdr form)))
+         (let ((inner (drop-renames renames (formal-names (cadr form)))))
+           (cons 'lambda
+                 (cons (cadr form)
+                       (map (lambda (f) (rename-core f inner)) (cddr form))))))
+        (else
+         (let loop ((f form) (acc '()))
+           (cond
+             ((null? f) (reverse acc))
+             ((not (pair? f))                 ; improper tail
+              (append (reverse acc) (rename-core f renames)))
+             (else (loop (cdr f) (cons (rename-core (car f) renames) acc))))))))
+
+    ;; --- the import form -------------------------------------------------
+
+    ;; Aliases for one spec.  Loading happens here, so a library's macros are
+    ;; installed before anything that uses them is expanded.
+    ;; An exported *macro* has no run-time value to alias — `(define swap!
+    ;; swap!)` would reference an unbound variable.  Renaming it is a macro
+    ;; table entry instead, pointing at the same transformer.
+    (define (expand-one-import spec)
+      (let ((aliases (resolve-import spec)))
+        (cons 'begin
+              (filter-map
+                (lambda (p)
+                  (let ((transformer (paal-macro-get (cdr p))))
+                    (cond
+                      (transformer
+                       (unless (eq? (car p) (cdr p))
+                         (paal-macro-set! (car p) transformer))
+                       #f)
+                      (else (list 'define (car p) (cdr p))))))
+                aliases))))
+
+    (define (filter-map f lst)
+      (let loop ((l lst) (acc '()))
+        (if (null? l)
+            (reverse acc)
+            (let ((v (f (car l))))
+              (loop (cdr l) (if v (cons v acc) acc))))))
+
+    ;; Everything loaded but not yet handed to a program, in dependency order.
+    (define (drain-pending!)
+      (let ((out (append-map
+                   (lambda (entry)
+                     (if (member (car entry) %paal-emitted)
+                         '()
+                         (begin
+                           (set! %paal-emitted (cons (car entry) %paal-emitted))
+                           (cdr entry))))
+                   %paal-pending)))
+        (set! %paal-pending '())
+        out))
+
+    (define (expand-import form)
+      (let ((aliases (map expand-one-import (cdr form))))
+        ;; Library bodies must precede the aliases that name into them, and
+        ;; both must precede the importing program.
+        (cons 'begin (append (drain-pending!) aliases))))
 
     ;; ---------------------------------------------------------------
     ;; syntax-rules implementation
@@ -655,11 +993,23 @@
                  (set! %paal-macros saved)
                  result)))
             ;; --- Library forms ---
+            ;; A define-library evaluated as a program form -- `paal file.sld`,
+            ;; or pkaappi-load-file on a pipeline stage.  Its own imports are
+            ;; honoured, but its body is spliced unrenamed: there is no importer
+            ;; here to hide anything from, and paal's own stages rely on
+            ;; loading this way into one shared globals table.
             ((define-library)
-             (let ((bodies (filter (lambda (d) (and (pair? d) (eq? (car d) 'begin)))
-                                   (cddr form))))
-               (paal-expand (cons 'begin (append-map cdr bodies)))))
-            ((import export)
+             (let* ((decls    (cddr form))
+                    (imports  (append-map cdr (decls-of decls 'import)))
+                    (prologue (map expand-one-import imports))
+                    (bodies   (append-map cdr (decls-of decls 'begin))))
+               (paal-expand
+                 (cons 'begin (append (drain-pending!) prologue bodies)))))
+            ((import)
+             (expand-import form))
+            ;; A top-level `export` outside a define-library has nothing to
+            ;; act on; inside one, install-library! reads it directly.
+            ((export)
              '(quote #f))
             ;; --- User-defined macro or procedure call ---
             (else

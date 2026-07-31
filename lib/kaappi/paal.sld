@@ -19,6 +19,8 @@
     paal-read paal-read-string paal-read-all paal-read-file
     ;; Expander
     paal-expand paal-expand-all paal-macros-reset!
+    ;; Library path / module system
+    paal-lib-path-add! paal-lib-paths-list paal-libraries-reset!
     ;; Compiler (analyzer)
     paal-analyze paal-analyze-all
     ;; Tree-walking VM
@@ -653,6 +655,10 @@
         (else
          (pkaappi-compile-to-file input output))))
 
+    ;; The loaded pipeline is a second copy of the expander with its own
+    ;; %paal-lib-paths, so --lib-path has to be replayed into it.  Without this
+    ;; the self-hosted path searched "." alone and every import silently
+    ;; resolved to nothing.
     ; --- Self-hosted REPL ---
 
     ; Internal: run a REPL loop inside an already-loaded globals g.
