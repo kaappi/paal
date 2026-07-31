@@ -657,6 +657,13 @@
       (pkaappi-self-compile-to-file "tests/fixtures/factorial.scm" path)
       (let ((result (pkaappi-run-pbc-file path)))
         (delete-file path)
+        result)))
+  (test-equal "pkaappi-self-compile-to-file: hof.scm"
+    52
+    (let ((path "paal-self-compile-hof.pbc"))
+      (pkaappi-self-compile-to-file "tests/fixtures/hof.scm" path)
+      (let ((result (pkaappi-run-pbc-file path)))
+        (delete-file path)
         result))))
 
 ;; ---------------------------------------------------------------
@@ -669,7 +676,22 @@
     (pkaappi-self-run-file "tests/fixtures/add.scm"))
   (test-equal "pkaappi-self-run-file: factorial.scm returns 120"
     120
-    (pkaappi-self-run-file "tests/fixtures/factorial.scm")))
+    (pkaappi-self-run-file "tests/fixtures/factorial.scm"))
+  ;; Regression guard for kaappi/paal#1: every procedure pkaappi-make-globals
+  ;; installs by paal-compiling it is a <closure> built by the HOST pipeline,
+  ;; and the self-hosted VM has to be able to enter it.  Before <closure> and
+  ;; <bytecode-function> became tagged vectors, each of these raised
+  ;; "paal-bc: not a callable".
+  (test-equal "pkaappi-self-run-file: hof.scm — paal-compiled globals are callable"
+    52
+    (pkaappi-self-run-file "tests/fixtures/hof.scm")))
+
+;; Same values through the HOST bytecode pipeline, which always worked —
+;; keeps the fixture honest if it is ever edited.
+(test-group "paal-compiled globals (HOST pipeline)"
+  (test-equal "hof.scm via pkaappi-run-bc-file"
+    52
+    (pkaappi-run-bc-file "tests/fixtures/hof.scm")))
 
 ;;; ---------------------------------------------------------------
 ;; Phase 2: inexact math, char/string case, time, process-context, args

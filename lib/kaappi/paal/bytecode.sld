@@ -33,16 +33,40 @@
           bytecode-function-name)
   (begin
 
-    (define-record-type <bytecode-function>
-      (%make-bytecode-function code arity variadic? upvalue-count name)
-      bytecode-function?
-      (code          bytecode-function-code)
-      (arity         bytecode-function-arity)
-      (variadic?     bytecode-function-variadic?)
-      (upvalue-count bytecode-function-upvalue-count)
-      (name          bytecode-function-name))
+    ;; A bytecode-function is a tagged vector:
+    ;;   #(%paal-bytecode-function code arity variadic? upvalue-count name)
+    ;;
+    ;; Deliberately hand-written rather than define-record-type.  Self-hosting
+    ;; keeps two copies of this library live at once — the HOST one and the
+    ;; paal-compiled one in cache/paal-bytecode.pbc — and a bytecode-function
+    ;; built by either has to be usable by the other, because the self-hosted
+    ;; VM runs closures that the HOST pipeline installed into globals.
+    ;;
+    ;; define-record-type cannot give that.  Under HOST kaappi it produces an
+    ;; opaque native record; paal's own expander desugars it to a vector tagged
+    ;; with a freshly allocated (list '<name>) pair.  So the two copies disagree
+    ;; on representation *and* on tag identity.  Spelling the representation out
+    ;; here makes both copies emit the same vector, and an interned symbol as
+    ;; the tag is eq? across both.  See kaappi/paal#1.
+    ;;
+    ;; The trade-off is that a user 6-vector whose first slot happens to be the
+    ;; symbol %paal-bytecode-function would be mistaken for one.  Same trade-off
+    ;; the exception markers in vm-bc.sld already make.
+
+    (define %bytecode-function-tag '%paal-bytecode-function)
 
     (define (make-bytecode-function code arity variadic? upvalue-count name)
-      (%make-bytecode-function
-        (if (vector? code) code (list->vector code))
-        arity variadic? upvalue-count name))))
+      (vector %bytecode-function-tag
+              (if (vector? code) code (list->vector code))
+              arity variadic? upvalue-count name))
+
+    (define (bytecode-function? x)
+      (and (vector? x)
+           (= (vector-length x) 6)
+           (eq? (vector-ref x 0) %bytecode-function-tag)))
+
+    (define (bytecode-function-code fn)          (vector-ref fn 1))
+    (define (bytecode-function-arity fn)         (vector-ref fn 2))
+    (define (bytecode-function-variadic? fn)     (vector-ref fn 3))
+    (define (bytecode-function-upvalue-count fn) (vector-ref fn 4))
+    (define (bytecode-function-name fn)          (vector-ref fn 5))))

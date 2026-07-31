@@ -27,7 +27,7 @@ Stage 4: pkaappi can compile pkaappi
 Stage 5: pkaappi binary (no host dependency)
 ```
 
-## Current Status: Stage 6 complete — 296 tests pass
+## Current Status: Stage 6 complete — 299 tests pass
 
 Paal can load all 8 of its own library files through its bytecode pipeline and
 compile and execute arbitrary Scheme through its own loaded pipeline with no HOST
@@ -52,6 +52,7 @@ pipeline involvement in the compute path:
 | Bytecode VM: `letrec`/named-let mutable upvalue fix (box mutable captured vars) | ✓ |
 | Emitter: box variables a *nested closure* assigns, not just same-level `set!` | ✓ |
 | HOST/paal boundary: paal-native `map`/`for-each`/`filter` in globals | ✓ |
+| HOST/paal boundary: `<closure>`/`<bytecode-function>` as interned-symbol tagged vectors, so either copy can enter the other's closures | ✓ |
 | Self-execution loop: vm-bc.sld loaded, `pkaappi-make-globals` in globals | ✓ |
 | Expander bug: shorthand `define` now uses `expand-body` (internal define lifting) | ✓ |
 | Reader: `\|...\|` bar-quoted symbol support | ✓ |

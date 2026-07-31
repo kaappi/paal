@@ -305,13 +305,12 @@
       (let ((fn (pkaappi-compile-forms (paal-read-file input))))
         (paal-write-bc-file fn output)))
 
+    ;; Uses pkaappi-make-globals rather than a bare paal-initial-env blob: a .pbc
+    ;; that calls map, for-each, apply or force needs the paal-compiled versions,
+    ;; since the HOST ones cannot invoke a paal closure.  With the raw initial env
+    ;; `pkaappi file.pbc` failed with "type error in 'map': expected procedure".
     (define (pkaappi-run-pbc-file path)
-      (let* ((fn      (paal-read-bc-file path))
-             (globals (paal-make-globals
-                        (map (lambda (pair)
-                               (cons (car pair) (vector-ref (cdr pair) 0)))
-                             (paal-initial-env)))))
-        (paal-run-bc fn globals)))
+      (paal-run-bc (paal-read-bc-file path) (pkaappi-make-globals)))
 
     ;; --- Self-hosted run ---
 

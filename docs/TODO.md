@@ -3,7 +3,7 @@
 Goal: make `pkaappi` a correct R7RS-small Scheme implementation that runs the
 same programs as `kaappi`, with the same CLI conventions.
 
-Current: Stage 6 complete (self-hosting). **296 tests pass** (was 194 before Phase 1–2).
+Current: Stage 6 complete (self-hosting). **299 tests pass** (was 194 before Phase 1–2).
 
 ---
 
@@ -214,6 +214,23 @@ Issues that span stages rather than belonging to one phase.
       applied the consumer to that thunk as a single argument. `define-values`,
       `let-values` and `let*-values` all failed on the tree-walking path with a `car`
       type error. Now forced with `trampoline-values`, which preserves value count.
+- [x] **HOFs failed in the self-hosted path** (kaappi/paal#1) — `map`, `for-each`,
+      `apply`, `filter`, `vector-map`, `vector-for-each`, `string-map`,
+      `string-for-each`, `values`/`call-with-values` and the promise system all
+      raised `not a callable` under `pkaappi-self-run-file` — the path
+      `pkaappi file.scm` takes. The globals are populated by the HOST
+      `pkaappi-make-globals` but consumed by the paal-compiled VM, and
+      `define-record-type` cannot express a value both copies recognize: HOST
+      kaappi makes an opaque native record, while paal's expander makes a vector
+      tagged with a freshly allocated `(list '<name>)` pair. `<closure>` and
+      `<bytecode-function>` are now vectors tagged with interned symbols, so both
+      copies agree. No measurable cost on the call hot path. See
+      `docs/architecture.md` § Values that cross the HOST boundary.
+- [x] **`.pbc` files could not use paal-compiled globals** — `pkaappi-run-pbc-file`
+      built its globals from a bare `paal-initial-env` blob, so `pkaappi file.pbc`
+      failed with `type error in 'map': expected procedure`. Now uses
+      `pkaappi-make-globals` like the other entry points. Pre-existing and separate
+      from #1; surfaced by the new `hof.scm` fixture.
 - [x] **Test suite silently skipped tests and exited nonzero** — an uncaught error
       aborts the rest of its `test-group` without counting the remaining tests, so
       `make test` reported "all passed" while exiting 1 and running 10 fewer tests
@@ -222,18 +239,6 @@ Issues that span stages rather than belonging to one phase.
 
 **Open:**
 
-- [ ] **HOFs fail in the self-hosted path** (kaappi/paal#1) — `map`, `for-each`, `apply`,
-      `filter`, `vector-map`, `vector-for-each`, `string-map`, `string-for-each`,
-      `values`/`call-with-values` and the promise system all raise `not a callable`
-      under `pkaappi-self-run-file`, which is the path `pkaappi file.scm` takes.
-      The inner globals are built by the HOST `pkaappi-make-globals` (`paal.sld` is
-      not in `%paal-lib-files`, so no paal-compiled copy exists), so those closures
-      belong to the HOST VM's `<closure>` record type while the VM executing the
-      program is the paal-compiled copy, whose `closure?` rejects them. Pre-existing
-      and independent of the exception work; plain code and `guard` are unaffected.
-      Likely fix: build the inner globals with the paal-compiled pipeline, or make
-      `<closure>` and `<bytecode-function>` tagged vectors the way the exception
-      markers now are. See the issue for the full analysis.
 - [ ] **`(kaappi test)` should not lose tests to an aborting group** — a raised error
       inside `test-group` should fail that test and continue, not skip the rest of the
       group silently. Needs `test-equal` to guard around the expression.

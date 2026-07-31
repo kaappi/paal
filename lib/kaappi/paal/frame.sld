@@ -22,12 +22,33 @@
   (begin
 
     ;; --- Closure ---
+    ;;
+    ;; A closure is a tagged vector:  #(%paal-closure function upvalues)
+    ;;
+    ;; Hand-written rather than define-record-type for the same reason as
+    ;; <bytecode-function> — see the note in bytecode.sld.  Closures are the
+    ;; values that actually cross the HOST/self-hosted boundary: the HOST
+    ;; pkaappi-make-globals installs paal-compiled `map`, `apply`, `force` and
+    ;; friends into the globals table, and the self-hosted VM has to be able to
+    ;; enter them.  With define-record-type it could not, and every one of those
+    ;; procedures failed with "not a callable" under pkaappi-self-run-file
+    ;; (kaappi/paal#1).
+    ;;
+    ;; <frame> below stays a record: frames are created and consumed inside a
+    ;; single VM invocation and never cross.
 
-    (define-record-type <closure>
-      (make-closure function upvalues)
-      closure?
-      (function  closure-function)
-      (upvalues  closure-upvalues))    ; vector of captured values
+    (define %closure-tag '%paal-closure)
+
+    (define (make-closure function upvalues)   ; upvalues: vector of captured values
+      (vector %closure-tag function upvalues))
+
+    (define (closure? x)
+      (and (vector? x)
+           (= (vector-length x) 3)
+           (eq? (vector-ref x 0) %closure-tag)))
+
+    (define (closure-function cl) (vector-ref cl 1))
+    (define (closure-upvalues cl) (vector-ref cl 2))
 
     ;; --- Call frame ---
 

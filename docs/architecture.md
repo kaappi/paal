@@ -136,6 +136,11 @@ The type-tag is `(list '<name>)` — a fresh pair allocated once, so `eq?` ident
 serves as the type test in the predicate. Accessor: `(vector-ref obj i)`. Mutator:
 `(vector-set! obj i val)`. Mutable fields declared as `(field acc mut)` in the spec.
 
+Because the tag is allocated per compiled copy, a record built by one copy of a
+library is unrecognizable to another copy of the same library — which matters
+during self-hosting. See "Values that cross the HOST boundary" below; `<closure>`
+and `<bytecode-function>` avoid `define-record-type` for exactly this reason.
+
 **Hygiene:** fresh temporaries introduced by `or`, `cond =>`, and `case` use
 `fresh-name` (a module-level counter) to avoid variable capture.
 
@@ -288,14 +293,11 @@ of `paal-run-bc` is unwrapped and re-raised, so callers see the value the progra
 actually raised rather than VM plumbing.
 
 **Why interned symbols.** Both markers — the guard marker and the raise wrapper's tag —
-are interned symbols rather than record types or freshly allocated `(list 'tag)` pairs.
-Self-hosting keeps two copies of `(kaappi paal vm-bc)` live at once: the HOST one and
-the paal-compiled one in `cache/paal-vm-bc.pbc`. A record type defined in one copy is
-unrelated to the record type defined in the other, so the paal-compiled VM would fail
-to recognize a marker installed by the HOST library. Symbols intern to a single object
-in both. For the same reason the *logic* stays in `do-call!`: whichever copy is running
-the VM must supply both the exception catch and the closure callbacks, since each can
-only enter closures its own copy created.
+are interned symbols rather than record types or freshly allocated `(list 'tag)` pairs,
+so that both copies of the library agree on them. See "Values that cross the HOST
+boundary" below. The *logic* stays in `do-call!` for a related reason: whichever copy
+is running the VM should supply the exception catch and the closure callbacks, rather
+than depending on a HOST procedure captured in globals to do it.
 
 **Known limits.** Nesting is bounded by the host: kaappi v0.22.0 mishandles more than
 63 dynamically nested `guard` forms — at depth 64 the innermost handler is skipped and
@@ -307,6 +309,45 @@ HOST `guard`, and its own is a few levels lower still, since `paal-run-bc` and
 no test covers the ceiling, since the threshold is host behavior rather than paal's.
 `raise-continuable` cannot resume, so it behaves as `raise`, and an unmatched clause
 re-raises from the handler's dynamic environment rather than the original one.
+
+---
+
+## Values that cross the HOST boundary
+
+Self-hosting runs **two copies of every pipeline library at once**: the HOST copy that
+kaappi loaded from `.sld` source, and the paal-compiled copy loaded from `cache/*.pbc`.
+`pkaappi-self-run-file` mixes them deliberately — the dispatch string resolves
+`paal-run-bc` to the paal-compiled copy while `pkaappi-make-globals` is still the HOST
+procedure, since `paal.sld` is not in `%paal-lib-files`.
+
+So the globals table a self-hosted program runs against is populated by one copy and
+consumed by another. Any value that lands in it must be recognizable to both.
+
+**`define-record-type` cannot express such a value.** Under HOST kaappi it produces an
+opaque native record; paal's own expander desugars it to a vector tagged with a freshly
+allocated `(list '<name>)` pair. Two copies therefore disagree on representation *and*
+on tag identity. A record made by one is simply not the same type to the other.
+
+The rule: **anything that crosses is a vector tagged with an interned symbol.** Symbols
+intern to one object in both copies, and the vector layout is identical because both
+copies compile the same explicit `vector` / `vector-ref` code.
+
+| Value | Tag | Defined in |
+|-------|-----|------------|
+| closure | `%paal-closure` | `frame.sld` |
+| bytecode function | `%paal-bytecode-function` | `bytecode.sld` |
+| guard marker | `%paal-vm-guard-run` | `vm-bc.sld` |
+| raise wrapper | `%paal-vm-escape` | `vm-bc.sld` |
+
+`<frame>` stays a `define-record-type`: frames are created and consumed inside a single
+VM invocation and never enter globals.
+
+The cost is that a user vector of the right length whose first slot is one of those
+symbols would be mistaken for the internal type. The gain is that closures built by
+either copy are callable by either — without it, every procedure `pkaappi-make-globals`
+installs by paal-compiling it (`map`, `for-each`, `apply`, `filter`, `vector-map`,
+`string-map`, `values`/`call-with-values`, and the promise system) failed under
+`pkaappi-self-run-file` with `not a callable`. That was kaappi/paal#1.
 
 ---
 
