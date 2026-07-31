@@ -1855,6 +1855,94 @@
            (guard (in (#t (raise 'outer))) (raise 'first))))")))
 
 ;; ---------------------------------------------------------------
+;; dynamic-wind
+;; ---------------------------------------------------------------
+;;
+;; A second kind of wind frame, sharing the stack parameterize already uses.
+;; HOST dynamic-wind cannot be reused: on the bytecode path it cannot enter a
+;; paal closure at all (it raised a type error on the `before` thunk), and on
+;; either path its winders would be invisible to the stack a guard walks, so a
+;; raise would unwind past them in the host while paal's own frames stayed put.
+
+(test-group "dynamic-wind"
+  (test-equal "runs before, body, after in order"
+    '((before during after) (before during after))
+    (both-pipelines
+      "(define log '())
+       (define (note x) (set! log (cons x log)))
+       (dynamic-wind (lambda () (note 'before))
+                     (lambda () (note 'during))
+                     (lambda () (note 'after)))
+       (reverse log)"))
+  (test-equal "returns the body's value, not the after thunk's"
+    '(val val)
+    (both-pipelines
+      "(dynamic-wind (lambda () 'b) (lambda () 'val) (lambda () 'a))"))
+  ;; The after thunk closes the extent, so it must run before the clauses of
+  ;; the guard that is catching — that guard is outside the extent.
+  (test-equal "after runs on the way out to a guard, before its clauses"
+    '((before after clause) (before after clause))
+    (both-pipelines
+      "(define log '())
+       (define (note x) (set! log (cons x log)))
+       (guard (e (#t (note 'clause)))
+         (dynamic-wind (lambda () (note 'before))
+                       (lambda () (raise 'x))
+                       (lambda () (note 'after))))
+       (reverse log)"))
+  (test-equal "nested extents unwind innermost first"
+    '((out-b in-b in-a out-a) (out-b in-b in-a out-a))
+    (both-pipelines
+      "(define log '())
+       (define (note x) (set! log (cons x log)))
+       (guard (e (#t 'c))
+         (dynamic-wind (lambda () (note 'out-b))
+                       (lambda ()
+                         (dynamic-wind (lambda () (note 'in-b))
+                                       (lambda () (raise 'x))
+                                       (lambda () (note 'in-a))))
+                       (lambda () (note 'out-a))))
+       (reverse log)"))
+  ;; Winders and parameterizations interleave on one stack, so a winder sees
+  ;; the parameterization it is nested inside.
+  (test-equal "a winder sees the parameterization it sits inside"
+    '(((b 2) (a 2)) ((b 2) (a 2)))
+    (both-pipelines
+      "(define p (make-parameter 1))
+       (define log '())
+       (define (note x) (set! log (cons x log)))
+       (guard (e (#t 'c))
+         (parameterize ((p 2))
+           (dynamic-wind (lambda () (note (list 'b (p))))
+                         (lambda () (raise 'x))
+                         (lambda () (note (list 'a (p)))))))
+       (reverse log)"))
+  ;; A guard *inside* the extent is not leaving it, so declining to handle
+  ;; must not run the after thunk; only the outer guard's escape does.
+  ;; kaappi answers (before outer-clause after) here — see kaappi/kaappi#1988.
+  (test-equal "a declining guard inside the extent does not close it early"
+    '((before after outer-clause) (before after outer-clause))
+    (both-pipelines
+      "(define log '())
+       (define (note x) (set! log (cons x log)))
+       (guard (e (#t (note 'outer-clause)))
+         (dynamic-wind (lambda () (note 'before))
+                       (lambda () (guard (e ((number? e) 'no-match)) (raise 'x)))
+                       (lambda () (note 'after))))
+       (reverse log)"))
+  ;; R7RS: after runs only if before completed.
+  (test-equal "a before thunk that raises does not trigger after"
+    '((before clause) (before clause))
+    (both-pipelines
+      "(define log '())
+       (define (note x) (set! log (cons x log)))
+       (guard (e (#t (note 'clause)))
+         (dynamic-wind (lambda () (note 'before) (raise 'x))
+                       (lambda () (note 'during))
+                       (lambda () (note 'after))))
+       (reverse log)")))
+
+;; ---------------------------------------------------------------
 ;; Mutable variables captured by closures
 ;; ---------------------------------------------------------------
 ;;

@@ -447,13 +447,23 @@ gets there with `call/cc` twice — out to the guard to test the clauses, back t
 raise point to re-raise — which paal cannot do, having no continuations over paal
 closures.
 
-It does not need them, because parameterizations are paal's entire dynamic
-environment and each one is a mutable cell rather than a stack frame. A dynamic
-environment is therefore *data*, and two of them can be moved between by save and
-restore rather than by jumping. `%paal-parameterize` pushes a frame
-`#(cells news olds)` onto `%paal-winds`; the frames form a shared-tail list, so the
-extents entered between two states W and W′ are exactly the frames of W that are not
-in W′, and `%paal-wind-out!` / `%paal-wind-in!` walk that difference.
+It does not need them, because a dynamic environment in paal is *data*: entering an
+extent pushes a frame onto `%paal-winds`, and two states can be moved between by save
+and restore rather than by jumping. The frames form a shared-tail list, so the extents
+entered between two states W and W′ are exactly the frames of W that are not in W′,
+and `%paal-wind-out!` / `%paal-wind-in!` walk that difference.
+
+Two frame kinds share the stack, tagged with interned symbols so either copy of the
+library recognizes the other's:
+
+| Frame | Winding out | Winding in |
+|-------|-------------|------------|
+| `#(%paal-param-frame cells news olds)` | write `olds` | write `news` |
+| `#(%paal-wind-frame before after)` | call `after` | call `before` |
+
+The asymmetry is deliberate. A parameter's converter runs once, when the extent is
+entered, so the frame stores the converted values and re-entry reuses them. A
+`dynamic-wind`'s thunks are *meant* to run on every crossing.
 
 `run-guard!` reads `%paal-winds` on entry and hands it to `%paal-guard-catch`, which
 owns everything past the catch:
@@ -470,13 +480,20 @@ owns everything past the catch:
 
 Two consequences shape the rest of the design.
 
-**`parameterize` has no cleanup handler.** On a raise the frame stays on
-`%paal-winds` and the new values stay installed, which is exactly what makes the
-raise point still reconstructable when the guard looks. Restoring is the enclosing
-guard's job, and one `%paal-wind-out!` restores every extent between it and the raise
-in a single pass. Nothing else can leave a dynamic extent — a raise is paal's only
-non-local exit — so nothing else has to be caught. If paal ever gains `call/cc` over
-paal closures, this is the first place to revisit, along with `dynamic-wind`.
+**`parameterize` and `dynamic-wind` have no cleanup handler of their own.** On a raise
+the frame stays on `%paal-winds` and the extent stays open, which is exactly what makes
+the raise point still reconstructable when the guard looks. Closing it is the enclosing
+guard's job, and one `%paal-wind-out!` closes every extent between it and the raise in a
+single pass — restoring parameters and running `after` thunks in innermost-first order.
+Nothing else can leave a dynamic extent — a raise is paal's only non-local exit — so
+nothing else has to be caught. If paal ever gains `call/cc` over paal closures, this is
+the first place to revisit.
+
+A guard *inside* an extent is not leaving it, so a guard that declines there does not
+run the `after` thunk; only an escape that actually crosses the frame does. kaappi
+answers `(before outer-clause after)` where paal answers `(before after outer-clause)`
+— the same kaappi/kaappi#1988 ordering defect, seen through winders instead of
+parameters.
 
 **The expander stops emitting the re-raise.** A clause list with no `else` gets an
 implicit `(else %paal-guard-no-match)` instead of `(else (raise-continuable var))`.

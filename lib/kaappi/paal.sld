@@ -379,20 +379,44 @@
                    (begin
                      (vector-set! (car cells) 0 (car vals))
                      (%paal-param-write! (cdr cells) (cdr vals)))))
+             ; Two frame kinds share the stack:
+             ;   #(%paal-param-frame cells news olds)   parameterize
+             ;   #(%paal-wind-frame before after)       dynamic-wind
+             ; Interned symbol tags, so either copy of the library recognizes
+             ; the other's frames.
+             (define %paal-param-frame '%paal-param-frame)
+             (define %paal-wind-frame  '%paal-wind-frame)
              (define (%paal-wind-out! from to)
                (if (eq? from to)
                    #t
-                   (begin
-                     (%paal-param-write! (vector-ref (car from) 0)
-                                         (vector-ref (car from) 2))
+                   (let ((f (car from)))
+                     (if (eq? (vector-ref f 0) %paal-param-frame)
+                         (%paal-param-write! (vector-ref f 1) (vector-ref f 3))
+                         ((vector-ref f 2)))
                      (%paal-wind-out! (cdr from) to))))
              (define (%paal-wind-in! from to)
                (if (eq? from to)
                    #t
                    (begin
                      (%paal-wind-in! (cdr from) to)
-                     (%paal-param-write! (vector-ref (car from) 0)
-                                         (vector-ref (car from) 1)))))
+                     (let ((f (car from)))
+                       (if (eq? (vector-ref f 0) %paal-param-frame)
+                           (%paal-param-write! (vector-ref f 1) (vector-ref f 2))
+                           ((vector-ref f 1)))))))
+             ; HOST dynamic-wind cannot enter a paal closure, so this has to be
+             ; paal source; and its winders have to live on the same stack a
+             ; guard walks, or the two views of the dynamic environment drift.
+             (define (dynamic-wind before thunk after)
+               (before)
+               (let ((saved %paal-winds))
+                 (set! %paal-winds
+                       (cons (vector %paal-wind-frame before after) saved))
+                 (let ((result (thunk)))
+                   ; Pop before running after, so the after thunk runs outside
+                   ; the extent it is closing.
+                   (set! %paal-winds saved)
+                   (after)
+                   result)))
              ; No cleanup handler around the thunk: on a raise the frame stays
              ; on %paal-winds and the values stay installed, which is what makes
              ; the raise point still reconstructable when the guard looks.
@@ -401,7 +425,8 @@
                       (olds  (%paal-param-read cells))
                       (news  (%paal-param-convert cells vals))
                       (saved %paal-winds))
-                 (set! %paal-winds (cons (vector cells news olds) saved))
+                 (set! %paal-winds
+                       (cons (vector %paal-param-frame cells news olds) saved))
                  (%paal-param-write! cells news)
                  (let ((result (thunk)))
                    (%paal-param-write! cells olds)

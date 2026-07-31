@@ -3,7 +3,7 @@
 Goal: make `paal` a correct R7RS-small Scheme implementation that runs the
 same programs as `kaappi`, with the same CLI conventions.
 
-Current: Stage 6 complete (self-hosting). **429 tests pass** (was 194 before Phase 1–2).
+Current: Stage 6 complete (self-hosting). **436 tests pass** (was 194 before Phase 1–2).
 
 ---
 
@@ -86,6 +86,16 @@ Missing primitives added to `paal-initial-env` (`lib/kaappi/paal/vm.sld`):
       a HOST parameter is only rebindable through HOST `parameterize`, which is
       syntax, so nothing can install a value procedurally. See
       `docs/architecture.md` § Parameter objects.
+- [x] `dynamic-wind` — both pipelines, paal-native. HOST `dynamic-wind` could not
+      be reused: on the bytecode path it cannot enter a paal closure and raised
+      a type error on the `before` thunk, and on either path its winders would
+      be invisible to the stack a `guard` walks, so a raise would unwind past
+      them in the host while paal's own frames stayed put. It is now a second
+      frame kind on the same wind stack `parameterize` uses — winding out calls
+      `after`, winding in calls `before` — so one `%paal-wind-out!` closes every
+      extent between a guard and the raise, in innermost-first order. A guard
+      *inside* an extent is not leaving it, so declining there does not run
+      `after`. See `docs/architecture.md` § The wind stack.
 
 **Known limitations (still open):**
 

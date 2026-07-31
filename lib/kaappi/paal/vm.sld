@@ -85,11 +85,11 @@
 
     ;; --- Dynamic extent: the wind stack (HOST side) ---
     ;;
-    ;; Paal's whole dynamic environment is the parameterizations in effect, and
-    ;; each one lives in a mutable cell.  Cells alone say what the values *are*,
-    ;; not how to get back to an earlier state, so every %paal-parameterize also
-    ;; pushes a frame #(cells news olds) here.  The stack is a shared-tail list,
-    ;; so any two states are related by walking one down to the other: the
+    ;; Paal's dynamic environment is the parameterizations and dynamic-winds in
+    ;; effect.  A parameterization lives in a mutable cell, which says what the
+    ;; value *is* but not how to get back to an earlier one, so every entry into
+    ;; a dynamic extent also pushes a frame here.  The stack is a shared-tail
+    ;; list, so any two states are related by walking one down to the other: the
     ;; frames of W that are not in W' are exactly the extents entered between.
     ;;
     ;; This is what lets `guard` re-raise an unmatched condition in the dynamic
@@ -97,10 +97,21 @@
     ;; continuation: wind out to the guard's state to run the clauses, wind back
     ;; in to the raise point's state to re-raise.  See %paal-guard-run below.
     ;;
+    ;; Two frame kinds, tagged with interned symbols so either copy of the
+    ;; library recognizes the other's frames:
+    ;;
+    ;;   #(%paal-param-frame cells news olds)   parameterize
+    ;;   #(%paal-wind-frame before after)       dynamic-wind
+    ;;
     ;; The `news` are stored converted, so winding in again never re-runs a
     ;; parameter's converter — R7RS converts once, when the extent is entered.
+    ;; A dynamic-wind's thunks, by contrast, are *meant* to run on every
+    ;; crossing, which is what R7RS says re-entering an extent does.
 
     (define %paal-winds '())
+
+    (define %paal-param-frame '%paal-param-frame)
+    (define %paal-wind-frame  '%paal-wind-frame)
 
     (define (paal-wind-write! cells vals)
       (for-each (lambda (c v) (vector-set! c 0 v)) cells vals))
@@ -110,7 +121,9 @@
       (if (eq? from to)
           #t
           (let ((frame (car from)))
-            (paal-wind-write! (vector-ref frame 0) (vector-ref frame 2))
+            (if (eq? (vector-ref frame 0) %paal-param-frame)
+                (paal-wind-write! (vector-ref frame 1) (vector-ref frame 3))
+                (trampoline ((vector-ref frame 2))))
             (paal-wind-out! (cdr from) to))))
 
     ;; Re-enter them, outermost first — the mirror image of paal-wind-out!.
@@ -120,7 +133,9 @@
           (begin
             (paal-wind-in! (cdr from) to)
             (let ((frame (car from)))
-              (paal-wind-write! (vector-ref frame 0) (vector-ref frame 1))))))
+              (if (eq? (vector-ref frame 0) %paal-param-frame)
+                  (paal-wind-write! (vector-ref frame 1) (vector-ref frame 2))
+                  (trampoline ((vector-ref frame 1))))))))
 
     ;; --- guard's "no clause matched" sentinel (HOST side) ---
     ;; The expander gives a clause list with no else an implicit
@@ -253,7 +268,25 @@
                                       consumer)))
              (call-with-current-continuation . ,call-with-current-continuation)
              (call/cc . ,call/cc)
-             (dynamic-wind . ,dynamic-wind)
+             ;; Not HOST dynamic-wind.  Its winders have to be the same kind of
+             ;; thing a guard knows how to run when it leaves an extent, and the
+             ;; host's are invisible to the wind stack — a raise would unwind
+             ;; past them in the host while paal's own frames stayed put, so the
+             ;; two views of the dynamic environment would drift apart.  On the
+             ;; bytecode path HOST dynamic-wind cannot enter a paal closure at
+             ;; all; it raised a type error on the `before` thunk.
+             (dynamic-wind
+               . ,(lambda (before thunk after)
+                    (trampoline (before))
+                    (let ((saved %paal-winds))
+                      (set! %paal-winds
+                            (cons (vector %paal-wind-frame before after) saved))
+                      (let ((result (trampoline (thunk))))
+                        ; Pop before running after, so the after thunk runs
+                        ; outside the extent it is closing.
+                        (set! %paal-winds saved)
+                        (trampoline (after))
+                        result))))
 
              ;; Exceptions
              (error . ,error)
@@ -397,7 +430,9 @@
                                          (trampoline ((vector-ref c 1) v)))
                                        cells vals))
                            (saved %paal-winds))
-                      (set! %paal-winds (cons (vector cells news olds) saved))
+                      (set! %paal-winds
+                            (cons (vector %paal-param-frame cells news olds)
+                                  saved))
                       (paal-wind-write! cells news)
                       (let ((result (trampoline (thunk))))
                         (paal-wind-write! cells olds)
