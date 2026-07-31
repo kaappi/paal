@@ -24,11 +24,12 @@
   (display "  -h, --help              Show this help\n")
   (display "  --version               Show version\n"))
 
-(define (run-file path)
+;; Run a file, forwarding extra-args to (command-line) inside the user program.
+(define (run-file path . extra-args)
   (let ((len (string-length path)))
     (if (and (>= len 4) (string=? (substring path (- len 4) len) ".pbc"))
-        (pkaappi-run-pbc-file path)
-        (pkaappi-self-run-file path))))
+        (pkaappi-run-pbc-file path)  ; .pbc: no command-line forwarding yet
+        (apply pkaappi-self-run-file path extra-args))))
 
 (define (main args)
   (cond
@@ -41,11 +42,11 @@
     ; Version
     ((or (string=? (car args) "--version") (string=? (car args) "version"))
      (display "pkaappi 0.1.0") (newline))
-    ; run <file> — explicit subcommand (kept for compatibility)
+    ; run <file> [args...] — explicit subcommand (kept for compatibility)
     ((string=? (car args) "run")
      (if (null? (cdr args))
          (begin (display "error: run: missing file\n") (exit 1))
-         (run-file (cadr args))))
+         (apply run-file (cadr args) (cddr args))))
     ; repl — explicit subcommand
     ((string=? (car args) "repl")
      (pkaappi-self-repl))
@@ -80,10 +81,11 @@
                    (paal-analyze-all
                      (paal-expand-all
                        (paal-read-file (cadr args)))))))
-    ; Positional file: first arg doesn't start with '-'
+    ; Positional file [args...]: first arg doesn't start with '-'
+    ; Remaining args are forwarded to (command-line) inside the user program.
     ((and (positive? (string-length (car args)))
           (not (char=? (string-ref (car args) 0) #\-)))
-     (run-file (car args)))
+     (apply run-file (car args) (cdr args)))
     ; Unknown flag
     (else
      (display "error: unknown option: ") (display (car args)) (newline)

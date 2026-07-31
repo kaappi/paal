@@ -65,6 +65,12 @@
 
     (define %paal-promise-tag (list 'paal-promise-tag))
 
+    ;; --- Command-line for user programs ---
+    ;; Set by pkaappi-set-command-line! before running a user file.
+    ;; The paal-initial-env binds (command-line) to read this variable.
+
+    (define %paal-command-line '())
+
     ;; --- Initial environment seeded with host primitives ---
 
     (define (paal-initial-env)
@@ -277,6 +283,35 @@
                          (vector-set! p 1 #t)
                          (vector-set! p 2 r)
                          r)))))
+
+             ;; Inexact math — (scheme inexact)
+             (sin . ,sin) (cos . ,cos) (tan . ,tan)
+             (asin . ,asin) (acos . ,acos) (atan . ,atan)
+             (exp . ,exp) (log . ,log)
+
+             ;; Characters — case-insensitive (scheme char)
+             (char-ci=? . ,char-ci=?) (char-ci<? . ,char-ci<?)
+             (char-ci>? . ,char-ci>?) (char-ci<=? . ,char-ci<=?) (char-ci>=? . ,char-ci>=?)
+             (char-foldcase . ,char-foldcase)
+
+             ;; Strings — case-insensitive (scheme char)
+             (string-ci=? . ,string-ci=?) (string-ci<? . ,string-ci<?)
+             (string-ci>? . ,string-ci>?) (string-ci<=? . ,string-ci<=?) (string-ci>=? . ,string-ci>=?)
+             (string-foldcase . ,string-foldcase)
+             (digit-value . ,digit-value)
+
+             ;; Time — (scheme time)
+             (current-second . ,current-second)
+             (current-jiffy . ,current-jiffy)
+             (jiffies-per-second . ,jiffies-per-second)
+
+             ;; Process context — (scheme process-context)
+             ;; command-line is overridden in pkaappi-make-globals to return user args.
+             ;; The HOST command-line is intentionally not exposed here.
+             (command-line . ,(lambda () %paal-command-line))
+             (exit . ,exit) (emergency-exit . ,emergency-exit)
+             (get-environment-variable . ,get-environment-variable)
+             (get-environment-variables . ,get-environment-variables)
 
              ;; Misc
              (void . ,(lambda () (if #f #f)))

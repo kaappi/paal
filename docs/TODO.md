@@ -3,7 +3,7 @@
 Goal: make `pkaappi` a correct R7RS-small Scheme implementation that runs the
 same programs as `kaappi`, with the same CLI conventions.
 
-Current: Stage 6 complete (self-hosting). **244 tests pass** (was 194 before Phase 1).
+Current: Stage 6 complete (self-hosting). **260 tests pass** (was 194 before Phase 1–2).
 
 ---
 
@@ -61,26 +61,27 @@ Missing primitives added to `paal-initial-env` (`lib/kaappi/paal/vm.sld`):
 
 ---
 
-## Phase 2 — Standard Libraries in User Environment
+## Phase 2 — Standard Libraries in User Environment ✅ (procedures added; import resolution pending)
 
 User programs call `(import (scheme inexact))` etc. Currently `import` is a no-op and
-`paal-initial-env` is a flat unnamespaced blob. These libraries must resolve to real definitions.
+`paal-initial-env` is a flat unnamespaced blob. The procedures are now available, but
+`(import (scheme inexact))` won't actually load them on demand until Phase 5.
 
-- [ ] `(scheme inexact)` — `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `exp`, `log`
-      and the multi-argument `atan`; entirely absent from initial-env
-- [ ] `(scheme char)` — `char-ci=?` and all case-insensitive char/string comparisons,
-      `char-foldcase`, `string-foldcase`, `digit-value`
-- [ ] `(scheme lazy)` — `delay`, `force`, `delay-force`, `make-promise`, `promise?`
-      (paal has custom implementations; need import resolution for portability)
-- [ ] `(scheme time)` — `current-second`, `current-jiffy`, `jiffies-per-second`
-- [ ] `(scheme process-context)` — `command-line`, `exit`, `emergency-exit`,
-      `get-environment-variable`, `get-environment-variables`
-      (exist in HOST `src/main.scm` but not visible inside user programs)
-- [ ] `(scheme file)` — `call-with-input-file`, `call-with-output-file`,
+- [x] `(scheme inexact)` — `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `exp`, `log`
+      all added to `paal-initial-env`
+- [x] `(scheme char)` — `char-ci=?`, `char-ci<?`, `char-ci>?`, `char-ci<=?`, `char-ci>=?`,
+      `char-foldcase`, `string-ci=?`, `string-ci<?`, `string-ci>?`, `string-ci<=?`,
+      `string-ci>=?`, `string-foldcase`, `digit-value` — all added
+- [x] `(scheme lazy)` — paal has custom vector-based implementations for `delay`, `force`,
+      `make-promise`, `promise?`; `delay-force` via expander
+- [x] `(scheme time)` — `current-second`, `current-jiffy`, `jiffies-per-second` added
+- [x] `(scheme process-context)` — `command-line` (HOST lambda, user args forwarded),
+      `exit`, `emergency-exit`, `get-environment-variable`, `get-environment-variables` added
+- [x] `(scheme file)` — `call-with-input-file`, `call-with-output-file`,
       `with-input-from-file`, `with-output-to-file`,
       `open-binary-input-file`, `open-binary-output-file`,
-      `file-exists?`, `delete-file`
-- [ ] `(scheme write)` completeness — `write-shared`, `write-simple`
+      `file-exists?`, `delete-file` added
+- [x] `(scheme write)` completeness — `write-shared`, `write-simple` added
 - [ ] `(scheme complex)` — complex number arithmetic operations
 - [ ] `(scheme r5rs)` — R5RS compatibility subset
 - [ ] `(scheme eval)` — `eval`, `environment` (hard: re-entering pipeline from user code)
@@ -101,11 +102,8 @@ Gaps in `lib/kaappi/paal/reader.sld`:
 
 ## Phase 4 — CLI Parity with kaappi
 
-Documented exceptions in `CLAUDE.md` that should eventually be resolved:
-
-- [ ] **Script args forwarding** — `pkaappi file.scm arg1 arg2` should set
-      `(command-line)` to `("file.scm" "arg1" "arg2")` inside user programs;
-      currently args after the filename are silently dropped
+- [x] **Script args forwarding** — `pkaappi file.scm arg1 arg2` sets `(command-line)`
+      to `("file.scm" "arg1" "arg2")` inside user programs via HOST lambda in globals
 - [ ] **`--lib-path <dir>`** — allow user programs to `(import (foo bar))` from
       an external directory (requires Phase 5 module system first)
 - [ ] **`check` subcommand** — compile-only static analysis: reads, expands, compiles,

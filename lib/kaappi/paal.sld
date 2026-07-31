@@ -33,6 +33,8 @@
     pkaappi-make-globals pkaappi-load-file pkaappi-run-string-in
     ;; Self-hosted run, compile, and REPL
     pkaappi-self-run-file pkaappi-self-compile-to-file pkaappi-self-repl
+    ;; Command-line injection for user programs
+    pkaappi-set-command-line!
     ;; Serializer
     paal-write-bc paal-read-bc paal-write-bc-file paal-read-bc-file
     pkaappi-compile-to-file pkaappi-run-pbc-file)
@@ -73,13 +75,24 @@
     ;; Create a fresh globals table seeded with kaappi primitives.
     ;; The returned object can be passed to pkaappi-load-file repeatedly;
     ;; each call accumulates the loaded file's definitions in place.
-    (define (pkaappi-make-globals)
-      ; Seed the alist with pkaappi-make-globals itself (HOST procedure) so that
-      ; paal code loaded via pkaappi-load-file can call it to create fresh globals.
-      (let* ((base-alist (map (lambda (pair) (cons (car pair) (vector-ref (cdr pair) 0)))
+    ;;
+    ;; Optional: pass a list of strings as the first argument to pre-set
+    ;; (command-line) for user programs.  Example: (pkaappi-make-globals '("f.scm" "a"))
+    (define (pkaappi-make-globals . opts)
+      (let* ((cmd-args  (if (null? opts) '() (car opts)))
+             ; cmd-cell is a HOST mutable pair; (car cmd-cell) = current command-line list.
+             ; command-line is a HOST lambda closing over cmd-cell — safe to call from
+             ; any pipeline (HOST or self-hosted) without closure-tag mismatch.
+             (cmd-cell  (list cmd-args))
+             (base-alist (map (lambda (pair) (cons (car pair) (vector-ref (cdr pair) 0)))
                               (paal-initial-env)))
-             (g (paal-make-globals (cons (cons 'pkaappi-make-globals pkaappi-make-globals)
-                                         base-alist))))
+             (g (paal-make-globals
+                  (cons (cons 'pkaappi-make-globals pkaappi-make-globals)
+                        (cons (cons 'pkaappi-set-command-line! pkaappi-set-command-line!)
+                              ; Override command-line with HOST lambda and expose cmd-cell.
+                              (cons (cons 'command-line (lambda () (car cmd-cell)))
+                                    (cons (cons '%paal-cmd-cell cmd-cell)
+                                          base-alist)))))))
         ; Install paal-native promise system (separate from HOST tree-walking path).
         ; %paal-delay-impl creates a lazy promise vector; force/promise?/make-promise
         ; use the same paal-allocated tag.  Bytecode VM paal closures work here.
@@ -242,6 +255,16 @@
           g)
         g))
 
+    ;; Inject a command-line list into a globals table created by pkaappi-make-globals.
+    ;; The user program's (command-line) will return this list.
+    ;; args must be a proper list of strings: (path arg1 arg2 ...).
+    ;;
+    ;; Implementation: set-car! the cmd-cell stored in globals as %paal-cmd-cell.
+    ;; The command-line HOST lambda closes over that cell, so changes are reflected
+    ;; immediately. Using set-car! avoids paal-compiled code and the closure-tag issue.
+    (define (pkaappi-set-command-line! globals args)
+      (set-car! (pkaappi-run-string-in globals "%paal-cmd-cell") args))
+
     ;; Compile a .sld or .scm file and run it into an existing globals table.
     ;; New names defined by the file are added to globals via define-global ops.
     ;; Returns globals for easy chaining: (pkaappi-load-file b (pkaappi-load-file a g))
@@ -308,35 +331,47 @@
       (for-each (lambda (pbc) (paal-run-bc (paal-read-bc-file pbc) g))
                 %paal-cache-files))
 
+    ; Serialize a Scheme value to a string using write.
+    (define (paal-write-to-string val)
+      (let ((p (open-output-string)))
+        (write val p)
+        (get-output-string p)))
+
     ; Load paal's pipeline into a fresh globals, then compile and run the user's
     ; file through the loaded pipeline (reader, expander, emitter, VM).
     ; Priority: cache (.pbc) > .sld sources > HOST bytecode fallback.
-    (define (pkaappi-self-run-file path)
-      (cond
-        ((paal-cache-complete?)
-         (let ((g (pkaappi-make-globals)))
-           (pkaappi-load-cached-pipeline g)
-           (pkaappi-run-string-in g
-             (string-append
-               "(paal-run-bc"
-               "  (paal-emit-program"
-               "    (paal-analyze-all"
-               "      (paal-expand-all"
-               "        (paal-read-file \"" path "\"))))"
-               "  (pkaappi-make-globals))"))))
-        ((file-exists? "lib/kaappi/paal/ir.sld")
-         (let ((g (pkaappi-make-globals)))
-           (for-each (lambda (p) (pkaappi-load-file p g)) %paal-lib-files)
-           (pkaappi-run-string-in g
-             (string-append
-               "(paal-run-bc"
-               "  (paal-emit-program"
-               "    (paal-analyze-all"
-               "      (paal-expand-all"
-               "        (paal-read-file \"" path "\"))))"
-               "  (pkaappi-make-globals))"))))
-        (else
-         (pkaappi-run-bc-file path))))
+    ; user-args: extra strings after the filename, set as (command-line) inside the program.
+    (define (pkaappi-self-run-file path . user-args)
+      (let* ((cmd-list (cons path user-args))
+             ; Serialize cmd-list to embed in the dispatch string passed to inner pkaappi-make-globals
+             (cmd-str  (paal-write-to-string cmd-list)))
+        (cond
+          ((paal-cache-complete?)
+           (let ((g (pkaappi-make-globals)))
+             (pkaappi-load-cached-pipeline g)
+             (pkaappi-run-string-in g
+               (string-append
+                 "(paal-run-bc"
+                 "  (paal-emit-program"
+                 "    (paal-analyze-all"
+                 "      (paal-expand-all"
+                 "        (paal-read-file \"" path "\"))))"
+                 "  (pkaappi-make-globals (quote " cmd-str ")))"))))
+          ((file-exists? "lib/kaappi/paal/ir.sld")
+           (let ((g (pkaappi-make-globals)))
+             (for-each (lambda (p) (pkaappi-load-file p g)) %paal-lib-files)
+             (pkaappi-run-string-in g
+               (string-append
+                 "(paal-run-bc"
+                 "  (paal-emit-program"
+                 "    (paal-analyze-all"
+                 "      (paal-expand-all"
+                 "        (paal-read-file \"" path "\"))))"
+                 "  (pkaappi-make-globals (quote " cmd-str ")))"))))
+          (else
+           ; Fallback: run through HOST bytecode pipeline (no self-hosting)
+           ; command-line not forwarded in this path (bootstrap only).
+           (pkaappi-run-bc-file path)))))
 
     ; Load paal's pipeline + serializer into a fresh globals, compile the input
     ; file through the loaded pipeline, and write bytecode to output.

@@ -27,7 +27,7 @@ the REPL, a positional file runs it, subcommands (`expand`, `ir`, `eval`, `compi
 `repl`) and flags (`--help`, `--version`) work the same way.
 
 **Exceptions:** `compile` outputs `.pbc` text bytecode (not a native binary); `--lib-path`
-is not accepted; script args after the filename are not forwarded to `(command-line)`.
+is not accepted.
 
 ## Architecture
 

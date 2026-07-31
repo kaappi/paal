@@ -671,6 +671,55 @@
     120
     (pkaappi-self-run-file "tests/fixtures/factorial.scm")))
 
+;;; ---------------------------------------------------------------
+;; Phase 2: inexact math, char/string case, time, process-context, args
+;; ---------------------------------------------------------------
+
+(test-group "inexact math (scheme inexact)"
+  (test-equal "sin 0" 0.0 (pkaappi-run-bc-string "(sin 0)"))
+  (test-equal "cos 0" 1.0 (pkaappi-run-bc-string "(cos 0)"))
+  (test-equal "exp 0" 1.0 (pkaappi-run-bc-string "(exp 0)"))
+  (test-equal "log 1" 0.0 (pkaappi-run-bc-string "(log 1)"))
+  (test-equal "atan 1" (atan 1) (pkaappi-run-bc-string "(atan 1)")))
+
+(test-group "char/string case-insensitive (scheme char)"
+  (test-equal "char-ci=?"    #t (pkaappi-run-bc-string "(char-ci=? #\\A #\\a)"))
+  (test-equal "char-foldcase"  #\a (pkaappi-run-bc-string "(char-foldcase #\\A)"))
+  (test-equal "string-ci=?"  #t (pkaappi-run-bc-string "(string-ci=? \"Hello\" \"HELLO\")"))
+  (test-equal "string-foldcase" "hello" (pkaappi-run-bc-string "(string-foldcase \"HELLO\")")))
+
+(test-group "time (scheme time)"
+  (test-equal "jiffies-per-second positive"
+    #t
+    (pkaappi-run-bc-string "(positive? (jiffies-per-second))")))
+
+(test-group "process-context (scheme process-context)"
+  (test-equal "command-line default is list"
+    #t
+    (pkaappi-run-bc-string "(list? (command-line))"))
+  (test-equal "get-environment-variable HOME"
+    #t
+    (pkaappi-run-bc-string "(string? (get-environment-variable \"HOME\"))"))
+  (test-equal "command-line after set has correct path"
+    "tests/fixtures/add.scm"
+    (let* ((g (pkaappi-make-globals '("tests/fixtures/add.scm" "x"))))
+      (pkaappi-run-string-in g "(car (command-line))"))))
+
+(test-group "script args forwarding"
+  (test-equal "command-line length with args"
+    3
+    (let* ((g (pkaappi-make-globals '("file.scm" "arg1" "arg2"))))
+      (pkaappi-run-string-in g "(length (command-line))")))
+  (test-equal "command-line second element"
+    "arg1"
+    (let* ((g (pkaappi-make-globals '("file.scm" "arg1" "arg2"))))
+      (pkaappi-run-string-in g "(cadr (command-line))")))
+  (test-equal "pkaappi-set-command-line! updates"
+    "new"
+    (let* ((g (pkaappi-make-globals)))
+      (pkaappi-set-command-line! g '("new"))
+      (pkaappi-run-string-in g "(car (command-line))"))))
+
 ;; ---------------------------------------------------------------
 ;; Phase 1: missing primitives
 ;; ---------------------------------------------------------------
