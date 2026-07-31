@@ -248,14 +248,21 @@ Issues that span stages rather than belonging to one phase.
 
 **Open:**
 
-- [ ] **Large deeply-nested functions can produce unreadable `.pbc`** — kaappi's `read`
-      fails on `cache/paal-vm-bc.pbc` once a single top-level function grows large and
-      deeply nested enough (it did when the guard logic was inlined into `do-call!`,
-      breaking `make pbc-pipeline` with an opaque "read error"). Worked around by
-      keeping `run-guard!` a separate top-level procedure, but the ceiling is still
-      there for any future growth. Root cause is in kaappi's reader; not filed yet,
-      since the exact trigger (size vs. nesting depth) has not been isolated —
-      `paal-expander.pbc` is larger and deeper and reads back fine.
+- [ ] **`.pbc` files can become unreadable depending on byte offsets**
+      (kaappi/kaappi#1920) — kaappi's `read` on a *file port* mis-handles a dotted
+      pair that straddles a 4096-byte chunk boundary: a truncated prefix reports
+      `UnexpectedChar`/`DotNotInList` instead of `UnexpectedEof`, and the
+      incremental read loop treats that as fatal rather than reading the next
+      chunk. `.pbc` files are full of `(#t . N)` upvalue specs, so a large enough
+      one eventually lands on a boundary. It hit `cache/paal-vm-bc.pbc` when the
+      guard logic was inlined into `do-call!`, breaking `make pbc-pipeline`.
+      Nothing to fix on the paal side, and there is no reliable workaround:
+      splitting `run-guard!` back out only helped by shifting offsets, and any
+      edit can shift them again. The same bytes read from a string port parse
+      fine, so `paal-read-bc-file` could slurp the file and use
+      `open-input-string` if this becomes disruptive before the fix lands.
+      NB the earlier "large and deeply nested" diagnosis in this entry was wrong:
+      `paal-expander.pbc` is both bigger and deeper and reads back fine.
 
 ---
 

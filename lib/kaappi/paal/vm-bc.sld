@@ -296,10 +296,13 @@
     ;; Run a guard's body thunk; if it raises, apply the handler to the
     ;; condition.  Both run at register base `nbase`, above the live frames.
     ;;
-    ;; Kept out of do-call! deliberately: inlining it there made do-call! a
-    ;; single closure large and deeply nested enough that kaappi's reader could
-    ;; no longer read back the serialized cache/paal-vm-bc.pbc, which broke
-    ;; `make pbc-pipeline` with an opaque "read error".
+    ;; Kept separate from do-call! only for legibility.  Inlining it once broke
+    ;; `make pbc-pipeline` with an opaque "read error" on cache/paal-vm-bc.pbc,
+    ;; which looked like a size or nesting budget — it is not.  kaappi's `read`
+    ;; mis-handles a dotted pair straddling a 4096-byte chunk boundary on a file
+    ;; port (kaappi/kaappi#1920), and inlining merely shifted the byte offsets
+    ;; so that one of the `(#t . N)` upvalue specs landed on one.  Splitting the
+    ;; procedure is not a defence: any edit to this file can shift offsets again.
     (define (run-guard! regs globals nbase body handler)
       (guard (e (#t (paal-call-value regs globals nbase handler
                                      (list (paal-vm-condition e)))))
