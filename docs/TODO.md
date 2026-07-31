@@ -238,16 +238,16 @@ Issues that span stages rather than belonging to one phase.
       `pkaappi-make-globals` like the other entry points. Pre-existing and separate
       from #1; surfaced by the new `hof.scm` fixture.
 - [x] **Test suite silently skipped tests and exited nonzero** — an uncaught error
-      aborts the rest of its `test-group` without counting the remaining tests, so
+      aborted the rest of its `test-group` without counting the remaining tests, so
       `make test` reported "all passed" while exiting 1 and running 10 fewer tests
       than it appeared to. Both underlying causes (`#u8`, `call-with-values`) are
-      fixed; the reporting weakness in `(kaappi test)` itself remains.
+      fixed, and so is the reporting weakness itself: `(kaappi test)`'s assertions
+      are now syntax that thunk the expression, so a raise fails that one test and
+      the run continues (kaappi-test `d67855a`). The pass count is a trustworthy
+      signal again — a green run no longer hides skipped tests.
 
 **Open:**
 
-- [ ] **`(kaappi test)` should not lose tests to an aborting group** — a raised error
-      inside `test-group` should fail that test and continue, not skip the rest of the
-      group silently. Needs `test-equal` to guard around the expression.
 - [ ] **Large deeply-nested functions can produce unreadable `.pbc`** — kaappi's `read`
       fails on `cache/paal-vm-bc.pbc` once a single top-level function grows large and
       deeply nested enough (it did when the guard logic was inlined into `do-call!`,
