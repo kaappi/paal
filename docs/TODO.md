@@ -73,15 +73,21 @@ Missing primitives added to `paal-initial-env` (`lib/kaappi/paal/vm.sld`):
 
 **Known limitations (still open):**
 
-- [ ] `guard` nesting depth — kaappi v0.22.0 mishandles more than 63 dynamically
-      nested `guard` forms (at depth 64 the innermost handler is skipped and an
-      outer one catches instead). Reproduces in plain kaappi with no paal
-      involved, so this is a core-repo bug; paal inherits it by delegating to
-      HOST `guard`, with a ceiling a few levels lower still. Repro:
-      `(define (f n) (guard (e (#t n)) (if (= n 0) (raise 'b) (f (- n 1))))) (f 64)`
-      → returns `1`, should return `0`. Filed as kaappi/kaappi#1886 — the cap is
-      `MAX_HANDLERS = 64`, and exceeding it yields a *catchable* error, so an
-      enclosing `guard` swallows it. Revisit this entry when that lands.
+- [x] `guard` nesting depth — **fixed upstream** by kaappi/kaappi#1919, closing
+      kaappi/kaappi#1886. Both `MAX_HANDLERS` and `MAX_WINDS` were fixed 64-entry
+      arrays and now grow on demand (`-Dmax-handlers`/`-Dmax-winds`, hard cap
+      32768), and exceeding the limit is no longer a *catchable* condition — the
+      thing that made it dangerous, since a user's own `guard` swallowed it and
+      returned a plausible wrong value. Verified against a local build of kaappi
+      `main`: paal's `guard` is now correct at depths 63, 64, 100, 200 and 400
+      (it was wrong from ~61 up), a VM overflow surfaces as an uncatchable
+      `KP3008` with exit 1 rather than being swallowed, and all of paal's tests
+      pass against the fixed kaappi.
+
+      Not yet in a release — the fix is 15 commits past the `v0.22.1` tag, and
+      `kaappi` on `PATH` here is v0.22.0. Paal running against an older kaappi
+      still has the old ceiling, so this is a note about *which* kaappi you run
+      paal with, not about paal.
 - [ ] `define-syntax` hygiene — introduced bindings are not renamed (non-hygienic);
       macros that introduce `let` bindings can capture user variables
 - [ ] `define-syntax` nested ellipsis — only single-level `...` is supported

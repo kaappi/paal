@@ -301,16 +301,18 @@ boundary" below. The *logic* stays in `do-call!` for a related reason: whichever
 is running the VM should supply the exception catch and the closure callbacks, rather
 than depending on a HOST procedure captured in globals to do it.
 
-**Known limits.** Nesting is bounded by the host: kaappi v0.22.0 mishandles more than
-63 dynamically nested `guard` forms — at depth 64 the innermost handler is skipped and
-an outer one catches instead. It reproduces in plain kaappi with no paal involved —
-kaappi/kaappi#1886, where the `MAX_HANDLERS = 64` overflow surfaces as a *catchable*
-error, so an enclosing `guard` swallows it. Paal inherits the ceiling by delegating to
-HOST `guard`, and its own is a few levels lower still, since `paal-run-bc` and
-`run-guard!` consume host levels. Recheck this paragraph once that issue is fixed —
-no test covers the ceiling, since the threshold is host behavior rather than paal's.
-`raise-continuable` cannot resume, so it behaves as `raise`, and an unmatched clause
-re-raises from the handler's dynamic environment rather than the original one.
+**Known limits.** Nesting was bounded by the host: kaappi up to v0.22.1 mishandled
+more than 63 dynamically nested `guard` forms — at depth 64 the innermost handler was
+skipped and an outer one caught instead, because the overflow arrived as a *catchable*
+condition that the user's own `guard` swallowed. Fixed upstream by kaappi/kaappi#1919
+(closing kaappi/kaappi#1886): the handler and wind stacks grow on demand, and a VM
+overflow is now an uncatchable `KP3008`. Paal is correct at every depth tested against
+a build of kaappi `main`. The fix is not in a release yet, so paal running against an
+older kaappi still inherits the old ceiling.
+
+See "Exception handlers" below for `raise-continuable`, and for the one part of
+`guard` that is still not R7RS — an unmatched clause re-raises from the guard's
+dynamic environment rather than the original raise point.
 
 ---
 
