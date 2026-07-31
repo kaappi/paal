@@ -1208,6 +1208,85 @@
     (pkaappi-run-string "(guard (exn (#t \"caught\")) (raise \"oops\"))")))
 
 ;; ---------------------------------------------------------------
+;; with-exception-handler / raise-continuable
+;; ---------------------------------------------------------------
+;;
+;; raise-continuable calls the current handler *without unwinding*, so the
+;; handler's return value becomes the value of the raise. That cannot be built
+;; on the host condition system, which unwinds — handlers live on a paal-side
+;; stack instead. Every case is pinned on both pipelines, since the bytecode
+;; path uses that stack while the tree-walking path uses the host's.
+
+(test-group "with-exception-handler / raise-continuable"
+  (test-equal "handler's value becomes the value of raise-continuable"
+    42
+    (pkaappi-run-bc-string
+      "(with-exception-handler (lambda (e) 42) (lambda () (raise-continuable 'oops)))"))
+  (test-equal "execution resumes at the raise point"
+    11
+    (pkaappi-run-bc-string
+      "(with-exception-handler (lambda (e) 10) (lambda () (+ 1 (raise-continuable 'x))))"))
+  (test-equal "handler receives the raised object"
+    42
+    (pkaappi-run-bc-string
+      "(with-exception-handler (lambda (e) (* e 2)) (lambda () (raise-continuable 21)))"))
+  (test-equal "thunk returning normally is untouched"
+    7
+    (pkaappi-run-bc-string
+      "(with-exception-handler (lambda (e) 'h) (lambda () 7))"))
+  ;; The handler runs with the outer stack installed, so the inner handler is
+  ;; not re-entered by its own raise.
+  (test-equal "nested handlers — inner one handles"
+    16
+    (pkaappi-run-bc-string
+      "(with-exception-handler (lambda (e) 'outer)
+         (lambda () (with-exception-handler (lambda (e) (* e 3))
+                      (lambda () (+ 1 (raise-continuable 5))))))"))
+  (test-equal "a handler that raises reaches the enclosing guard"
+    '(guard from-handler)
+    (pkaappi-run-bc-string
+      "(guard (o (#t (list 'guard o)))
+         (with-exception-handler (lambda (e) (raise 'from-handler))
+           (lambda () (raise-continuable 'x))))"))
+  (test-equal "error reaches an installed handler"
+    '(g #t)
+    (pkaappi-run-bc-string
+      "(guard (o (#t (list 'g (error-object? o))))
+         (with-exception-handler (lambda (e) (list 'saw (error-object-message e)))
+           (lambda () (error \"boom\"))))"))
+  ;; R7RS: returning from a handler invoked by a non-continuable raise triggers
+  ;; a secondary exception. Both pipelines report it the same way.
+  (test-equal "handler returning from a plain raise triggers a secondary exception"
+    "handler returned"
+    (pkaappi-run-bc-string
+      "(guard (o (#t (error-object-message o)))
+         (with-exception-handler (lambda (e) 'ignored) (lambda () (raise 'x))))"))
+  (test-equal "raise-continuable with no handler escapes to guard"
+    '(caught lonely)
+    (pkaappi-run-bc-string
+      "(guard (e (#t (list 'caught e))) (raise-continuable 'lonely))"))
+  (test-equal "the handler stack is restored after a normal return"
+    '(ok outer-caught)
+    (pkaappi-run-bc-string
+      "(list (with-exception-handler (lambda (e) 1) (lambda () 'ok))
+             (guard (e (#t 'outer-caught)) (raise 'y)))"))
+  (test-equal "guard nested inside with-exception-handler"
+    'inner
+    (pkaappi-run-bc-string
+      "(with-exception-handler (lambda (e) 'h)
+         (lambda () (guard (e (#t 'inner)) (raise 'x))))"))
+  (test-equal "tree-walking pipeline: resumption"
+    11
+    (pkaappi-run-string
+      "(with-exception-handler (lambda (e) 10) (lambda () (+ 1 (raise-continuable 'x))))"))
+  ;; Was broken by the trampoline: a raise-continuable in tail position returned
+  ;; an unforced thunk, so the raise happened after the handler was uninstalled.
+  (test-equal "tree-walking pipeline: raise-continuable in tail position"
+    42
+    (pkaappi-run-string
+      "(with-exception-handler (lambda (e) 42) (lambda () (raise-continuable 'oops)))")))
+
+;; ---------------------------------------------------------------
 ;; make-parameter / parameterize
 ;; ---------------------------------------------------------------
 

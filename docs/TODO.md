@@ -3,7 +3,7 @@
 Goal: make `pkaappi` a correct R7RS-small Scheme implementation that runs the
 same programs as `kaappi`, with the same CLI conventions.
 
-Current: Stage 6 complete (self-hosting). **350 tests pass** (was 194 before Phase 1–2).
+Current: Stage 6 complete (self-hosting). **363 tests pass** (was 194 before Phase 1–2).
 
 ---
 
@@ -51,6 +51,16 @@ Missing primitives added to `paal-initial-env` (`lib/kaappi/paal/vm.sld`):
       HOST procedure that trampolines both inside the guard. Catches paal `raise`
       *and* primitive errors. See `docs/architecture.md` § Exceptions in the
       bytecode VM.
+- [x] `with-exception-handler` / `raise-continuable` — both pipelines. The
+      handler's return value becomes the value of the `raise-continuable` call.
+      Handlers live on a paal-side stack in the bytecode path, because the
+      handler must run *without* unwinding and the HOST condition system always
+      unwinds; a handler runs with the outer stack installed, per R7RS. `raise`
+      consults the same stack and then escapes, so a handler returning from a
+      non-continuable raise triggers a "handler returned" secondary exception,
+      matching the host. With no handler installed both fall through to the
+      escape `guard` catches, so `guard` is unaffected. See
+      `docs/architecture.md` § Exception handlers.
 - [x] `make-parameter` / `parameterize` — both pipelines. A parameter is a closure
       over a 2-slot cell `#(value converter)`; passing it `%paal-param-key` returns
       the cell, so `%paal-parameterize` can rebind it without a registry. No VM
@@ -76,8 +86,6 @@ Missing primitives added to `paal-initial-env` (`lib/kaappi/paal/vm.sld`):
       macros that introduce `let` bindings can capture user variables
 - [ ] `define-syntax` nested ellipsis — only single-level `...` is supported
 - [ ] `let-syntax` / `letrec-syntax` true mutual recursion — sequential binding only
-- [ ] `with-exception-handler` restart behavior (raise-continuable path) —
-      `raise-continuable` currently behaves exactly like `raise`
 - [ ] `guard` re-raise environment — an unmatched clause re-raises from the
       handler's dynamic environment, not the original one (R7RS requires the latter)
 

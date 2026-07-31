@@ -334,6 +334,40 @@ dispatch loop would have grown the host stack once per iteration.
 
 ---
 
+## Exception handlers
+
+`with-exception-handler` cannot be a HOST procedure in the bytecode path — the handler
+and thunk are paal closures, which HOST code cannot enter. And `raise-continuable`
+cannot be built on the HOST condition system at all: its handler must run **without
+unwinding**, so that the handler's return value can become the value of the
+`raise-continuable` call. HOST `raise`/`guard` always unwind.
+
+So handlers live on a paal-side stack, and `raise-continuable` simply calls the top one
+in place and returns its result:
+
+```scheme
+(with-exception-handler (lambda (e) 10) (lambda () (+ 1 (raise-continuable 'x))))
+; => 11 — the handler's 10 is the value of the raise, and (+ 1 …) resumes
+```
+
+The handler runs with the *outer* stack installed, per R7RS, so a raise inside a
+handler reaches the next handler out rather than re-entering itself.
+
+`raise` consults the same stack and then escapes. R7RS says a handler that returns from
+a non-continuable raise triggers a secondary exception; paal raises one carrying the
+message `"handler returned"`, which is what HOST kaappi does, so both pipelines report
+it identically. With no handler installed, both `raise` and `raise-continuable` fall
+straight through to the escape that `guard` catches — which is why `guard` needed no
+changes.
+
+The tree-walking VM keeps HOST `with-exception-handler` and inherits the host's own
+handler stack. It only needs the trampoline forced on both the thunk and the handler
+result: an unforced `(raise-continuable x)` in tail position would otherwise happen
+after the handler had been uninstalled, and an unforced handler result would become a
+thunk rather than the value of the raise.
+
+---
+
 ## Parameter objects
 
 A parameter is a closure over a two-slot cell `#(value converter)`. Calling it with

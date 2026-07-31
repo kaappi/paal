@@ -100,11 +100,16 @@
                       (%paal-cmd-cell             . ,cmd-cell)
 
                       ;; --- Exceptions (bytecode path) ---
-                      ; raise wraps the value so any paal datum survives the trip
-                      ; through the HOST condition system; paal-vm-condition unwraps.
+                      ; %paal-vm-raise escapes to the nearest guard, wrapping the
+                      ; value so any paal datum survives the trip through the HOST
+                      ; condition system.  raise, raise-continuable, error and
+                      ; with-exception-handler are paal definitions layered on it
+                      ; below, so they can consult the handler stack — which no
+                      ; HOST procedure could, since handlers are paal closures.
+                      ; These three bindings are the pre-override fallbacks.
+                      (%paal-vm-raise             . ,paal-vm-raise-escape!)
+                      (%paal-make-error           . ,make-host-error)
                       (raise                      . ,paal-vm-raise-escape!)
-                      ; No restart support yet: a handler can never resume, so
-                      ; raise-continuable behaves exactly like raise.
                       (raise-continuable          . ,paal-vm-raise-escape!)
                       (error                      . ,(lambda (msg . irritants)
                                                        (paal-vm-raise-escape!
@@ -119,6 +124,59 @@
                       ; (see vm-bc.sld).
                       (%paal-guard-run            . ,%paal-guard-run-marker))
                     base-alist))))
+        ; Install the paal-native exception handler stack.
+        ;
+        ; with-exception-handler cannot be a HOST procedure here: the handler and
+        ; thunk are paal closures, which HOST code cannot enter — it failed with
+        ; "expected procedure, got #<vector>".  And raise-continuable cannot be
+        ; built on the HOST condition system at all, because its handler must run
+        ; *without unwinding* so its result can become the value of the raise.
+        ;
+        ; So handlers live on a paal-side stack and raise-continuable simply calls
+        ; the top one in place.  The handler runs with the outer stack installed,
+        ; per R7RS, so a raise inside a handler reaches the next handler out
+        ; rather than itself.
+        ;
+        ; raise consults the same stack, then escapes: R7RS says a handler that
+        ; returns from a non-continuable raise triggers a secondary exception, and
+        ; escaping propagates the original outward to the next handler or guard.
+        ; With an empty stack both fall straight through to %paal-vm-raise, which
+        ; is what `guard` catches — so guard keeps working unchanged.
+        (paal-run-bc
+          (pkaappi-compile
+            "(define %paal-handlers '())
+             (define (with-exception-handler handler thunk)
+               (let ((saved %paal-handlers))
+                 (set! %paal-handlers (cons handler saved))
+                 (let ((result (guard (e (#t (set! %paal-handlers saved) (raise e)))
+                                 (thunk))))
+                   (set! %paal-handlers saved)
+                   result)))
+             (define (raise-continuable obj)
+               (if (null? %paal-handlers)
+                   (%paal-vm-raise obj)
+                   (let ((h (car %paal-handlers))
+                         (saved %paal-handlers))
+                     (set! %paal-handlers (cdr saved))
+                     (let ((result (h obj)))
+                       (set! %paal-handlers saved)
+                       result))))
+             (define (raise obj)
+               (if (null? %paal-handlers)
+                   (%paal-vm-raise obj)
+                   (let ((h (car %paal-handlers))
+                         (saved %paal-handlers))
+                     (set! %paal-handlers (cdr saved))
+                     (h obj)
+                     (set! %paal-handlers saved)
+                     ; R7RS: returning from a handler invoked by a
+                     ; non-continuable raise triggers a secondary exception.
+                     ; Same message HOST kaappi uses, so both pipelines agree.
+                     (%paal-vm-raise (%paal-make-error \"handler returned\" '())))))
+             (define (error msg . irritants)
+               (raise (%paal-make-error msg irritants)))")
+          g)
+
         ; Install paal-native promise system (separate from HOST tree-walking path).
         ; %paal-delay-impl creates a lazy promise vector; force/promise?/make-promise
         ; use the same paal-allocated tag.  Bytecode VM paal closures work here.

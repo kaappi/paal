@@ -198,7 +198,17 @@
 
              ;; Exceptions
              (error . ,error)
-             (with-exception-handler . ,with-exception-handler)
+             ;; Both calls trampolined, and the thunk *inside* the handler's
+             ;; extent: a paal lambda whose body is a tail call returns a thunk,
+             ;; so an unforced (raise-continuable x) would happen after the
+             ;; handler had been uninstalled.  The handler's own result is
+             ;; forced too — for raise-continuable it becomes the value of the
+             ;; raise, so it must be a value and not a thunk.
+             (with-exception-handler
+               . ,(lambda (handler thunk)
+                    (with-exception-handler
+                      (lambda (e) (trampoline (handler e)))
+                      (lambda () (trampoline (thunk))))))
              (raise . ,raise) (raise-continuable . ,raise-continuable)
              ;; Target of the expander's `guard` desugaring.  Tree-walking closures
              ;; are HOST procedures, so body and handler are directly callable here;
