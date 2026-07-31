@@ -247,6 +247,16 @@
                           (loop (cdr cls))))))))))
 
     ;; ---------------------------------------------------------------
+    ;; append-map — avoids (apply append (map f lst)) which hits apply arity limits
+    ;; when compiled to paal bytecode.
+    ;; ---------------------------------------------------------------
+
+    (define (append-map f lst)
+      (if (null? lst)
+          '()
+          (append (f (car lst)) (append-map f (cdr lst)))))
+
+    ;; ---------------------------------------------------------------
     ;; cond-expand helpers
     ;; ---------------------------------------------------------------
 
@@ -386,7 +396,7 @@
             ((define-library)
              (let ((bodies (filter (lambda (d) (and (pair? d) (eq? (car d) 'begin)))
                                    (cddr form))))
-               (paal-expand (cons 'begin (apply append (map cdr bodies))))))
+               (paal-expand (cons 'begin (append-map cdr bodies)))))
             ((import export)
              '(quote #f))
             ;; --- User-defined macro or procedure call ---
@@ -791,17 +801,17 @@
                                 (reverse acc)
                                 (lp (cdr fs) (+ i 1)
                                     (cons `(vector-set! v ,i ,(car fs)) acc)))))
-             (field-defs  (apply append
-                            (map (lambda (spec)
-                                   (let* ((fname (car spec))
-                                          (idx   (field-idx fname))
-                                          (acc   (cadr spec))
-                                          (mut   (and (pair? (cddr spec)) (caddr spec))))
-                                     (if mut
-                                         `((define (,acc obj) (vector-ref obj ,idx))
-                                           (define (,mut obj val) (vector-set! obj ,idx val)))
-                                         `((define (,acc obj) (vector-ref obj ,idx))))))
-                                 field-specs))))
+             (field-defs  (append-map
+                            (lambda (spec)
+                              (let* ((fname (car spec))
+                                     (idx   (field-idx fname))
+                                     (acc   (cadr spec))
+                                     (mut   (and (pair? (cddr spec)) (caddr spec))))
+                                (if mut
+                                    `((define (,acc obj) (vector-ref obj ,idx))
+                                      (define (,mut obj val) (vector-set! obj ,idx val)))
+                                    `((define (,acc obj) (vector-ref obj ,idx))))))
+                            field-specs)))
         `(begin
            (define ,tag-var (list (quote ,type-name)))
            (define (,ctor-name ,@ctor-fields)
