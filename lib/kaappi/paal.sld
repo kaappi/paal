@@ -463,7 +463,7 @@
     ;; Uses pkaappi-make-globals rather than a bare paal-initial-env blob: a .pbc
     ;; that calls map, for-each, apply or force needs the paal-compiled versions,
     ;; since the HOST ones cannot invoke a paal closure.  With the raw initial env
-    ;; `pkaappi file.pbc` failed with "type error in 'map': expected procedure".
+    ;; `paal file.pbc` failed with "type error in 'map': expected procedure".
     (define (pkaappi-run-pbc-file path)
       (paal-run-bc (paal-read-bc-file path) (pkaappi-make-globals)))
 
@@ -597,7 +597,7 @@
       ; Create persistent user globals inside g — defines accumulate here.
       (pkaappi-run-string-in g "(define %repl-user-globals (pkaappi-make-globals))")
       (let loop ()
-        (display "pkaappi> ")
+        (display "paal> ")
         (flush-output-port (current-output-port))
         ; Read one datum using the loaded reader; store it in g.
         (pkaappi-run-string-in g

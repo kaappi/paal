@@ -1,6 +1,6 @@
 # Paal — Bootstrapping Roadmap
 
-Paal is designed to be self-hosting: `pkaappi` will eventually compile its own source.
+Paal is designed to be self-hosting: `paal` will eventually compile its own source.
 This document describes the stages of that process and the design decisions behind each.
 
 ## The Bootstrap Problem
@@ -21,10 +21,10 @@ Stage 2: paal bytecode compiler
 Stage 3: paal bytecode VM
     │  runs paal bytecode natively
     ▼
-Stage 4: pkaappi can compile pkaappi
+Stage 4: paal can compile paal
     │  self-hosting achieved
     ▼
-Stage 5: pkaappi binary (no host dependency)
+Stage 5: paal binary (no host dependency)
 ```
 
 ## Current Status: Stage 6 complete — 429 tests pass
@@ -56,10 +56,10 @@ pipeline involvement in the compute path:
 | Self-execution loop: vm-bc.sld loaded, `pkaappi-make-globals` in globals | ✓ |
 | Expander bug: shorthand `define` now uses `expand-body` (internal define lifting) | ✓ |
 | Reader: `\|...\|` bar-quoted symbol support | ✓ |
-| Self-hosted `pkaappi run` subcommand (`pkaappi-self-run-file`) | ✓ |
+| Self-hosted `paal run` subcommand (`pkaappi-self-run-file`) | ✓ |
 | Bytecode serializer (`.pbc` text S-expression format) | ✓ |
-| `pkaappi compile input.scm -o output.pbc` subcommand | ✓ |
-| Self-hosted `pkaappi compile` (uses paal's own loaded pipeline) | ✓ |
+| `paal compile input.scm -o output.pbc` subcommand | ✓ |
+| Self-hosted `paal compile` (uses paal's own loaded pipeline) | ✓ |
 | Pipeline cache: `make pbc-pipeline` → `cache/*.pbc`; fast load path | ✓ |
 
 ### Remaining work
@@ -198,11 +198,11 @@ return correct results with the new reader.
 Once stages 2–5 are complete, paal can compile its own source:
 
 ```sh
-pkaappi compile lib/kaappi/paal/compiler.sld -o compiler.pbc
-pkaappi run compiler.pbc lib/kaappi/paal/vm-bc.sld > vm-bc.pbc
+paal compile lib/kaappi/paal/compiler.sld -o compiler.pbc
+paal run compiler.pbc lib/kaappi/paal/vm-bc.sld > vm-bc.pbc
 ```
 
-The final `pkaappi` binary is produced by bundling the compiler, VM, and standard
+The final `paal` binary is produced by bundling the compiler, VM, and standard
 library into a standalone executable — no kaappi host required.
 
 ## Design Principles
@@ -215,8 +215,10 @@ equivalence. This means bugs can be isolated to a single stage.
 spec document for the language — if paal can compile a form, it supports it.
 
 **Kaappi compatibility.** Paal targets R7RS-small. All paal-compiled code should run
-on kaappi too. The `pkaappi` binary adds no extensions beyond what kaappi already
+on kaappi too. The `paal` binary adds no extensions beyond what kaappi already
 provides, keeping the ecosystem coherent.
 
-**Binary naming.** Paal binaries use the `p` prefix to avoid collision with kaappi
-tools: `pkaappi` (compiler/interpreter), `pthottam` (future package manager).
+**One binary, no package manager.** Paal ships `paal` and nothing else. Packaging is
+`thottam`'s job — the existing Zig one in the kaappi repo — since a paal
+reimplementation would have to track the same manifest format and registry to be
+useful, and would gain nothing by being written in Scheme.

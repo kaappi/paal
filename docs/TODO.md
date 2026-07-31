@@ -1,6 +1,6 @@
-# pkaappi Compatibility TODO
+# paal Compatibility TODO
 
-Goal: make `pkaappi` a correct R7RS-small Scheme implementation that runs the
+Goal: make `paal` a correct R7RS-small Scheme implementation that runs the
 same programs as `kaappi`, with the same CLI conventions.
 
 Current: Stage 6 complete (self-hosting). **429 tests pass** (was 194 before Phase 1–2).
@@ -32,7 +32,7 @@ Special forms and expander gaps.
 - [x] `define-values` / `let-values` / `let*-values` — multiple-value binding forms
 - [x] `delay` / `delay-force` — lazy evaluation using custom vector-based promises
 - [x] `include` / `include-ci` — splice forms from files at expansion time
-- [x] `cond-expand` — feature-conditional code (`pkaappi`, `r7rs`, `scheme` supported)
+- [x] `cond-expand` — feature-conditional code (`paal`, `r7rs`, `scheme` supported)
 - [x] `syntax-error` — compile-time error from macros
 - [x] `case-lambda`, `define-values`, `let-values`, `let*-values` bytecode support
 
@@ -186,7 +186,7 @@ Gaps in `lib/kaappi/paal/reader.sld`:
 
 ## Phase 4 — CLI Parity with kaappi
 
-- [x] **Script args forwarding** — `pkaappi file.scm arg1 arg2` sets `(command-line)`
+- [x] **Script args forwarding** — `paal file.scm arg1 arg2` sets `(command-line)`
       to `("file.scm" "arg1" "arg2")` inside user programs via HOST lambda in globals
 - [ ] **`--lib-path <dir>`** — allow user programs to `(import (foo bar))` from
       an external directory (requires Phase 5 module system first)
@@ -209,7 +209,7 @@ resolution is needed before `--lib-path` or SRFI imports can work.
       names are visible to importers (not all definitions)
 - [ ] **Selective import forms** — `(import (only (scheme base) car cdr))`,
       `(import (rename ...))`, `(import (except ...))`, `(import (prefix ...))`
-- [ ] **`cond-expand` feature list** — `(pkaappi)`, `(r7rs)`, `(kaappi)` feature
+- [ ] **`cond-expand` feature list** — `(paal)`, `(r7rs)`, `(kaappi)` feature
       identifiers for portability
 - [ ] **Circular import detection** — guard against infinite load loops
 
@@ -283,7 +283,7 @@ Issues that span stages rather than belonging to one phase.
       `apply`, `filter`, `vector-map`, `vector-for-each`, `string-map`,
       `string-for-each`, `values`/`call-with-values` and the promise system all
       raised `not a callable` under `pkaappi-self-run-file` — the path
-      `pkaappi file.scm` takes. The globals are populated by the HOST
+      `paal file.scm` takes. The globals are populated by the HOST
       `pkaappi-make-globals` but consumed by the paal-compiled VM, and
       `define-record-type` cannot express a value both copies recognize: HOST
       kaappi makes an opaque native record, while paal's expander makes a vector
@@ -292,7 +292,7 @@ Issues that span stages rather than belonging to one phase.
       copies agree. No measurable cost on the call hot path. See
       `docs/architecture.md` § Values that cross the HOST boundary.
 - [x] **`.pbc` files could not use paal-compiled globals** — `pkaappi-run-pbc-file`
-      built its globals from a bare `paal-initial-env` blob, so `pkaappi file.pbc`
+      built its globals from a bare `paal-initial-env` blob, so `paal file.pbc`
       failed with `type error in 'map': expected procedure`. Now uses
       `pkaappi-make-globals` like the other entry points. Pre-existing and separate
       from #1; surfaced by the new `hof.scm` fixture.

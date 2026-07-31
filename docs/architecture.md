@@ -4,7 +4,7 @@
 
 Paal is a self-hosting Scheme compiler written in Kaappi Scheme. It bootstraps using
 the `kaappi` interpreter and will eventually compile its own source, producing the
-`pkaappi` binary.
+`paal` binary.
 
 ## Compilation Pipeline
 
@@ -120,7 +120,7 @@ structural — it transforms S-expressions to S-expressions with no semantic ana
 | `(define-record-type name (ctor f…) pred (f acc [mut])…)` | `begin` of `define`s using vector storage |
 | `(define-library name decl…)` | `begin` of the library's `(begin …)` bodies |
 | `(import …)` / `(export …)` | `(quote #f)` — no-op during bootstrap |
-| `(guard (v clause…) body…)` | `(%paal-guard-run (lambda () body…) (lambda (v) (cond clause… [else (raise-continuable v)])))` |
+| `(guard (v clause…) body…)` | `(%paal-guard-run (lambda () body…) (lambda (v) (cond clause… [else %paal-guard-no-match])))` |
 | `(parameterize ((p v)…) body…)` | `(%paal-parameterize (list p…) (list v…) (lambda () body…))` |
 
 **Internal defines:** `expand-body` processes a lambda/let body and hoists any leading

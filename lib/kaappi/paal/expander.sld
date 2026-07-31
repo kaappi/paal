@@ -60,7 +60,7 @@
     ;; Feature list for cond-expand
     ;; ---------------------------------------------------------------
 
-    (define %paal-features '(pkaappi r7rs scheme))
+    (define %paal-features '(paal r7rs scheme))
 
     ;; ---------------------------------------------------------------
     ;; syntax-rules implementation

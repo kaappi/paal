@@ -4,7 +4,7 @@
 
 Paal (Paal Kaappi, பால் காப்பி — "milk coffee") is a self-hosting Scheme compiler
 written in Kaappi Scheme. It bootstraps using the `kaappi` interpreter and will
-eventually compile itself, producing the `pkaappi` binary.
+eventually compile itself, producing the `paal` binary.
 
 ## Running
 
@@ -22,7 +22,7 @@ make pbc-pipeline                      # build pipeline cache (speeds up self-ho
 
 ## CLI
 
-`pkaappi` follows the same interpreter-style conventions as `kaappi`: no args starts
+`paal` follows the same interpreter-style conventions as `kaappi`: no args starts
 the REPL, a positional file runs it, subcommands (`expand`, `ir`, `eval`, `compile`,
 `repl`) and flags (`--help`, `--version`) work the same way.
 
@@ -41,13 +41,17 @@ Each compilation stage is a separate `define-library` under `lib/kaappi/paal/`:
 | `(kaappi paal vm)` | `lib/kaappi/paal/vm.sld` | IR eval (tree-walking bootstrap) |
 | `(kaappi paal)` | `lib/kaappi/paal.sld` | Public API |
 
-Entry point for the CLI: `src/main.scm` (produces `pkaappi` binary eventually).
+Entry point for the CLI: `src/main.scm` (produces `paal` binary eventually).
 
 ## Binary naming
 
-Paal binaries use the `p` prefix to avoid collision with kaappi tools:
-- `pkaappi` — the main compiler/interpreter
-- `pthottam` — paal's package manager (future)
+Paal ships one binary, `paal` — the compiler/interpreter. No `p`-prefixed variants:
+the old scheme existed to keep `pkaappi`/`pthottam` clear of the kaappi tools of the
+same name, and `paal` has no such collision.
+
+There is no paal package manager and none is planned. Paal packages use `thottam`,
+the existing Zig one from the kaappi repo; a second implementation would have to
+track the same manifest format and registry for no gain.
 
 ## Conventions
 

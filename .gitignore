@@ -1,4 +1,6 @@
 coverage.xml
-pkaappi
+# Anchored: an unanchored `paal` would also ignore lib/kaappi/paal/, so any new
+# pipeline stage added there would be silently untracked.
+/paal
 *.o
 cache/*.pbc

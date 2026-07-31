@@ -11,7 +11,7 @@ Early development — bootstrapping the compilation pipeline.
 ## Design
 
 Paal is a self-hosting Scheme compiler that bootstraps using the `kaappi` interpreter.
-Once complete, `pkaappi` will compile Kaappi Scheme to Paal bytecode and run it on the
+Once complete, `paal` will compile Kaappi Scheme to Paal bytecode and run it on the
 Paal VM — including compiling its own source.
 
 **Compilation pipeline:**
@@ -30,7 +30,7 @@ register-based VM will be layered on top as the project matures.
 3. Register-based bytecode VM
 4. Self-hosted reader (replacing host `read`)
 5. Self-hosted macro expander
-6. `pkaappi` compiles itself
+6. `paal` compiles itself
 
 ## Usage
 

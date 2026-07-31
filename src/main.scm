@@ -1,4 +1,4 @@
-;;; pkaappi — Paal Kaappi command-line driver
+;;; paal — Paal Kaappi command-line driver
 ;;;
 ;;; Bootstrap invocation:
 ;;;   kaappi --lib-path <lib> src/main.scm [args...]
@@ -10,9 +10,9 @@
 
 (define (usage)
   (display "Paal Kaappi v0.1.0\n")
-  (display "\nUsage: pkaappi [file] [args...]\n")
-  (display "       pkaappi compile <file.scm> -o <output.pbc>\n")
-  (display "       pkaappi <subcommand> [args...]\n")
+  (display "\nUsage: paal [file] [args...]\n")
+  (display "       paal compile <file.scm> -o <output.pbc>\n")
+  (display "       paal <subcommand> [args...]\n")
   (display "\nWith no arguments, starts an interactive REPL.\n")
   (display "\nSubcommands:\n")
   (display "  compile <f> -o <out>    Compile to .pbc bytecode\n")
@@ -41,7 +41,7 @@
      (usage))
     ; Version
     ((or (string=? (car args) "--version") (string=? (car args) "version"))
-     (display "pkaappi 0.1.0") (newline))
+     (display "paal 0.1.0") (newline))
     ; run <file> [args...] — explicit subcommand (kept for compatibility)
     ((string=? (car args) "run")
      (if (null? (cdr args))
@@ -57,7 +57,7 @@
             (null? (cddr args))
             (not (string=? (caddr args) "-o"))
             (null? (cdddr args)))
-        (display "error: compile: usage: pkaappi compile <input.scm> -o <output.pbc>\n")
+        (display "error: compile: usage: paal compile <input.scm> -o <output.pbc>\n")
         (exit 1))
        (else
         (pkaappi-self-compile-to-file (cadr args) (cadddr args)))))
@@ -93,7 +93,7 @@
 
 ; In bootstrap mode (kaappi src/main.scm args...), command-line includes
 ; the script path as the first element — strip it.
-; In standalone mode (./pkaappi args...), the binary name is already absent.
+; In standalone mode (./paal args...), the binary name is already absent.
 (define (prog-args)
   (let ((args (command-line)))
     (if (and (pair? args)

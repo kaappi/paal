@@ -922,9 +922,9 @@
 ;; ---------------------------------------------------------------
 
 (test-group "cond-expand"
-  (test-equal "pkaappi feature"
+  (test-equal "paal feature"
     "yes"
-    (pkaappi-run-string "(cond-expand (pkaappi \"yes\") (else \"no\"))"))
+    (pkaappi-run-string "(cond-expand (paal \"yes\") (else \"no\"))"))
   (test-equal "r7rs feature"
     "yes"
     (pkaappi-run-string "(cond-expand (r7rs \"yes\") (else \"no\"))"))
@@ -933,10 +933,10 @@
     (pkaappi-run-string "(cond-expand (unknown-thing \"yes\") (else \"no\"))"))
   (test-equal "and requirement"
     "both"
-    (pkaappi-run-string "(cond-expand ((and pkaappi r7rs) \"both\") (else \"no\"))"))
+    (pkaappi-run-string "(cond-expand ((and paal r7rs) \"both\") (else \"no\"))"))
   (test-equal "or requirement"
     "yes"
-    (pkaappi-run-string "(cond-expand ((or unknown pkaappi) \"yes\") (else \"no\"))"))
+    (pkaappi-run-string "(cond-expand ((or unknown paal) \"yes\") (else \"no\"))"))
   (test-equal "not requirement"
     "yes"
     (pkaappi-run-string "(cond-expand ((not unknown-thing) \"yes\") (else \"no\"))"))
