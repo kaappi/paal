@@ -272,6 +272,24 @@
          (cons (instantiate-template (car tmpl) env)
                (instantiate-template (cdr tmpl) env)))))
 
+    ;; A transformer whose output is expanded in `env` rather than in whatever
+    ;; macro environment is current where the macro is used.  let-syntax needs
+    ;; this so a binding cannot see its siblings; letrec-syntax deliberately
+    ;; uses the plain transformer, which is what lets its bindings refer to one
+    ;; another.
+    ;;
+    ;; Expanding here means the caller's (paal-expand (macro form)) runs over an
+    ;; already-expanded form. That is harmless — core forms simply recurse into
+    ;; their sub-forms and no macro uses remain.
+    (define (make-scoped-transformer spec env)
+      (let ((base (make-transformer spec)))
+        (lambda (form)
+          (let ((saved %paal-macros))
+            (set! %paal-macros env)
+            (let ((result (paal-expand (base form))))
+              (set! %paal-macros saved)
+              result)))))
+
     ;; ---------------------------------------------------------------
     ;; Hygiene: rename identifiers the template itself binds
     ;; ---------------------------------------------------------------
@@ -511,18 +529,26 @@
                (paal-macro-set! name (make-transformer transformer-spec))
                '(quote #f)))
             ((let-syntax)
-             ;; Local macros: bind, expand body, restore
+             ;; R7RS 4.3.1: a keyword's region is the *body* only, so a binding
+             ;; does not see its siblings.  Each transformer therefore expands
+             ;; its output in the environment from before any of these bindings
+             ;; were installed — which is exactly what letrec-syntax below does
+             ;; not do, and the only thing that distinguishes the two here.
              (let* ((bindings (cadr form))
                     (body     (cddr form))
                     (saved    %paal-macros))
                (for-each (lambda (b)
-                           (paal-macro-set! (car b) (make-transformer (cadr b))))
+                           (paal-macro-set! (car b)
+                                            (make-scoped-transformer (cadr b) saved)))
                          bindings)
                (let ((result (paal-expand `(begin ,@body))))
                  (set! %paal-macros saved)
                  result)))
             ((letrec-syntax)
-             ;; Same as let-syntax for bootstrap (no true mutual recursion)
+             ;; R7RS 4.3.1: the region covers the bindings as well as the body,
+             ;; so the transformers may refer to each other and to themselves.
+             ;; Installing them all before expanding anything gives that for
+             ;; free, since a use expands against whatever is current.
              (let* ((bindings (cadr form))
                     (body     (cddr form))
                     (saved    %paal-macros))

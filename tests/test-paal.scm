@@ -1178,6 +1178,95 @@
        #t")))
 
 ;; ---------------------------------------------------------------
+;; let-syntax / letrec-syntax scoping (R7RS 4.3.1)
+;; ---------------------------------------------------------------
+;;
+;; The two differ only in the region of the keywords. letrec-syntax covers the
+;; bindings as well as the body, so its transformers may refer to one another;
+;; let-syntax covers the body only, so a binding must NOT see its siblings.
+
+(test-group "letrec-syntax: recursion between bindings"
+  (test-equal "mutually recursive macros"
+    '(#t #t)
+    (pkaappi-run-bc-string
+      "(letrec-syntax ((ev? (syntax-rules () ((_ ()) #t) ((_ (x . rest)) (od? rest))))
+                       (od? (syntax-rules () ((_ ()) #f) ((_ (x . rest)) (ev? rest)))))
+         (list (ev? (a b c d)) (od? (a b c))))"))
+  (test-equal "a self-recursive macro"
+    5
+    (pkaappi-run-bc-string
+      "(letrec-syntax ((cnt (syntax-rules () ((_ ()) 0) ((_ (x . rest)) (+ 1 (cnt rest))))))
+         (cnt (a b c d e)))"))
+  (test-equal "tree-walking pipeline"
+    5
+    (pkaappi-run-string
+      "(letrec-syntax ((cnt (syntax-rules () ((_ ()) 0) ((_ (x . rest)) (+ 1 (cnt rest))))))
+         (cnt (a b c d e)))")))
+
+(test-group "let-syntax: bindings do not see their siblings"
+  ;; The distinguishing case: a template naming a sibling keyword must resolve
+  ;; to the outer binding, not the one alongside it.
+  (test-equal "a sibling keyword resolves to the outer binding"
+    'from-outer
+    (pkaappi-run-bc-string
+      "(define-syntax lsx-outer (syntax-rules () ((_ x) 'from-outer)))
+       (let-syntax ((a (syntax-rules () ((_) (lsx-outer 1))))
+                    (lsx-outer (syntax-rules () ((_ x) 'from-inner))))
+         (a))"))
+  (test-equal "neither of two bindings sees the other"
+    '(outer-q outer-p)
+    (pkaappi-run-bc-string
+      "(define-syntax lsx-p (syntax-rules () ((_) 'outer-p)))
+       (define-syntax lsx-q (syntax-rules () ((_) 'outer-q)))
+       (let-syntax ((lsx-p (syntax-rules () ((_) (lsx-q))))
+                    (lsx-q (syntax-rules () ((_) (lsx-p)))))
+         (list (lsx-p) (lsx-q)))"))
+  (test-equal "the body still sees the local binding"
+    'local
+    (pkaappi-run-bc-string
+      "(define-syntax lsx-m (syntax-rules () ((_) 'global)))
+       (let-syntax ((lsx-m (syntax-rules () ((_) 'local)))) (lsx-m))"))
+  (test-equal "the outer binding is restored afterwards"
+    'global
+    (pkaappi-run-bc-string
+      "(define-syntax lsx-m (syntax-rules () ((_) 'global)))
+       (let-syntax ((lsx-m (syntax-rules () ((_) 'local)))) (lsx-m))
+       (lsx-m)"))
+  (test-equal "an enclosing let-syntax binding is visible"
+    1
+    (pkaappi-run-bc-string
+      "(let-syntax ((lsx-a (syntax-rules () ((_) 1))))
+         (let-syntax ((lsx-b (syntax-rules () ((_) (lsx-a)))))
+           (lsx-b)))"))
+  (test-equal "let-syntax nested in letrec-syntax"
+    'rec
+    (pkaappi-run-bc-string
+      "(letrec-syntax ((lsx-r (syntax-rules () ((_) 'rec))))
+         (let-syntax ((lsx-l (syntax-rules () ((_) (lsx-r))))) (lsx-l)))"))
+  (test-equal "letrec-syntax nested in let-syntax"
+    'lit
+    (pkaappi-run-bc-string
+      "(let-syntax ((lsx-l (syntax-rules () ((_) 'lit))))
+         (letrec-syntax ((lsx-r (syntax-rules () ((_) (lsx-l))))) (lsx-r)))"))
+  (test-equal "a local macro used more than once"
+    '(6 8)
+    (pkaappi-run-bc-string
+      "(let-syntax ((lsx-d (syntax-rules () ((_ x) (* x 2))))) (list (lsx-d 3) (lsx-d 4)))"))
+  (test-equal "hygiene still applies to local macros"
+    '(2 1)
+    (pkaappi-run-bc-string
+      "(let-syntax ((lsx-sw (syntax-rules ()
+                          ((_ a b) (let ((tmp a)) (set! a b) (set! b tmp))))))
+         (let ((x 1) (tmp 2)) (lsx-sw x tmp) (list x tmp)))"))
+  (test-equal "tree-walking pipeline"
+    'from-outer
+    (pkaappi-run-string
+      "(define-syntax lsx-outer (syntax-rules () ((_ x) 'from-outer)))
+       (let-syntax ((a (syntax-rules () ((_) (lsx-outer 1))))
+                    (lsx-outer (syntax-rules () ((_ x) 'from-inner))))
+         (a))")))
+
+;; ---------------------------------------------------------------
 ;; Phase 1: HOF — vector-map, string-map, etc.
 ;; ---------------------------------------------------------------
 

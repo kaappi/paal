@@ -163,6 +163,17 @@ was defined. That needs each identifier to carry its definition environment thro
 the expander (syntactic closures, or explicit renaming), which a structural
 S-expression → S-expression pass has nowhere to record.
 
+**Local macro scope:** `letrec-syntax` installs all its bindings before expanding
+anything, so its transformers may refer to each other and to themselves. `let-syntax`
+wraps each transformer so that its *output* is expanded in the environment captured
+before any of the bindings were installed — R7RS 4.3.1 gives its keywords the body as
+their region, not the bindings, so a template naming a sibling keyword must resolve to
+the outer binding. That wrapper is the only difference between the two forms here.
+
+The macro table itself is a module-level global that is never reset, so macros persist
+across independent `pkaappi-run-*` calls and can shadow a later program's procedure of
+the same name. See `docs/TODO.md`.
+
 **Ellipsis:** `syntax-rules` supports nesting to arbitrary depth — a pattern variable
 bound under two ellipses instantiates under two in the template. Each ellipsis past the
 first *splices* rather than nests, so `(a ... ...)` flattens what `((a ...) ...)` would

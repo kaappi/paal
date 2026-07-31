@@ -3,7 +3,7 @@
 Goal: make `pkaappi` a correct R7RS-small Scheme implementation that runs the
 same programs as `kaappi`, with the same CLI conventions.
 
-Current: Stage 6 complete (self-hosting). **392 tests pass** (was 194 before Phase 1–2).
+Current: Stage 6 complete (self-hosting). **405 tests pass** (was 194 before Phase 1–2).
 
 ---
 
@@ -15,7 +15,13 @@ Special forms and expander gaps.
       `x ... ...` splicing, and the `(... <template>)` escape. Template-introduced
       bindings are renamed per expansion so they cannot capture. Referential
       transparency is the one remaining gap — see below.
-- [x] `let-syntax` / `letrec-syntax` — local macro binding (save/restore global macro env)
+- [x] `let-syntax` / `letrec-syntax` — correct R7RS 4.3.1 regions. `letrec-syntax`
+      bindings may refer to each other and to themselves (mutual recursion already
+      worked — the old entry claiming otherwise was wrong); `let-syntax` bindings
+      may not, so a template naming a sibling keyword resolves to the outer
+      binding. The distinction is one wrapper: a let-syntax transformer expands
+      its output in the environment captured before any of the bindings were
+      installed.
 - [x] `case-lambda` — multi-arity dispatch via let-destructuring (no `apply`)
 - [x] `define-values` / `let-values` / `let*-values` — multiple-value binding forms
 - [x] `delay` / `delay-force` — lazy evaluation using custom vector-based promises
@@ -110,7 +116,6 @@ Missing primitives added to `paal-initial-env` (`lib/kaappi/paal/vm.sld`):
       explicit renaming — which this purely structural S-expr → S-expr design has
       nowhere to put. A test pins the current answer so the gap is visible rather
       than forgotten.
-- [ ] `let-syntax` / `letrec-syntax` true mutual recursion — sequential binding only
 - [ ] `guard` re-raise **dynamic environment** — partially addressed. An unmatched
       clause now re-raises with `raise-continuable` rather than `raise`, and a
       `guard` is now correctly the innermost handler while its body runs, so an
@@ -294,6 +299,23 @@ Issues that span stages rather than belonging to one phase.
       signal again — a green run no longer hides skipped tests.
 
 **Open:**
+
+- [ ] **Macros leak between independent programs** — `%paal-macros` is a module
+      global in the expander and is never reset, so a `define-syntax` in one
+      program is still installed for the next. Worse, it silently shadows a
+      procedure of the same name:
+
+      ```scheme
+      (pkaappi-run-bc-string "(define-syntax zz (syntax-rules () ((_) 'from-macro))) (zz)")
+      ; => from-macro
+      (pkaappi-run-bc-string "(define (zz) 'from-procedure) (zz)")
+      ; => from-macro   — the macro from the previous, unrelated program won
+      ```
+      Pre-existing; surfaced by a test whose macro name collided with a later
+      test's variable. Any host embedding paal to run more than one program hits
+      it. The fix is to reset the table per top-level expansion, but the
+      self-hosted loader deliberately shares state across `pkaappi-load-file`
+      calls, so "per program" needs defining before changing anything.
 
 - [ ] **`.pbc` files can become unreadable depending on byte offsets**
       (kaappi/kaappi#1920) — kaappi's `read` on a *file port* mis-handles a dotted
