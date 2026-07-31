@@ -11,10 +11,12 @@
 (define (usage)
   (display "Paal Kaappi v0.1.0\n")
   (display "\nUsage: paal [file] [args...]\n")
+  (display "       paal check <file>...\n")
   (display "       paal compile <file.scm> -o <output.pbc>\n")
   (display "       paal <subcommand> [args...]\n")
   (display "\nWith no arguments, starts an interactive REPL.\n")
   (display "\nSubcommands:\n")
+  (display "  check <file>...         Compile without running; report errors\n")
   (display "  compile <f> -o <out>    Compile to .pbc bytecode\n")
   (display "  expand <file>           Print expanded forms\n")
   (display "  ir <file>               Print IR nodes\n")
@@ -50,6 +52,11 @@
     ; repl — explicit subcommand
     ((string=? (car args) "repl")
      (pkaappi-self-repl))
+    ; check <file>... — compile only, run nothing; exit 1 if anything failed
+    ((string=? (car args) "check")
+     (if (null? (cdr args))
+         (begin (display "error: check: missing file\n") (exit 1))
+         (if (pkaappi-check-files (cdr args)) (exit 0) (exit 1))))
     ; compile <input> -o <output>
     ((string=? (car args) "compile")
      (cond

@@ -3,7 +3,7 @@
 Goal: make `paal` a correct R7RS-small Scheme implementation that runs the
 same programs as `kaappi`, with the same CLI conventions.
 
-Current: Stage 6 complete (self-hosting). **448 tests pass** (was 194 before Phase 1–2).
+Current: Stage 6 complete (self-hosting). **454 tests pass** (was 194 before Phase 1–2).
 
 ---
 
@@ -217,8 +217,16 @@ Gaps in `lib/kaappi/paal/reader.sld`:
       to `("file.scm" "arg1" "arg2")` inside user programs via HOST lambda in globals
 - [ ] **`--lib-path <dir>`** — allow user programs to `(import (foo bar))` from
       an external directory (requires Phase 5 module system first)
-- [ ] **`check` subcommand** — compile-only static analysis: reads, expands, compiles,
-      executes nothing; reports errors; used in CI
+- [x] **`check` subcommand** — `paal check <file>...` reads, expands, analyzes and
+      *emits*, then throws the bytecode away. Emitting rather than stopping at
+      the IR is the point: register allocation and upvalue resolution happen
+      there, so stopping earlier would miss the errors a user is least likely to
+      have anticipated. Nothing runs, so a file with side effects is safe to
+      check. Every file is checked rather than stopping at the first failure, so
+      one run reports every broken file in a tree; diagnostics go to stderr and
+      the exit status is 1 if any file failed. Each file gets a fresh macro
+      table, so a `define-syntax` in one cannot silently satisfy a reference in
+      the next.
 - [ ] **`fmt` subcommand** — canonical 2-space formatter with `--check` mode for CI
 - [ ] **Bytecode cache for user programs** — cache compiled `.scm` keyed by source
       hash; currently every run recompiles from source
@@ -341,6 +349,15 @@ Issues that span stages rather than belonging to one phase.
       signal again — a green run no longer hides skipped tests.
 
 **Open:**
+
+- [ ] **Expander diagnostics name internal procedures, not the user's mistake** —
+      `paal check` on `(let ((a)) a)` reports `type error in 'cadr': expected
+      pair, got ()`, which says nothing about the malformed binding. The
+      expander destructures forms with `car`/`cadr` and lets the host's type
+      error escape, so most syntax errors surface as whichever accessor
+      happened to fail first. Fixing it means shape-checking each derived form
+      before destructuring it and raising a message that names the form and the
+      file. Cosmetic until `check` is used in CI, which is what it is for.
 
 - [ ] **`.pbc` files can become unreadable depending on byte offsets**
       (kaappi/kaappi#1920) — kaappi's `read` on a *file port* mis-handles a dotted

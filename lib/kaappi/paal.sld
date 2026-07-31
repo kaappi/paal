@@ -37,7 +37,9 @@
     pkaappi-set-command-line!
     ;; Serializer
     paal-write-bc paal-read-bc paal-write-bc-file paal-read-bc-file
-    pkaappi-compile-to-file pkaappi-run-pbc-file)
+    pkaappi-compile-to-file pkaappi-run-pbc-file
+    ;; Compile-only checking
+    pkaappi-check-file pkaappi-check-files)
   (begin
 
     ;; --- Tree-walking pipeline ---
@@ -484,6 +486,47 @@
     (define (pkaappi-compile-to-file input output)
       (let ((fn (pkaappi-compile-forms (paal-read-file input))))
         (paal-write-bc-file fn output)))
+
+    ;; --- check: compile without running ---
+
+    ;; Everything the compiler can tell you about a file without executing it:
+    ;; read, expand, analyze, emit.  Emitting rather than stopping at the IR is
+    ;; deliberate — register allocation and upvalue resolution happen there, so
+    ;; skipping it would miss the errors a user is least likely to have thought
+    ;; about.  Nothing runs, so a file with side effects is safe to check.
+    ;;
+    ;; Returns #t if the file compiled, #f otherwise, printing one diagnostic
+    ;; line per failure.  A fresh macro table per file, so a define-syntax in
+    ;; one checked file cannot silently satisfy a reference in the next.
+    (define (pkaappi-check-file path)
+      (guard (e (#t (display "error: " (current-error-port))
+                    (display path (current-error-port))
+                    (display ": " (current-error-port))
+                    (%display-condition e (current-error-port))
+                    (newline (current-error-port))
+                    #f))
+        (paal-macros-reset!)
+        (pkaappi-compile-forms (paal-read-file path))
+        #t))
+
+    ;; Conditions reaching here are HOST error objects most of the time, but a
+    ;; paal `raise` can deliver any value at all, so fall back to writing it.
+    (define (%display-condition e port)
+      (if (error-object? e)
+          (begin
+            (display (error-object-message e) port)
+            (for-each (lambda (x) (display " " port) (write x port))
+                      (error-object-irritants e)))
+          (write e port)))
+
+    ;; #t only if every file compiled.  Checks them all rather than stopping at
+    ;; the first, so one run reports every broken file in a tree.
+    (define (pkaappi-check-files paths)
+      (let loop ((ps paths) (ok #t))
+        (if (null? ps)
+            ok
+            (let ((this (pkaappi-check-file (car ps))))
+              (loop (cdr ps) (and ok this))))))
 
     ;; Uses pkaappi-make-globals rather than a bare paal-initial-env blob: a .pbc
     ;; that calls map, for-each, apply or force needs the paal-compiled versions,

@@ -2073,4 +2073,57 @@
       (paal-run-bc (paal-read-bc (open-input-string (get-output-string buf)))
                    (pkaappi-make-globals)))))
 
+;; ---------------------------------------------------------------
+;; check — compile without running
+;; ---------------------------------------------------------------
+;;
+;; Goes all the way to emission rather than stopping at the IR: register
+;; allocation and upvalue resolution happen there, so stopping earlier would
+;; miss the errors a user is least likely to have anticipated.
+
+(define (write-temp! path text)
+  (let ((port (open-output-file path)))
+    (display text port)
+    (close-output-port port)))
+
+(test-group "check"
+  (test-equal "a good file checks clean"
+    #t
+    (let ((p "paal-check-good-tmp.scm"))
+      (write-temp! p "(define (ok x) (* x 2)) (display (ok 21))")
+      (let ((r (pkaappi-check-file p))) (delete-file p) r)))
+  (test-equal "a reader error is caught"
+    #f
+    (let ((p "paal-check-paren-tmp.scm"))
+      (write-temp! p "(define (bad x) (* x 2)")
+      (let ((r (pkaappi-check-file p))) (delete-file p) r)))
+  (test-equal "an expander error is caught"
+    #f
+    (let ((p "paal-check-syntax-tmp.scm"))
+      (write-temp! p "(let ((a)) a)")
+      (let ((r (pkaappi-check-file p))) (delete-file p) r)))
+  ;; The point of check: a file is compiled, never run.
+  (test-equal "nothing in the file is executed"
+    '(#t 0)
+    (let ((p "paal-check-effect-tmp.scm")
+          (marker "paal-check-marker-tmp"))
+      (write-temp! p (string-append "(define port (open-output-file \""
+                                    marker "\")) (close-output-port port)"))
+      (let ((r (pkaappi-check-file p)))
+        (delete-file p)
+        (let ((ran (if (file-exists? marker) 1 0)))
+          (when (= ran 1) (delete-file marker))
+          (list r ran)))))
+  (test-equal "every file is checked, not just up to the first failure"
+    #f
+    (let ((good "paal-check-m1-tmp.scm") (bad "paal-check-m2-tmp.scm"))
+      (write-temp! good "(define a 1)")
+      (write-temp! bad  "(define b")
+      (let ((r (pkaappi-check-files (list good bad good))))
+        (delete-file good) (delete-file bad)
+        r)))
+  (test-equal "an empty file list is vacuously clean"
+    #t
+    (pkaappi-check-files '())))
+
 (test-exit)
