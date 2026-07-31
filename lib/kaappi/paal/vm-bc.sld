@@ -302,7 +302,8 @@
     ;; mis-handles a dotted pair straddling a 4096-byte chunk boundary on a file
     ;; port (kaappi/kaappi#1920), and inlining merely shifted the byte offsets
     ;; so that one of the `(#t . N)` upvalue specs landed on one.  Splitting the
-    ;; procedure is not a defence: any edit to this file can shift offsets again.
+    ;; procedure was never the defence; paal-read-bc-file now parses .pbc from a
+    ;; string port, which removes the boundary entirely.
     (define (run-guard! regs globals nbase body handler)
       (guard (e (#t (paal-call-value regs globals nbase handler
                                      (list (paal-vm-condition e)))))

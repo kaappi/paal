@@ -256,11 +256,11 @@ Issues that span stages rather than belonging to one phase.
       chunk. `.pbc` files are full of `(#t . N)` upvalue specs, so a large enough
       one eventually lands on a boundary. It hit `cache/paal-vm-bc.pbc` when the
       guard logic was inlined into `do-call!`, breaking `make pbc-pipeline`.
-      Nothing to fix on the paal side, and there is no reliable workaround:
-      splitting `run-guard!` back out only helped by shifting offsets, and any
-      edit can shift them again. The same bytes read from a string port parse
-      fine, so `paal-read-bc-file` could slurp the file and use
-      `open-input-string` if this becomes disruptive before the fix lands.
+      **Worked around in paal:** `paal-read-bc-file` now slurps the file and
+      parses from a string port, where no chunk boundary exists, so every `.pbc`
+      read is immune. Left open because the upstream bug is unfixed and still
+      affects any other `read` from a file port. Splitting `run-guard!` back out
+      was never a real defence — it only shifted byte offsets.
       NB the earlier "large and deeply nested" diagnosis in this entry was wrong:
       `paal-expander.pbc` is both bigger and deeper and reads back fine.
 

@@ -637,7 +637,29 @@
       (pkaappi-compile-to-file "tests/fixtures/factorial.scm" path)
       (let ((result (pkaappi-run-pbc-file path)))
         (delete-file path)
-        result))))
+        result)))
+
+  ;; Regression guard for kaappi/paal's use of kaappi/kaappi#1920: reading a
+  ;; .pbc from a file port breaks when a dotted pair straddles a 4096-byte
+  ;; chunk boundary, and .pbc files carry (#t . N) upvalue specs throughout.
+  ;; paal-read-bc-file slurps the file and parses from a string port, where no
+  ;; boundary exists.  Build a .pbc whose "." sits exactly at offset 4093 —
+  ;; the offset that fails when read straight from a file port.
+  (let* ((tail "(closure 0 (pbc 0 #f 0 #f ()) ((#t . 0)))")
+         (pad  (let loop ((k 0) (acc ""))
+                 (if (= k 2021) acc (loop (+ k 1) (string-append acc "x ")))))
+         (text (string-append "(pbc 0 #f 0 #f (" pad tail "))"))
+         (path "paal-test-dot-boundary.pbc"))
+    (test-equal "the dot really lands on the chunk boundary"
+      #\.
+      (string-ref text 4093))
+    (test-assert "a .pbc with a dot on a 4096-byte boundary still reads"
+      (let ((port (open-output-file path)))
+        (write-string text port)
+        (close-output-port port)
+        (let ((bf (paal-read-bc-file path)))
+          (delete-file path)
+          (vector? bf))))))
 
 ;; ---------------------------------------------------------------
 ;; Self-hosted compile subcommand
