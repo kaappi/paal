@@ -3,7 +3,7 @@
 Goal: make `pkaappi` a correct R7RS-small Scheme implementation that runs the
 same programs as `kaappi`, with the same CLI conventions.
 
-Current: Stage 6 complete (self-hosting). **369 tests pass** (was 194 before Phase 1–2).
+Current: Stage 6 complete (self-hosting). **380 tests pass** (was 194 before Phase 1–2).
 
 ---
 
@@ -11,8 +11,9 @@ Current: Stage 6 complete (self-hosting). **369 tests pass** (was 194 before Pha
 
 Special forms and expander gaps.
 
-- [x] `define-syntax` + `syntax-rules` — basic hygienic macro system (single-level
-      ellipsis; no nested ellipsis or hygiene renaming yet)
+- [x] `define-syntax` + `syntax-rules` — single-level ellipsis; template-introduced
+      bindings are renamed per expansion so they cannot capture (no nested ellipsis,
+      and no referential transparency — both below)
 - [x] `let-syntax` / `letrec-syntax` — local macro binding (save/restore global macro env)
 - [x] `case-lambda` — multi-arity dispatch via let-destructuring (no `apply`)
 - [x] `define-values` / `let-values` / `let*-values` — multiple-value binding forms
@@ -88,8 +89,26 @@ Missing primitives added to `paal-initial-env` (`lib/kaappi/paal/vm.sld`):
       `kaappi` on `PATH` here is v0.22.0. Paal running against an older kaappi
       still has the old ceiling, so this is a note about *which* kaappi you run
       paal with, not about paal.
-- [ ] `define-syntax` hygiene — introduced bindings are not renamed (non-hygienic);
-      macros that introduce `let` bindings can capture user variables
+- [ ] `define-syntax` **referential transparency** — the capture half is done: a
+      template's own binding identifiers (`lambda` formals, `let`/`let*`/`letrec`/
+      `let-values` bindings, named-let loop names, `do` variables, `guard`
+      variables) are renamed per expansion, so `(let ((tmp a)) …)` in a template
+      no longer shadows a user's `tmp`. Pattern variables keep their names, since
+      those come from the use site.
+
+      What remains is the other half: a *free* identifier in a template resolves
+      at the use site rather than where the macro was defined.
+
+      ```scheme
+      (define (helper x) (* x 10))
+      (define-syntax use-helper (syntax-rules () ((_ v) (helper v))))
+      (let ((helper (lambda (x) (- x)))) (use-helper 3))
+      ```
+      R7RS says `30`; paal says `-3`. Fixing it means every identifier carrying
+      its definition environment through the expander — syntactic closures or
+      explicit renaming — which this purely structural S-expr → S-expr design has
+      nowhere to put. A test pins the current answer so the gap is visible rather
+      than forgotten.
 - [ ] `define-syntax` nested ellipsis — only single-level `...` is supported
 - [ ] `let-syntax` / `letrec-syntax` true mutual recursion — sequential binding only
 - [ ] `guard` re-raise **dynamic environment** — partially addressed. An unmatched

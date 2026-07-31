@@ -948,6 +948,97 @@
 ;; Phase 1: define-syntax / syntax-rules
 ;; ---------------------------------------------------------------
 
+;; ---------------------------------------------------------------
+;; Macro hygiene — introduced bindings do not capture
+;; ---------------------------------------------------------------
+;;
+;; Identifiers a template binds are renamed per expansion, so a macro that
+;; introduces (let ((tmp ...)) ...) cannot shadow a user's tmp. Pattern
+;; variables keep their names, since those come from the use site.
+;;
+;; Referential transparency is *not* provided — see the group's last test.
+
+(test-group "define-syntax: hygiene"
+  (test-equal "introduced let binding does not capture the user's variable"
+    '(2 1)
+    (pkaappi-run-bc-string
+      "(define-syntax swap!
+         (syntax-rules () ((_ a b) (let ((tmp a)) (set! a b) (set! b tmp)))))
+       (define x 1) (define tmp 2)
+       (swap! x tmp)
+       (list x tmp)"))
+  (test-equal "an argument naming the template's own binding still works"
+    5
+    (pkaappi-run-bc-string
+      "(define-syntax my-or (syntax-rules () ((_ a b) (let ((t a)) (if t t b)))))
+       (define t 5)
+       (my-or #f t)"))
+  (test-equal "pattern variables in binding position keep their names"
+    21
+    (pkaappi-run-bc-string
+      "(define-syntax bind1 (syntax-rules () ((_ v e body) (let ((v e)) body))))
+       (bind1 q 7 (* q 3))"))
+  (test-equal "template lambda formals are renamed"
+    10
+    (pkaappi-run-bc-string
+      "(define-syntax twice (syntax-rules () ((_ e) ((lambda (n) (+ n n)) e))))
+       (define n 100)
+       (twice 5)"))
+  (test-equal "named let in a template renames both loop name and variables"
+    10
+    (pkaappi-run-bc-string
+      "(define-syntax countdown
+         (syntax-rules ()
+           ((_ k) (let loop ((i k) (acc 0))
+                    (if (= i 0) acc (loop (- i 1) (+ acc i)))))))
+       (define i 999) (define loop 'nope)
+       (countdown 4)"))
+  (test-equal "do-loop variables in a template are renamed"
+    10
+    (pkaappi-run-bc-string
+      "(define-syntax sum-to
+         (syntax-rules ()
+           ((_ k) (do ((j 0 (+ j 1)) (s 0 (+ s j))) ((= j k) s)))))
+       (define j 77) (define s 88)
+       (sum-to 5)"))
+  (test-equal "two expansions get separate names"
+    25
+    (pkaappi-run-bc-string
+      "(define-syntax sq (syntax-rules () ((_ e) (let ((v e)) (* v v)))))
+       (+ (sq 3) (sq 4))"))
+  (test-equal "a macro expanding to another macro stays hygienic"
+    8
+    (pkaappi-run-bc-string
+      "(define-syntax dbl (syntax-rules () ((_ e) (let ((m e)) (+ m m)))))
+       (define-syntax quad (syntax-rules () ((_ e) (dbl (dbl e)))))
+       (define m 1000)
+       (quad 2)"))
+  (test-equal "binding alongside an ellipsis"
+    '(built 1 2 3)
+    (pkaappi-run-bc-string
+      "(define-syntax my-list
+         (syntax-rules () ((_ e ...) (let ((tag 'built)) (list tag e ...)))))
+       (define tag 'user)
+       (my-list 1 2 3)"))
+  (test-equal "tree-walking pipeline"
+    '(2 1)
+    (pkaappi-run-string
+      "(define-syntax swap!
+         (syntax-rules () ((_ a b) (let ((tmp a)) (set! a b) (set! b tmp)))))
+       (define x 1) (define tmp 2)
+       (swap! x tmp)
+       (list x tmp)"))
+  ;; Documents the half that is NOT implemented: a free identifier in a template
+  ;; resolves at the use site, so a local binding there shadows the one visible
+  ;; where the macro was defined. R7RS would give 30.
+  (test-equal "free identifiers are not referentially transparent (known gap)"
+    -3
+    (pkaappi-run-bc-string
+      "(define (helper x) (* x 10))
+       (define-syntax use-helper (syntax-rules () ((_ v) (helper v))))
+       (let ((helper (lambda (x) (- x))))
+         (use-helper 3))")))
+
 (test-group "define-syntax: basic patterns"
   (test-equal "nullary macro"
     #t

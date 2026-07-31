@@ -227,6 +227,87 @@
          (cons (instantiate-template (car tmpl) env)
                (instantiate-template (cdr tmpl) env)))))
 
+    ;; ---------------------------------------------------------------
+    ;; Hygiene: rename identifiers the template itself binds
+    ;; ---------------------------------------------------------------
+    ;;
+    ;; A template that introduces its own binding — (let ((tmp a)) ...) — would
+    ;; otherwise capture a user variable of the same name:
+    ;;
+    ;;   (define-syntax swap!
+    ;;     (syntax-rules () ((_ a b) (let ((tmp a)) (set! a b) (set! b tmp)))))
+    ;;   (define x 1) (define tmp 2)
+    ;;   (swap! x tmp)        ; the macro's tmp shadowed the user's
+    ;;
+    ;; Collecting those identifiers and giving each a fresh name per expansion
+    ;; fixes it.  Pattern variables are excluded — they carry names from the use
+    ;; site and must keep them — as are literals and the ellipsis marker.
+    ;;
+    ;; Renaming is applied by adding the substitutions to the same environment
+    ;; instantiate-template already consults for pattern variables.
+    ;;
+    ;; This covers capture, which is the half of hygiene that bites in practice.
+    ;; It does not give referential transparency: a free identifier in a template
+    ;; still resolves at the use site, so a macro calling `helper` picks up a
+    ;; local `helper` at the call site rather than the one visible where the
+    ;; macro was defined.  That needs the expander to track each identifier's
+    ;; definition environment, which this purely structural design has no place
+    ;; to put.
+
+    (define (template-bound-ids tmpl pattern-vars literals)
+      (let ((acc '()))
+        (define (note! s)
+          (when (and (symbol? s)
+                     (not (eq? s '...))
+                     (not (memq s pattern-vars))
+                     (not (memq s literals))
+                     (not (memq s acc)))
+            (set! acc (cons s acc))))
+        ;; formals: a symbol, a proper list, or an improper list
+        (define (note-formals! f)
+          (cond ((symbol? f) (note! f))
+                ((pair? f)   (note-formals! (car f)) (note-formals! (cdr f)))
+                (else        #f)))
+        ;; ((v e) ...) for let/letrec/do, (((a b) e) ...) for let-values
+        (define (note-bindings! bs)
+          (when (pair? bs)
+            (when (pair? (car bs)) (note-formals! (car (car bs))))
+            (note-bindings! (cdr bs))))
+        (define (walk-list l)
+          (when (pair? l) (walk (car l)) (walk-list (cdr l))))
+        (define (walk t)
+          (when (pair? t)
+            (let ((head (car t)))
+              (cond
+                ((and (eq? head 'lambda) (pair? (cdr t)))
+                 (note-formals! (cadr t))
+                 (walk-list (cddr t)))
+                ((and (eq? head 'let) (pair? (cdr t)) (symbol? (cadr t))
+                      (pair? (cddr t)))
+                 ;; named let binds the loop name too
+                 (note! (cadr t))
+                 (note-bindings! (caddr t))
+                 (walk-list (cdddr t)))
+                ((and (memq head '(let let* letrec letrec* let-values let*-values))
+                      (pair? (cdr t)))
+                 (note-bindings! (cadr t))
+                 (walk-list (cddr t)))
+                ((and (eq? head 'do) (pair? (cdr t)))
+                 (note-bindings! (cadr t))
+                 (walk-list (cddr t)))
+                ((and (eq? head 'guard) (pair? (cdr t)) (pair? (cadr t)))
+                 (note! (car (cadr t)))
+                 (walk-list (cddr t)))
+                (else (walk-list t))))))
+        (walk tmpl)
+        acc))
+
+    ;; (old . fresh) for each identifier the template binds.
+    (define (hygiene-renames tmpl pattern-vars literals)
+      (map (lambda (s)
+             (cons s (fresh-name (string-append "%h-" (symbol->string s) "-"))))
+           (template-bound-ids tmpl pattern-vars literals)))
+
     ;; Build a transformer from a syntax-rules spec.
     (define (make-transformer spec)
       (if (not (and (pair? spec) (eq? (car spec) 'syntax-rules)))
@@ -243,7 +324,15 @@
                            (template (cadr clause))
                            (env      (match-syntax pat-args (cdr form) literals)))
                       (if env
-                          (instantiate-template template env)
+                          ;; Fresh renames per expansion, so two uses of the same
+                          ;; macro never share an introduced name.  They go into
+                          ;; the same env instantiate-template already consults,
+                          ;; after the pattern bindings so those take precedence.
+                          (let ((renames (hygiene-renames
+                                           template
+                                           (map car env)
+                                           literals)))
+                            (instantiate-template template (append env renames)))
                           (loop (cdr cls))))))))))
 
     ;; ---------------------------------------------------------------

@@ -145,6 +145,24 @@ and `<bytecode-function>` avoid `define-record-type` for exactly this reason.
 **Hygiene:** fresh temporaries introduced by `or`, `cond =>`, and `case` use
 `fresh-name` (a module-level counter) to avoid variable capture.
 
+`syntax-rules` templates get the same treatment. Before instantiating a template,
+the expander collects the identifiers that template *binds* — `lambda` formals,
+`let`/`let*`/`letrec`/`letrec*`/`let-values` bindings, named-let loop names, `do`
+variables, `guard` variables — and renames each per expansion. Pattern variables are
+excluded, since those names come from the use site. The renames are added to the same
+environment `instantiate-template` already consults for pattern variables, so the
+substitution costs nothing extra.
+
+Without it, a template introducing `(let ((tmp a)) …)` shadows a user's `tmp`:
+`swap!` written the textbook way silently did nothing when called as `(swap! x tmp)`.
+
+This is the capture half of hygiene. Templates are *not* referentially transparent —
+a free identifier resolves at the use site, so a macro whose template calls `helper`
+picks up a local `helper` at the call site rather than the one visible where the macro
+was defined. That needs each identifier to carry its definition environment through
+the expander (syntactic closures, or explicit renaming), which a structural
+S-expression → S-expression pass has nowhere to record.
+
 **Quasiquote note:** `expand-qq` uses explicit `list`/`cons` calls rather than
 quasiquote templates. Kaappi's own expander misinterprets `unquote-splicing` as a
 special form when it appears as a literal symbol inside a template, even inside
