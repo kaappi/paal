@@ -1275,6 +1275,39 @@
     (pkaappi-run-bc-string
       "(with-exception-handler (lambda (e) 'h)
          (lambda () (guard (e (#t 'inner)) (raise 'x))))"))
+  ;; A guard is itself an exception handler and must be the innermost one while
+  ;; its body runs — otherwise an enclosing with-exception-handler swallows
+  ;; conditions that belong to the guard.
+  (test-equal "guard outranks an enclosing handler"
+    'guard-caught
+    (pkaappi-run-bc-string
+      "(with-exception-handler (lambda (e) 'outer-wrongly-ran)
+         (lambda () (guard (e (#t 'guard-caught)) (raise-continuable 'x))))"))
+  ;; R7RS: an unmatched clause re-raises with raise-continuable, so an outer
+  ;; handler that returns a value supplies one instead of tripping the
+  ;; "handler returned" secondary exception.
+  (test-equal "unmatched clause re-raises continuably"
+    'from-handler
+    (pkaappi-run-bc-string
+      "(with-exception-handler (lambda (e) 'from-handler)
+         (lambda () (guard (e ((number? e) 'num)) (raise-continuable 'sym))))"))
+  (test-equal "unmatched clause still reaches an outer guard"
+    '(outer sym)
+    (pkaappi-run-bc-string
+      "(guard (o (#t (list 'outer o))) (guard (i ((number? i) 'num)) (raise 'sym)))"))
+  (test-equal "the handler stack is restored after a guard"
+    '()
+    (pkaappi-run-bc-string "(guard (e (#t 'g)) (raise 'x)) %paal-handlers"))
+  (test-equal "tree-walking: guard outranks an enclosing handler"
+    'guard-caught
+    (pkaappi-run-string
+      "(with-exception-handler (lambda (e) 'outer-wrongly-ran)
+         (lambda () (guard (e (#t 'guard-caught)) (raise-continuable 'x))))"))
+  (test-equal "tree-walking: unmatched clause re-raises continuably"
+    'from-handler
+    (pkaappi-run-string
+      "(with-exception-handler (lambda (e) 'from-handler)
+         (lambda () (guard (e ((number? e) 'num)) (raise-continuable 'sym))))"))
   (test-equal "tree-walking pipeline: resumption"
     11
     (pkaappi-run-string

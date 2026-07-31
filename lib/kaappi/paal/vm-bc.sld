@@ -85,6 +85,13 @@
             (set-cdr! pair val)
             (error "paal-bc: set! on unbound variable" sym))))
 
+    ;; Like globals-ref! but yields `default` when the name is unbound, for
+    ;; globals tables built straight from paal-initial-env rather than by
+    ;; pkaappi-make-globals — those have no handler stack.
+    (define (globals-ref-default g sym default)
+      (let ((pair (assq sym (vector-ref g 0))))
+        (if pair (cdr pair) default)))
+
     (define (globals-define! g sym val)
       (let ((pair (assq sym (vector-ref g 0))))
         (if pair
@@ -312,10 +319,41 @@
     ;; so that one of the `(#t . N)` upvalue specs landed on one.  Splitting the
     ;; procedure was never the defence; paal-read-bc-file now parses .pbc from a
     ;; string port, which removes the boundary entirely.
+    ;; In R7RS terms a guard *is* an exception handler, and must be the innermost
+    ;; one while its body runs: a raise-continuable inside the body belongs to
+    ;; this guard, not to an enclosing with-exception-handler.  Pushing the escape
+    ;; procedure itself onto the handler stack achieves that — paal `raise` and
+    ;; `raise-continuable` call whatever is on top, and calling this one lands in
+    ;; the HOST guard below, where the clauses run.  Without it an outer
+    ;; with-exception-handler would swallow conditions belonging to this guard.
+    ;;
+    ;; The stack is restored before the clauses run, so an unmatched clause
+    ;; re-raises to the *outer* handler rather than back into this one.
+    ;; The escape pushed onto the stack is taken from globals rather than being
+    ;; this library's own paal-vm-raise-escape!.  Under self-hosting this file is
+    ;; paal-compiled, so that name would be a paal closure — and a paal closure
+    ;; resolves its free globals against whichever table the VM happens to be
+    ;; running, not the one it was compiled in.  Pushing it into the user
+    ;; program's globals left its own module-level names unbound at call time.
+    ;; The globals entry is the HOST procedure, callable from any table, and it
+    ;; raises the same interned-symbol tag either copy recognizes.
+    ;;
+    ;; #f means "no handler stack here" — a globals table built straight from
+    ;; paal-initial-env has neither name, and needs no push.
     (define (run-guard! regs globals nbase body handler)
-      (guard (e (#t (paal-call-value regs globals nbase handler
-                                     (list (paal-vm-condition e)))))
-        (paal-call-value regs globals nbase body '())))
+      (let ((escape (globals-ref-default globals '%paal-vm-raise #f))
+            (saved  (globals-ref-default globals '%paal-handlers #f)))
+        (when (and escape saved)
+          (globals-define! globals '%paal-handlers (cons escape saved)))
+        (let ((result
+               (guard (e (#t (when saved
+                               (globals-define! globals '%paal-handlers saved))
+                             (paal-call-value regs globals nbase handler
+                                              (list (paal-vm-condition e)))))
+                 (paal-call-value regs globals nbase body '()))))
+          (when saved
+            (globals-define! globals '%paal-handlers saved))
+          result)))
 
     ;; Hand `result` back to the caller of a completed HOST call or guard.
     (define (deliver-result! regs globals frames frame abs-base result tail?)

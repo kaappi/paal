@@ -3,7 +3,7 @@
 Goal: make `pkaappi` a correct R7RS-small Scheme implementation that runs the
 same programs as `kaappi`, with the same CLI conventions.
 
-Current: Stage 6 complete (self-hosting). **363 tests pass** (was 194 before Phase 1–2).
+Current: Stage 6 complete (self-hosting). **369 tests pass** (was 194 before Phase 1–2).
 
 ---
 
@@ -86,8 +86,24 @@ Missing primitives added to `paal-initial-env` (`lib/kaappi/paal/vm.sld`):
       macros that introduce `let` bindings can capture user variables
 - [ ] `define-syntax` nested ellipsis — only single-level `...` is supported
 - [ ] `let-syntax` / `letrec-syntax` true mutual recursion — sequential binding only
-- [ ] `guard` re-raise environment — an unmatched clause re-raises from the
-      handler's dynamic environment, not the original one (R7RS requires the latter)
+- [ ] `guard` re-raise **dynamic environment** — partially addressed. An unmatched
+      clause now re-raises with `raise-continuable` rather than `raise`, and a
+      `guard` is now correctly the innermost handler while its body runs, so an
+      enclosing `with-exception-handler` no longer swallows conditions belonging
+      to the guard. What remains is the environment itself: R7RS re-raises *at the
+      original raise point*, whereas paal has already unwound to the guard. It is
+      observable through `parameterize` —
+
+      ```scheme
+      (define p (make-parameter 1))
+      (with-exception-handler (lambda (e) (p))
+        (lambda () (guard (e ((number? e) 'num))
+                     (parameterize ((p 2)) (raise-continuable 'sym)))))
+      ```
+      R7RS says `2` (the re-raise happens inside the extent); paal says `1`.
+      Closing this needs re-entrant continuations: the R7RS sample `guard` uses
+      `call/cc` twice, jumping back to the raise point to re-raise there. Paal has
+      no `call/cc` over paal closures, so this is blocked behind that.
 
 ---
 

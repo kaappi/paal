@@ -120,7 +120,7 @@ structural — it transforms S-expressions to S-expressions with no semantic ana
 | `(define-record-type name (ctor f…) pred (f acc [mut])…)` | `begin` of `define`s using vector storage |
 | `(define-library name decl…)` | `begin` of the library's `(begin …)` bodies |
 | `(import …)` / `(export …)` | `(quote #f)` — no-op during bootstrap |
-| `(guard (v clause…) body…)` | `(%paal-guard-run (lambda () body…) (lambda (v) (cond clause… [else (raise v)])))` |
+| `(guard (v clause…) body…)` | `(%paal-guard-run (lambda () body…) (lambda (v) (cond clause… [else (raise-continuable v)])))` |
 | `(parameterize ((p v)…) body…)` | `(%paal-parameterize (list p…) (list v…) (lambda () body…))` |
 
 **Internal defines:** `expand-body` processes a lambda/let body and hoists any leading
@@ -359,6 +359,27 @@ message `"handler returned"`, which is what HOST kaappi does, so both pipelines 
 it identically. With no handler installed, both `raise` and `raise-continuable` fall
 straight through to the escape that `guard` catches — which is why `guard` needed no
 changes.
+
+A `guard` participates in this stack too: `run-guard!` pushes the escape procedure
+itself while the body runs, so the guard is the innermost handler and a
+`raise-continuable` inside its body belongs to it rather than to an enclosing
+`with-exception-handler`. The stack is restored before the clauses run, so an
+unmatched clause re-raises to the *outer* handler rather than back into the same
+guard.
+
+`with-exception-handler` deliberately has no `guard` of its own. A guard would push
+its escaping handler on top of the one being installed and swallow the very
+conditions it exists for; and cleanup on a non-local exit is unnecessary, since the
+escape propagates to some enclosing guard whose `run-guard!` restores the stack to
+what it captured beforehand.
+
+**What is still not R7RS.** An unmatched clause re-raises with `raise-continuable`,
+as required — but from the guard's dynamic environment rather than the original
+raise point, because paal has already unwound by then. Visible through
+`parameterize`: a re-raise that R7RS performs inside the extent sees the
+parameterized value, while paal sees the restored one. The R7RS sample `guard` uses
+`call/cc` twice to jump back to the raise point; paal has no `call/cc` over paal
+closures, so this waits on that.
 
 The tree-walking VM keeps HOST `with-exception-handler` and inherits the host's own
 handler stack. It only needs the trampoline forced on both the thunk and the handler

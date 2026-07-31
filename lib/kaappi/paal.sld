@@ -145,11 +145,16 @@
         (paal-run-bc
           (pkaappi-compile
             "(define %paal-handlers '())
+             ; No guard around the thunk, deliberately.  A guard pushes its own
+             ; escaping handler, which would sit on top of this one and swallow
+             ; the very conditions this handler is installed for.  Cleanup on a
+             ; non-local exit is not needed either: the escape propagates to some
+             ; enclosing guard, whose run-guard! restores the stack to what it
+             ; captured before this push.
              (define (with-exception-handler handler thunk)
                (let ((saved %paal-handlers))
                  (set! %paal-handlers (cons handler saved))
-                 (let ((result (guard (e (#t (set! %paal-handlers saved) (raise e)))
-                                 (thunk))))
+                 (let ((result (thunk)))
                    (set! %paal-handlers saved)
                    result)))
              (define (raise-continuable obj)

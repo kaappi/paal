@@ -810,9 +810,13 @@
                                (cond ((null? (cdr cs))
                                       (and (pair? (car cs)) (eq? (caar cs) 'else)))
                                      (else (loop (cdr cs)))))))
+             ; R7RS: with no clause matching and no else, the object is re-raised
+             ; with raise-continuable, not raise — so an outer handler that
+             ; returns a value supplies one rather than tripping the
+             ; "handler returned" secondary exception.
              (all-clauses (if has-else?
                               clauses
-                              (append clauses `((else (raise ,var)))))))
+                              (append clauses `((else (raise-continuable ,var)))))))
         `(%paal-guard-run
            (lambda () ,@body)
            (lambda (,var) (cond ,@all-clauses)))))
