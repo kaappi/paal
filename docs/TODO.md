@@ -370,107 +370,28 @@ inferred:
       `lib/srfi/`. The file is committed rather than built on demand, so a
       fresh checkout works without the generator having run and so the diff
       shows when a bundled library changes.
-- [ ] **Bundle pipeline `.pbc` files** — not needed for correctness now that
-      the HOST fallback is compiled in, but the self-hosted path is the faster
-      one and is unavailable without `cache/`.
-- [x] **Standalone REPL** — a bundled binary run outside the repo has neither
-      the cache nor paal's sources, and `pkaappi-self-repl` errored out with
-      `repl requires cache`, leaving the standalone binary with no REPL at
-      all. It now falls back to a REPL over the HOST pipeline, which is
-      compiled into the binary regardless — not the self-hosted one, but a
-      working REPL. Definitions accumulate in one globals table, and each
-      input is guarded so a raise ends that expression rather than the
-      session.
-- [x] **Distribution strategy** — **a single binary, no lib directory.** The
-      choice is settled by what a bundled `paal` now does rather than by
-      preference: run from an unrelated directory with no `cache/` and no
-      `lib/`, it runs programs, evaluates expressions, resolves the bundled
-      SRFIs, and gives a REPL. Nothing it needs is on disk.
+- [x] **Bundle pipeline `.pbc` files** — **not worth doing; the premise is
+      backwards.** The entry assumed the self-hosted path is the faster one and
+      that a binary without `cache/` is missing something. Measured, on the
+      same file (`tests/fixtures/hof.scm`):
 
-      The binary is 3.3 MB, against 388 KB for `lib/` and 300 KB for
-      `cache/`. Shipping those alongside would trade a 20% size saving for a
-      binary whose behaviour depends on its working directory — which is
-      exactly the failure the embedded-library lookup was written to avoid,
-      and the failure mode is silent (a stale `lib/` on the path shadowing
-      what the binary was built with).
+      | path | time |
+      |---|---|
+      | bundled binary, no cache — HOST pipeline fallback | **0.17 s** |
+      | cache-backed self-hosted path | **10.06 s** |
 
-      What remains for a release is packaging, not design: the binary is the
-      artifact. Bundling `cache/*.pbc` (below) would make it faster, not more
-      self-contained.
+      59× slower. Loading nine `.pbc` files through the VM costs far more than
+      compiling the program with the HOST pipeline that is already inside the
+      binary. Embedding the cache would make `paal` dramatically slower at
+      every invocation, not faster.
 
----
+      The cost of embedding is real too: `cache/*.pbc` is 281 KB against the
+      51 KB `embedded.sld` already carries, and `(kaappi paal embedded)` is
+      imported by the expander, so it is parsed on *every* run — including the
+      0.17 s path this would be slowing down.
 
-## Phase 7 — SRFI Ecosystem
-
-Bundled under `lib/srfi/`, reachable because `lib` is on the default search
-path. Each is portable R7RS, so the same file runs on kaappi unchanged. None
-redefines a name `(scheme base)` already binds compatibly — importing both
-would otherwise bind one identifier two ways, which R7RS 5.2 makes an error.
-
-- [x] SRFI 1 — list library. Folds (incl. multi-list), filter/remove/partition,
-      find/any/every returning the predicate's value, take/drop and the
-      right-hand variants, delete-duplicates, lset operations, and the
-      proper/circular/dotted predicates via a two-pointer walk.
-- [x] SRFI 13 — string library. take/drop, pad, trim, prefix/suffix, index
-      (char *or* predicate), contains, join/split/tokenize, fold, filter.
-- [x] SRFI 9 — import path for the core `define-record-type`.
-- [x] SRFI 23 — import path for `error`.
-- [x] SRFI 64 — test framework. Test forms, grouping, `test-skip` /
-      `test-expect-fail`, and the result counters. The assertions are *syntax*,
-      not procedures: a procedural `(test-equal expected actual)` evaluates
-      `actual` at the call site, so a raise escapes before the framework sees
-      it and takes the rest of the group with it — the failure mode
-      `(kaappi test)` had. Not implemented: `test-apply`,
-      `test-with-runner`, custom runners.
-- [x] SRFI 39 — import path for `make-parameter`/`parameterize`. SRFI 39 also
-      permits `(p v)` to set a parameter, which R7RS dropped and paal does not
-      support.
-- [x] SRFI 28 / SRFI 48 — `format`. 48 adds radix, character and recursive
-      directives, and accepts a leading port or `#f`/`#t`.
-- [x] SRFI 69 — hash tables. Separate chaining, doubling past a 0.75 load
-      factor. The table is an interned-symbol-tagged vector, not a record, so
-      it survives the HOST/self-hosted boundary.
-- [x] SRFI 133 — vector library. fold/reduce, index/skip/any/every, binary
-      search, reverse, concatenate, tabulate, partition.
-
----
-
-## Phase 8 — Advanced Features (Long-Term)
-
-Requires significant new infrastructure; no fixed timeline.
-
-- [x] **`(scheme eval)` / `eval`** — done in Phase 2.
-- [x] **Profiling** — `paal --profile file.scm` counts calls per procedure and
-      prints a report, descending by count, after the program runs. Counted in
-      `do-call!`, which is where every paal-level call arrives, tail and
-      non-tail alike; `paal-call-value` is only the HOST re-entry door and sees
-      a fraction of them. Off unless started, so the call path pays one boolean
-      test otherwise.
-
-      Procedure names come from the enclosing `define` — the emitter passed
-      `#f` for every lambda, so the first working version reported
-      `((#f . 8))`. Nothing on the call path reads the name.
-
-      `--profile` runs the program on the HOST pipeline deliberately. The
-      self-hosted path executes it through the paal-compiled copy of the VM,
-      whose `%profiling?` flag setting this one does not reach — the same
-      two-copies problem as `%paal-lib-paths` — and profiling there buries the
-      user's procedures under the pipeline's own map/filter traffic.
-- [x] **Coverage** — `paal --coverage file.scm` reports procedures called over
-      procedures defined, and names the ones never called. It reuses the
-      profile counts, since a procedure is covered exactly when it was called
-      at least once, so this cost almost nothing on top of `--profile`.
-
-      "Defined" is read off the globals table at report time — every entry
-      whose value is a paal closure — which needs no emitter support. That
-      would also sweep up the procedures `pkaappi-make-globals` installs
-      (`map`, `filter`, the exception blob), so the start call snapshots the
-      table and only entries added afterwards count. Same `take-until` trick
-      the macro table uses for library-local macros.
-
-      `--coverage-xml` (Cobertura, for Codecov) is not implemented; the
-      nightly workflow uses kaappi's own `--coverage` against paal's suite,
-      which is unaffected.
+      The self-hosted path earns its keep by proving paal compiles itself, not
+      by being fast. Nothing about the binary needs it.
 - [ ] **Stepping debugger** — breakpoints, step/next, frame navigation
 - [ ] **C FFI** — smaller than written. A bundled paal runs on kaappi's
       runtime, so the FFI machinery is *present*; it is simply not reachable,
