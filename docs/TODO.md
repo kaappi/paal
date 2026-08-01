@@ -311,13 +311,47 @@ resolution is needed before `--lib-path` or SRFI imports can work.
 
 ## Phase 6 — Standalone Binary
 
-Remove the `kaappi` host dependency.
+`make binary` compiles `src/main.scm` to `.sbc` and bundles it into **kaappi's
+own runtime** with `zig build -Dbundle=`. The product is kaappi with paal
+embedded, which changes what this phase is: the primitives are already in the
+binary, so there is nothing to reimplement.
 
-- [ ] **Bundle pipeline `.pbc` files** — embed `cache/*.pbc` in the binary so it
-      needs no external files at runtime (the `binary` Makefile target uses
-      `zig build -Dbundle-src=`; adapt for `.pbc` format)
-- [ ] **Self-contained primitive env** — currently `paal-initial-env` maps to HOST
-      kaappi procedures; the standalone binary needs its own primitive implementations
+Verified against a freshly built binary run from an unrelated directory, with
+no `cache/` and no `lib/` present:
+
+| | |
+|---|---|
+| `paal p.scm` | works — the HOST pipeline is compiled in, so no cache is needed |
+| `paal eval '(* 6 7)'` | works |
+| `paal version` | works |
+| `(import (srfi 1))` | fails — the SRFI `.sld` files are on disk, not in the binary |
+| `paal check f.scm` | **runs the program** instead of only compiling it |
+| `paal fmt --check f.scm` | same |
+
+- [x] **Self-contained primitive env** — nothing to do. The entry assumed the
+      binary would need its own implementations of what `paal-initial-env`
+      borrows from the host; it does not, because the host *is* the binary.
+      That assumption was the stated gate on the rest of this phase.
+- [x] **`prog-args` discarded the user's program** — `prog-args` stripped the
+      first argument whenever it ended in `.scm`. Right in bootstrap mode,
+      where argv is `("src/main.scm" "p.scm")`, but a bundled binary gets just
+      `("p.scm")` and lost it, then started the REPL. The symptom was
+      `repl requires cache`, which reads like a missing cache and is not. Now
+      matched against `main.scm` specifically.
+- [ ] **Subcommands other than `eval` misbehave in the bundled binary** —
+      `paal check f.scm` and `paal fmt --check f.scm` execute the program
+      rather than only compiling or formatting it, while the same commands are
+      correct in bootstrap mode. Not diagnosed; a probe of `(command-line)`
+      inside a bundled program returns `()`, so argument delivery differs from
+      bootstrap in a way that is not yet understood. Reproduce with a binary
+      from `make binary`, run from a directory that is not the repo.
+- [ ] **Bundle the SRFI libraries** — `(import (srfi 1))` fails from a binary
+      run outside the repo: the `.sld` files are read from disk. Either embed
+      them or resolve the search path relative to the executable, which R7RS
+      gives no way to locate.
+- [ ] **Bundle pipeline `.pbc` files** — not needed for correctness now that
+      the HOST fallback is compiled in, but the self-hosted path is the faster
+      one and is unavailable without `cache/`.
 - [ ] **Standalone REPL** — readline or plain line input without kaappi's REPL
 - [ ] **Distribution strategy** — single static binary vs binary + lib directory
 

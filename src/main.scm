@@ -145,14 +145,24 @@
      (display "error: unknown option: ") (display (car args)) (newline)
      (exit 1))))
 
-; In bootstrap mode (kaappi src/main.scm args...), command-line includes
-; the script path as the first element — strip it.
-; In standalone mode (./paal args...), the binary name is already absent.
+; In bootstrap mode (kaappi src/main.scm args...), command-line includes this
+; script's path as the first element — strip it.  In standalone mode
+; (./paal args...) the binary name is already absent, so there is nothing to
+; strip and the first argument is the user's.
+;
+; The test is for main.scm specifically, not for any .scm.  Matching any .scm
+; meant a bundled binary stripped the user's own file: `paal p.scm` came
+; through as ("p.scm"), lost it, and started the REPL instead — the standalone
+; binary could not run a program at all.
+(define (ends-with? s suffix)
+  (let ((n (string-length s)) (m (string-length suffix)))
+    (and (>= n m) (string=? (substring s (- n m) n) suffix))))
+
 (define (prog-args)
   (let ((args (command-line)))
     (if (and (pair? args)
-             (let* ((a (car args)) (n (string-length a)))
-               (and (>= n 4) (string=? (substring a (- n 4) n) ".scm"))))
+             (or (string=? (car args) "main.scm")
+                 (ends-with? (car args) "/main.scm")))
         (cdr args)
         args)))
 
