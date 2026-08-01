@@ -32,14 +32,21 @@ def main():
     body = ("    (define %paal-embedded\n      (list\n"
             + "\n".join(entries) + "))\n")
 
-    text = TARGET.read_text()
-    new = re.sub(
-        r"(    ;; BEGIN GENERATED — do not edit by hand\n).*?(    ;; END GENERATED\n)",
-        lambda m: m.group(1) + body + m.group(2),
-        text, flags=re.S)
-    if new == text:
-        sys.exit("embed-srfi: markers not found in " + str(TARGET))
-    TARGET.write_text(new)
+    # Line-based splicing rather than a regex.  A regex over the whole file
+    # has to survive whatever the embedded sources contain, and the first
+    # attempt silently stopped matching once the region held 1300 lines of
+    # escaped Scheme -- which broke `make binary` rather than this script.
+    lines = TARGET.read_text().split("\n")
+    begin = next((i for i, l in enumerate(lines)
+                  if l.strip().startswith(";; BEGIN GENERATED")), None)
+    end = next((i for i, l in enumerate(lines)
+                if l.strip().startswith(";; END GENERATED")), None)
+    if begin is None or end is None or end <= begin:
+        sys.exit("embed-srfi: markers not found or out of order in " + str(TARGET))
+
+    TARGET.write_text("\n".join(
+        lines[:begin + 1] + body.split("\n")[:-1] + lines[end:]))
+
     print(f"embedded {len(entries)} SRFI libraries into {TARGET.relative_to(ROOT)}")
 
 

@@ -317,14 +317,15 @@ embedded, which changes what this phase is: the primitives are already in the
 binary, so there is nothing to reimplement.
 
 Verified against a freshly built binary run from an unrelated directory, with
-no `cache/` and no `lib/` present:
+no `cache/` and no `lib/` present — all of the following are observed, not
+inferred:
 
 | | |
 |---|---|
 | `paal p.scm` | works — the HOST pipeline is compiled in, so no cache is needed |
 | `paal eval '(* 6 7)'` | works |
 | `paal version` | works |
-| `paal` (no args) | works — REPL over the HOST pipeline |
+| `paal` (no args) | works — REPL over the HOST pipeline, definitions accumulate |
 | `(import (srfi 1))` | works — the SRFI sources are embedded |
 | `paal check f.scm` | **runs the program** — kaappi/kaappi#2010 |
 | `paal fmt --check f.scm` | same |
@@ -359,6 +360,10 @@ no `cache/` and no `lib/` present:
       would make a binary's behaviour depend on its working directory, which
       is the thing bundling exists to avoid. Verified with `lib/srfi/` removed
       entirely: `(import (srfi 1))` still resolves.
+
+      Confirmed in a bundled binary, not only by removing `lib/srfi/`:
+      `paal emb.scm` from an unrelated directory resolves `(srfi 1)` and
+      `(srfi 13)` and runs.
 
       `make embed-srfi` regenerates it, and `make binary` runs the generator
       first so a binary can never ship libraries that differ from
