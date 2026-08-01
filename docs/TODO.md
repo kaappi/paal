@@ -5,12 +5,19 @@ same programs as `kaappi`, with the same CLI conventions.
 
 Current: Stage 6 complete (self-hosting). **585 tests pass** (was 194 before Phase 1–2).
 
-**Every item in this file is now done.** Two rest on host bugs that are still open
-upstream — kaappi/kaappi#2010 and kaappi/kaappi#1920 / kaappi/kaappi#2043 — but paal
-has no exposure to either left, so both are recorded here as worked around rather
-than as work outstanding. What each entry says about *why* is the point of keeping
-them; several correct an earlier premise that turned out to be false, and those are
-worth more than the checkbox.
+Phases 1–6 are done. Two of their entries rest on host bugs still open upstream —
+kaappi/kaappi#2010 and kaappi/kaappi#1920 / kaappi/kaappi#2043 — but paal has no
+exposure to either left, so both are recorded as worked around rather than as work
+outstanding. What each entry says about *why* is the point of keeping them; several
+correct an earlier premise that turned out to be false, and those are worth more
+than the checkbox.
+
+**Phase 7 is open.** This file was written from the inside: it tracked what paal's
+authors knew was missing. Running kaappi's R7RS suite against paal — which had never
+been done — found a class of defect that kind of list cannot contain, because nobody
+suspected it. `(values 1)` returned a tagged pair. `(procedure? f)` was `#f` for every
+procedure paal defines. `(map + '(1 2) '(3 4) '(5 6))` answered `(4 6)`. None of those
+raise; they return a plausible wrong value. See Phase 7 below.
 
 ---
 
@@ -691,6 +698,85 @@ Issues that span stages rather than belonging to one phase.
       kaappi's `read` returns two extra. Closed here because paal's exposure
       is closed; the host bug is tracked in its own two issues rather than as
       a paal TODO.
+
+---
+
+## Phase 7 — R7RS correctness and conformance
+
+Everything above was found by looking. This phase is what an outside oracle found.
+
+- [x] **A conformance harness** — `make test-r7rs`, gating in `make test`.
+      kaappi's 2516-line R7RS suite, vendored under `tests/r7rs/` and driven
+      **one top-level form at a time**. Form-by-form is not a nicety: paal is a
+      whole-program compiler, so one unsupported form anywhere means *zero*
+      tests run — `paal check` on the suite dies outright. And the harness runs
+      the HOST bytecode pipeline in process because shelling out to
+      `paal file.scm` is ~500× slower (163 s against 0.30 s on a 59-line
+      excerpt). The whole suite takes about 1.5 s.
+
+      It is a **ratchet, not a gate**: paal does not pass the suite, and what CI
+      enforces is that the per-section counts do not move — in either direction,
+      so a new failure cannot hide behind a new pass in the same section.
+      `make r7rs-baseline` prints a replacement baseline; the diff of that
+      refresh is the evidence a fix did what it claimed. Baseline at landing:
+      **974 passing, 131 failing** across 19 sections, plus 12 top-level forms
+      that raise before any test inside them runs.
+
+      See `tests/r7rs/README.md`.
+- [x] **`environment` destroyed the caller's macro table** — there is one macro
+      table for the whole expander, and `environment` built its nested table
+      through `pkaappi-make-globals`, which resets it. Every `define-syntax`
+      before an `(environment ...)` call became an unbound variable after it.
+
+      Invisible under whole-program compilation, where expansion finishes
+      before anything runs, and invisible in the cached REPL, where the reset
+      lands on the HOST expander while the REPL expands through the loaded one.
+      Plain wherever forms are expanded and run one at a time — the first thing
+      the harness hit. §6.12's `(environment '(scheme base))` took out
+      `(chibi test)`'s `test` macro and darkened the remaining **292 forms** of
+      the suite, a quarter of it.
+
+      `environment` now uses `%make-globals-table`, the same builder without the
+      reset. `pkaappi-make-globals` keeps the reset: a fresh table there really
+      does start a fresh program.
+
+Open, and ordered. Each is a leaf edit — one function or one blob entry, changing
+no value representation and no cross-copy protocol — so they can land in any order.
+
+- [ ] **`(values x)` must be `x`** — a single value leaks the MVR tag as
+      `((paal-mvr) 1)`, so `(+ (values 1) 2)` is a type error. One line, and
+      the largest single win available: roughly 100 suite assertions.
+- [ ] **`procedure?` is `#f` for every paal-defined procedure** — and
+      `(vector? f)` is `#t`. First-order wrong answer; every predicate dispatch
+      on procedures is broken on the bytecode path. Fix `procedure?` in the
+      blob; **do not touch `vector?`**, which is load-bearing for `closure?`,
+      `bytecode-function?`, `promise?` and the wind-frame dispatch.
+- [ ] **`map`/`for-each` cap at 2 lists, `vector-map`/`vector-for-each`/
+      `string-map`/`string-for-each` at 1 sequence** — extras silently dropped.
+- [ ] **`case` with `=>` passes the `memv` result, not the key.**
+- [ ] **`expand-body` does not splice a leading `begin`** — so a `cond-expand`
+      or `include` producing definitions inside a body fails with
+      `ir:define in expression position`. (Empty-binding `let*`/`let-values`/
+      `let*-values` are fine; an earlier draft of this entry said otherwise.)
+- [ ] **`syntax-rules` mixed-depth ellipsis** — `find-ellipsis-vars` discards
+      the tail after an ellipsis, so `((b ... a) ...)` cannot bind `a`.
+- [ ] **Six bytevector-port procedures unbound**, and
+      `scheme-report-environment`/`null-environment`.
+- [ ] **`(features)` answers with kaappi's list**, which does not contain
+      `paal`; `cond-expand` answers from a different list. One list, one owner.
+- [ ] **`write` of a procedure dumps the whole closure vector.**
+- [ ] **`call/cc` is bound but type-errors on the bytecode path** — worse than
+      absent, since `(procedure? call/cc)` is `#t` and feature detection takes
+      the wrong branch. Escape-only is honest and covers the overwhelming
+      majority of uses; full re-entrant continuations stay out of scope.
+- [ ] **`#!fold-case` / `#!no-fold-case`** unsupported.
+
+Deferred with reasons: R7RS §4.3's keyword-shadowing torture cases (variables
+named `let`, `if`) need an environment threaded through every `expand-*`; the
+`(scheme ...)` libraries are a fiction — `(import (scheme base))` hands you `sin`
+and `spawn` too — which needs the whole globals table partitioned and is its own
+phase; and the §6.2 complex-literal failures are a host bug, since kaappi's `read`
+accepts `-3/2-i` but its `string->number` does not.
 
 ---
 

@@ -10,7 +10,10 @@ eventually compile itself, producing the `paal` binary.
 
 ```sh
 make                                   # build the paal binary (needs ../kaappi + zig)
-make test                              # run test suite via kaappi
+make test                              # unit tests + R7RS conformance
+make test-unit                         # just tests/test-paal.scm
+make test-r7rs                         # just the R7RS suite, against its baseline
+make r7rs-baseline                     # print a replacement baseline (redirect + read the diff)
 make coverage                          # test with procedure coverage report
 make run                               # start REPL (no args → REPL, like kaappi)
 make run ARGS="file.scm"               # run a file
