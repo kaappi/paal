@@ -327,8 +327,10 @@
              ; and the guard hands the object back as an ordinary value.
              (make-host-error (lambda (msg irritants)
                                 (guard (e (#t e)) (apply error msg irritants))))
-             (base-alist (map (lambda (pair) (cons (car pair) (vector-ref (cdr pair) 0)))
-                              (paal-initial-env)))
+             (base-alist (%without-host-only
+                           (map (lambda (pair)
+                                  (cons (car pair) (vector-ref (cdr pair) 0)))
+                                (paal-initial-env))))
              (g (paal-make-globals
                   (append
                     `((pkaappi-make-globals       . ,pkaappi-make-globals)
@@ -1027,6 +1029,38 @@
       ;; --lib-path was consumed by the HOST expander; the loaded copy has its
       ;; own %paal-lib-paths and has never heard of it.
       (%propagate-lib-paths! g))
+
+    ;; Names paal-initial-env binds that cannot work on the bytecode path.
+    ;;
+    ;; Only `call/cc` and its long spelling, and only because they are HOST
+    ;; procedures taking a procedure argument: a paal closure there is a tagged
+    ;; vector the host cannot enter, so calling one raised
+    ;; `type error in 'call/cc': expected procedure, got #<vector>`.
+    ;;
+    ;; Unbound is the honest answer, and strictly better than what was there.
+    ;; `(procedure? call/cc)` used to be #t while calling it type-errored, so
+    ;; feature-detecting code took the wrong branch and got a confusing error
+    ;; deep inside; now it takes the other branch, correctly. The tree-walking
+    ;; path keeps them, and they genuinely work there — closures are HOST
+    ;; procedures, so the host can enter them.
+    ;;
+    ;; An escape-only replacement in paal source was written and reverted. It
+    ;; raises a tagged escape and catches its own tag in a `guard`, which is
+    ;; sound in isolation, but `%paal-guard-catch` has to intercept escapes
+    ;; before the clauses run — otherwise any intervening
+    ;; `(guard (e (#t ...)) ...)` swallows them — and once it does, it also
+    ;; intercepts the escape belonging to `call/cc`'s *own* guard, which it
+    ;; cannot recognize because a clauses procedure carries no identity. Making
+    ;; that work needs the VM to know about continuations, which is the
+    ;; re-entrant design that is deliberately out of scope.
+    (define %paal-host-only-names
+      '(call/cc call-with-current-continuation))
+
+    (define (%without-host-only alist)
+      (let loop ((as alist) (acc '()))
+        (cond ((null? as) (reverse acc))
+              ((memq (car (car as)) %paal-host-only-names) (loop (cdr as) acc))
+              (else (loop (cdr as) (cons (car as) acc))))))
 
     ;; Add a HOST value to an already-built globals table.  pkaappi-make-globals
     ;; cannot do this: the pipeline is loaded into g after it returns.

@@ -1728,6 +1728,34 @@
     (pkaappi-run-string "(apply + '(1 2 3))")))
 
 ;; ---------------------------------------------------------------
+;; call/cc
+;; ---------------------------------------------------------------
+;;
+;; paal has no continuations over paal closures, and the two names used to be
+;; bound to the HOST procedures anyway.  That worked on the tree-walking path,
+;; where a paal closure IS a HOST procedure, and type-errored on the bytecode
+;; path, where it is a tagged vector the host cannot enter -- so
+;; (procedure? call/cc) answered #t while calling it failed, and
+;; feature-detecting code took the wrong branch and got a confusing error deep
+;; inside.  Unbound on the bytecode path is the honest answer.
+
+(test-group "call/cc"
+  (test-equal "unbound on the bytecode path, rather than present and broken"
+    '(unbound unbound)
+    (pkaappi-run-bc-string
+      "(list (guard (e (#t 'unbound)) (procedure? call/cc))
+             (guard (e (#t 'unbound)) (call-with-current-continuation (lambda (k) 1))))"))
+  ;; The point of unbinding rather than leaving it: this branch is now taken.
+  (test-equal "feature detection takes the fallback branch"
+    'no-callcc
+    (pkaappi-run-bc-string "(guard (e (#t 'no-callcc)) (call/cc (lambda (k) (k 1))))"))
+  ;; Still there on the tree-walking path, where it genuinely works.
+  (test-equal "the tree-walking path keeps it"
+    '(#t 42)
+    (pkaappi-run-string
+      "(list (procedure? call/cc) (call/cc (lambda (k) 42)))")))
+
+;; ---------------------------------------------------------------
 ;; Phase 1: guard / raise / error
 ;; ---------------------------------------------------------------
 
