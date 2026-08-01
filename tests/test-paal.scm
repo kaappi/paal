@@ -2168,6 +2168,32 @@
 
 (paal-lib-path-add! "tests/libs")
 
+;; kaappi's `read` parses a *file port* in 4096-byte chunks and loses lexer
+;; state at every boundary (kaappi/kaappi#1920, kaappi/kaappi#2043): a comment
+;; straddling byte 4096 has its tail returned as data.  Every source file paal
+;; loads goes through a string port for that reason -- `include` here, and each
+;; .sld the module system resolves, which share one reader.  Without it this
+;; program fails with `unbound variable that`: the words after the boundary are
+;; spliced into the program as code.
+;;
+;; 314 lines of 13 bytes is 4082, so the comment starts at 4084 and the
+;; boundary lands inside it.  The file is generated rather than committed
+;; because the property is about byte offsets, and a committed fixture would
+;; stop testing anything the moment someone reflowed it.
+(test-group "source files across a read-chunk boundary"
+  (test-equal "include survives a comment straddling byte 4096"
+    99
+    (let ((p "paal-include-tmp.scm"))
+      (let ((port (open-output-file p)))
+        (let loop ((i 0))
+          (when (< i 314) (display "(define y 1)\n" port) (loop (+ i 1))))
+        (display "  ; a comment that straddles the boundary\n" port)
+        (display "(define total 99)\n" port)
+        (close-output-port port))
+      (let ((r (pkaappi-run-bc-string "(include \"paal-include-tmp.scm\") total")))
+        (delete-file p)
+        r))))
+
 (test-group "module system"
   (test-equal "a library's exports are visible, its internals are not"
     '(25 27 unbound)

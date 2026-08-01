@@ -619,21 +619,21 @@ Issues that span stages rather than belonging to one phase.
       work. It no longer does, and that export list is back to what SRFI 64
       specifies.
 
-- [ ] **`.pbc` files can become unreadable depending on byte offsets**
-      (kaappi/kaappi#1920) — kaappi's `read` on a *file port* mis-handles a dotted
+- [x] **Source and `.pbc` files misread depending on byte offsets**
+      (kaappi/kaappi#1920, kaappi/kaappi#2043) — kaappi's `read` on a *file
+      port* mis-handles a dotted
       pair that straddles a 4096-byte chunk boundary: a truncated prefix reports
       `UnexpectedChar`/`DotNotInList` instead of `UnexpectedEof`, and the
       incremental read loop treats that as fatal rather than reading the next
       chunk. `.pbc` files are full of `(#t . N)` upvalue specs, so a large enough
       one eventually lands on a boundary. It hit `cache/paal-vm-bc.pbc` when the
       guard logic was inlined into `do-call!`, breaking `make pbc-pipeline`.
-      **Worked around in paal:** `paal-read-bc-file` now slurps the file and
-      parses from a string port, where no chunk boundary exists, so every `.pbc`
-      read is immune. Left open because the upstream bug is unfixed and still
-      affects any other `read` from a file port. Splitting `run-guard!` back out
-      was never a real defence — it only shifted byte offsets.
-      NB the earlier "large and deeply nested" diagnosis in this entry was wrong:
-      `paal-expander.pbc` is both bigger and deeper and reads back fine.
+      **Worked around in paal, everywhere it can bite.** `paal-read-bc-file`
+      slurps the file and parses from a string port, where no chunk boundary
+      exists. Splitting `run-guard!` back out was never a real defence — it
+      only shifted byte offsets. NB the earlier "large and deeply nested"
+      diagnosis in this entry was wrong: `paal-expander.pbc` is both bigger
+      and deeper and reads back fine.
 
       Re-checked against v0.22.1, and the boundary drops more than dotted
       pairs. Two further constructs, now **kaappi/kaappi#2043**: a `;` line
@@ -643,12 +643,22 @@ Issues that span stages rather than belonging to one phase.
       v0.22.1 with a Scheme-only repro and no paal in it, and both read
       correctly from a string port.
 
-      Paal's own reader is unaffected either way: it works in `read-char` /
-      `peek-char` over the port rather than calling kaappi's `read`, so the
-      chunking never reaches it. `paal-read-file` on the same file returns
-      the correct datums where kaappi's `read` returns two extra. The
-      exposure is only where paal calls HOST `read`, which after the
-      workaround is nowhere on the `.pbc` path.
+      Which turned out to be live in paal, not merely upstream: the expander
+      read `include`d files and every `.sld` the module system resolves
+      straight off a file port. A file whose comment straddled byte 4096 was
+      *silently corrupted* — `(include "data.scm")` failed with
+      `unbound variable that`, the words after the boundary having been
+      spliced in as code. The same slurp now covers that path, and the
+      regression test generates the file rather than committing one, because
+      the property is about byte offsets and a committed fixture would stop
+      testing anything the moment someone reflowed it.
+
+      Paal has no HOST `read` on a file port left. Its own reader was never
+      exposed: it works in `read-char`/`peek-char` over the port rather than
+      calling kaappi's `read`, and returns the correct datums for a file where
+      kaappi's `read` returns two extra. Closed here because paal's exposure
+      is closed; the host bug is tracked in its own two issues rather than as
+      a paal TODO.
 
 ---
 

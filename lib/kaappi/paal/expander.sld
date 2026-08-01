@@ -194,12 +194,30 @@
     ;; closure, which HOST code cannot enter — it failed with "not a
     ;; procedure".  The same trap applies anywhere a paal lambda is passed to
     ;; a host higher-order procedure.
+    ;;
+    ;; Slurped and parsed from a string port rather than read straight off the
+    ;; file port, for the reason `paal-read-bc-file` does the same in
+    ;; serializer.sld: kaappi's `read` parses a file port in 4096-byte chunks
+    ;; and loses lexer state at every boundary (kaappi/kaappi#1920,
+    ;; kaappi/kaappi#2043).  A `.sld` is a single ~4 KB-and-up datum full of
+    ;; comments, so this is not a corner: a library whose comment happens to
+    ;; straddle byte 4096 failed to load at all, with `read error` and nothing
+    ;; naming the file, and one whose comment straddles it a certain way loads
+    ;; with extra symbols spliced into the library body instead.  A string port
+    ;; hands the reader the whole text at once, so there is no boundary.
     (define (read-forms-from path)
+      (paal-read-forms-from-string (read-file-as-string path)))
+
+    ;; string-append per chunk rather than collecting and applying: this file
+    ;; is compiled by paal for the self-hosted path, and paal's own `apply`
+    ;; would be handed one argument per chunk.
+    (define (read-file-as-string path)
       (let ((port (open-input-file path)))
-        (let loop ((form (read port)) (acc '()))
-          (if (eof-object? form)
-              (begin (close-input-port port) (reverse acc))
-              (loop (read port) (cons form acc))))))
+        (let loop ((acc ""))
+          (let ((chunk (read-string 4096 port)))
+            (if (eof-object? chunk)
+                (begin (close-input-port port) acc)
+                (loop (string-append acc chunk)))))))
 
     ;; --- import specs ---------------------------------------------------
     ;;
