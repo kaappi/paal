@@ -862,7 +862,43 @@
     ; Reads each .pbc (fast: parse + reconstruct) then runs it into g.
     (define (pkaappi-load-cached-pipeline g)
       (for-each (lambda (pbc) (paal-run-bc (paal-read-bc-file pbc) g))
-                %paal-cache-files))
+                %paal-cache-files)
+      (%finish-pipeline-load! g))
+
+    ; The .sld route, for a checkout with no cache built yet.
+    (define (pkaappi-load-source-pipeline g)
+      (for-each (lambda (p) (pkaappi-load-file p g)) %paal-lib-files)
+      (%finish-pipeline-load! g))
+
+    ;; Everything a freshly loaded pipeline needs that the pipeline cannot
+    ;; supply for itself.  Called from both routes, so no entry point can get
+    ;; one and not the other — three of the six load sites used to be missing
+    ;; the lib-path replay.
+    (define (%finish-pipeline-load! g)
+      ;; The loaded expander resolves every non-builtin import through
+      ;; paal-embedded-source, which lives in (kaappi paal embedded) — a
+      ;; library that is not part of the pipeline, so it is in neither the
+      ;; cache nor %paal-lib-files.  Without this, `paal file.scm` in a
+      ;; checkout with a built cache failed on *any* user-library import,
+      ;; (srfi 1) included, with `unbound variable paal-embedded-source`.
+      ;;
+      ;; Installing the HOST procedure is enough, and is what the boundary
+      ;; allows: it takes a library name and returns source text, both plain
+      ;; data, exactly like the HOST `command-line` already in the table.
+      ;; Loading the library itself would push 1300 lines of embedded SRFI
+      ;; source through the pipeline on every run to reach one procedure.
+      (%globals-put! g 'paal-embedded-source paal-embedded-source)
+      ;; --lib-path was consumed by the HOST expander; the loaded copy has its
+      ;; own %paal-lib-paths and has never heard of it.
+      (%propagate-lib-paths! g))
+
+    ;; Add a HOST value to an already-built globals table.  pkaappi-make-globals
+    ;; cannot do this: the pipeline is loaded into g after it returns.
+    (define (%globals-put! g name value)
+      (let ((hit (assq name (vector-ref g 0))))
+        (if hit
+            (set-cdr! hit value)
+            (vector-set! g 0 (cons (cons name value) (vector-ref g 0))))))
 
     ; Serialize a Scheme value to a string using write.
     (define (paal-write-to-string val)
@@ -882,7 +918,6 @@
           ((paal-cache-complete?)
            (let ((g (pkaappi-make-globals)))
              (pkaappi-load-cached-pipeline g)
-             (%propagate-lib-paths! g)
              (pkaappi-run-string-in g
                (string-append
                  "(paal-run-bc"
@@ -893,8 +928,7 @@
                  "  (pkaappi-make-globals (quote " cmd-str ")))"))))
           ((file-exists? "lib/kaappi/paal/ir.sld")
            (let ((g (pkaappi-make-globals)))
-             (for-each (lambda (p) (pkaappi-load-file p g)) %paal-lib-files)
-             (%propagate-lib-paths! g)
+             (pkaappi-load-source-pipeline g)
              (pkaappi-run-string-in g
                (string-append
                  "(paal-run-bc"
@@ -931,9 +965,8 @@
                "  \"" output "\")"))))
         ((file-exists? "lib/kaappi/paal/ir.sld")
          (let ((g (pkaappi-make-globals)))
-           (for-each (lambda (p) (pkaappi-load-file p g)) %paal-lib-files)
+           (pkaappi-load-source-pipeline g)
            (pkaappi-load-file "lib/kaappi/paal/serializer.sld" g)
-           (%propagate-lib-paths! g)
            (pkaappi-run-string-in g
              (string-append
                "(paal-write-bc-file"
@@ -1013,7 +1046,7 @@
            (%run-repl g)))
         ((file-exists? "lib/kaappi/paal/ir.sld")
          (let ((g (pkaappi-make-globals)))
-           (for-each (lambda (p) (pkaappi-load-file p g)) %paal-lib-files)
+           (pkaappi-load-source-pipeline g)
            (%run-repl g)))
         ;; Neither the cache nor paal's sources are on disk -- which is the
         ;; normal case for a bundled binary run outside the repo.  The HOST

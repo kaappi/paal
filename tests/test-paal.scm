@@ -2155,6 +2155,36 @@
   (test-equal "imports are transitive through a library"
     '("hi x" 16)
     (module-run "(import (m greet)) (list (greet \"x\") (area 4))"))
+  ;; The rest of this group runs the HOST pipeline, which is why none of it
+  ;; caught the following.  The self-hosted path expands the program through
+  ;; paal's own loaded copy of the expander, and that copy resolves every
+  ;; non-builtin import through `paal-embedded-source` — which lives in
+  ;; (kaappi paal embedded), a library outside the pipeline and therefore in
+  ;; neither cache/*.pbc nor %paal-lib-files.  So `paal file.scm` in a checkout
+  ;; with a built cache failed on *any* user library, (srfi 1) included, with
+  ;; "unbound variable paal-embedded-source".  Both self-hosted entry points
+  ;; are covered because they load the pipeline at separate call sites.
+  (test-equal "an import resolves on the self-hosted run path"
+    49
+    (let ((p "paal-self-import-tmp.scm"))
+      (let ((port (open-output-file p)))
+        (display "(import (scheme base) (m math))\n(square 7)\n" port)
+        (close-output-port port))
+      (let ((r (pkaappi-self-run-file p)))
+        (delete-file p)
+        r)))
+  (test-equal "an import resolves on the self-hosted compile path"
+    64
+    (let ((src "paal-self-import-src.scm")
+          (out "paal-self-import-out.pbc"))
+      (let ((port (open-output-file src)))
+        (display "(import (scheme base) (m math))\n(cube 4)\n" port)
+        (close-output-port port))
+      (pkaappi-self-compile-to-file src out)
+      (let ((r (pkaappi-run-pbc-file out)))
+        (delete-file src)
+        (delete-file out)
+        r)))
   (test-equal "only"
     '(16 no-cube)
     (module-run

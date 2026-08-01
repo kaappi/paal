@@ -239,7 +239,10 @@ Gaps in `lib/kaappi/paal/reader.sld`:
       Directories are searched in the order given, after the default `.`.
       Works on both pipelines. The self-hosted path loads a second copy of
       the expander with its own `%paal-lib-paths`, so the paths are replayed
-      into it after the pipeline is loaded.
+      into it after the pipeline is loaded — from all six pipeline-load sites
+      now; three of them were missing the replay, which is why `paal compile`
+      and the REPL ignored it. Not honoured in a `make binary` build, where
+      kaappi's CLI takes the flag before paal starts — see Phase 6.
 - [x] **`check` subcommand** — `paal check <file>...` reads, expands, analyzes and
       *emits*, then throws the bytecode away. Emitting rather than stopping at
       the IR is the point: register allocation and upvalue resolution happen
