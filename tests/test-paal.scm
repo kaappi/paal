@@ -2456,8 +2456,32 @@
   (test-equal "named let is checked at its own position"
     "paal: named let: binding needs exactly one init expression"
     (expand-error "(let loop ((a)) a)"))
+  ;; cond and do have their own shapes: a do spec is (name init [step]), not
+  ;; a let binding, and `else` has a position rule rather than a shape rule.
+  (test-equal "else must be the last cond clause"
+    "paal: cond: else must be the last clause"
+    (expand-error "(cond (else 1) (#t 2))"))
+  (test-equal "an empty else"
+    "paal: cond: else needs at least one expression"
+    (expand-error "(cond (else))"))
+  (test-equal "a non-list cond clause"
+    "paal: cond: clause must be a list"
+    (expand-error "(cond 5)"))
+  (test-equal "a do spec with no init"
+    "paal: do: variable spec must be (name init [step])"
+    (expand-error "(do ((i)) ((= i 1)) 2)"))
+  (test-equal "a do spec with a non-symbol name"
+    "paal: do: variable name must be a symbol"
+    (expand-error "(do ((1 0)) ((= i 1)) 2)"))
+  (test-equal "a do spec with too many parts"
+    "paal: do: variable spec must be (name init [step])"
+    (expand-error "(do ((i 0 1 2)) ((= i 1)) 2)"))
   (test-equal "a well-formed let still works"
     1
-    (pkaappi-run-bc-string "(let ((a 1)) a)")))
+    (pkaappi-run-bc-string "(let ((a 1)) a)"))
+  (test-equal "a well-formed cond and do still work"
+    '(7 3)
+    (pkaappi-run-bc-string
+      "(list (cond (#t 7)) (do ((i 0 (+ i 1))) ((= i 3) i)))")))
 
 (test-exit)

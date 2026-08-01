@@ -1110,6 +1110,23 @@
       (unless (and (list? form) (>= (length form) min-len))
         (syntax-error* (string-append what ": malformed") form)))
 
+    ;; A do variable spec is (name init) or (name init step) -- not the same
+    ;; shape as a let binding, so it needs its own check.
+    (define (check-do-specs! specs form)
+      (unless (list? specs)
+        (syntax-error* "do: variable specs must be a list" form))
+      (for-each
+        (lambda (spec)
+          (cond
+            ((not (pair? spec))
+             (syntax-error* "do: variable spec must be (name init [step])" form))
+            ((not (symbol? (car spec)))
+             (syntax-error* "do: variable name must be a symbol" form))
+            ((or (not (pair? (cdr spec)))
+                 (and (pair? (cddr spec)) (not (null? (cdddr spec)))))
+             (syntax-error* "do: variable spec must be (name init [step])" form))))
+        specs))
+
     (define (expand-let form)
       (check-shape! form "let" 3)
       (if (symbol? (cadr form))
@@ -1200,6 +1217,13 @@
           (let ((clause (car clauses))
                 (rest   (cdr clauses)))
             (cond
+              ((not (pair? clause))
+               (syntax-error* "cond: clause must be a list" clause))
+              ((and (eq? (car clause) 'else) (not (null? rest)))
+               (syntax-error* "cond: else must be the last clause" clause))
+              ((and (eq? (car clause) 'else) (null? (cdr clause)))
+               (syntax-error* "cond: else needs at least one expression" clause)))
+            (cond
               ((and (pair? clause) (eq? (car clause) 'else))
                `(begin ,@(cdr clause)))
               ((= (length clause) 1)
@@ -1263,8 +1287,14 @@
     ;; ---------------------------------------------------------------
 
     (define (expand-do form)
+      (check-shape! form "do" 3)
       (let* ((var-specs  (cadr form))
              (exit-spec  (caddr form))
+             (ignore1    (check-do-specs! var-specs form))
+             (ignore2    (if (and (pair? exit-spec) (list? exit-spec))
+                             #t
+                             (syntax-error* "do: exit clause must be (test result ...)"
+                                            form)))
              (commands   (cdddr form))
              (test       (car exit-spec))
              (results    (cdr exit-spec))

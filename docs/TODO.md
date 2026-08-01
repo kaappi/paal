@@ -3,7 +3,7 @@
 Goal: make `paal` a correct R7RS-small Scheme implementation that runs the
 same programs as `kaappi`, with the same CLI conventions.
 
-Current: Stage 6 complete (self-hosting). **516 tests pass** (was 194 before Phase 1–2).
+Current: Stage 6 complete (self-hosting). **523 tests pass** (was 194 before Phase 1–2).
 
 ---
 
@@ -413,8 +413,10 @@ Issues that span stages rather than belonging to one phase.
       binding forms now check shape first and report e.g. `paal: let: binding
       needs exactly one init expression`, showing the offending form. Named
       `let` takes its bindings one position later and is checked separately.
-      The remaining derived forms (`cond`, `case`, `do`, `define-record-type`)
-      still destructure unchecked.
+      `cond` and `do` are covered too — each with its own rules rather than
+      the binding-form ones: a `do` spec is `(name init [step])`, and `else`
+      has a position rule (it must come last) rather than a shape rule.
+      `case` and `define-record-type` still destructure unchecked.
 
 - [ ] **`.pbc` files can become unreadable depending on byte offsets**
       (kaappi/kaappi#1920) — kaappi's `read` on a *file port* mis-handles a dotted
