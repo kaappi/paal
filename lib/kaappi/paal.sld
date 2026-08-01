@@ -296,6 +296,24 @@
       ;; existing table and so leave macros in place, which is what lets a
       ;; loaded file's macros stay visible and the REPL accumulate them.
       (paal-macros-reset!)
+      (apply %make-globals-table opts))
+
+    ;; The same table without the macro reset.
+    ;;
+    ;; `environment` needs this and `pkaappi-make-globals` will not do: an R7RS
+    ;; environment is created *inside* a running program, and there is one macro
+    ;; table for the whole expander, so resetting it there destroys the macros of
+    ;; the program doing the nesting.  Every `define-syntax` before an
+    ;; `(environment …)` call became an unbound variable after it.
+    ;;
+    ;; It stays hidden under whole-program compilation, where expansion finishes
+    ;; before anything runs, and under the cached REPL, where the reset lands on
+    ;; the HOST expander while the REPL expands through the loaded one.  It is
+    ;; plainly visible anywhere forms are expanded and run one at a time — which
+    ;; is how the R7RS conformance harness drives the suite, and how it was
+    ;; found: `(environment '(scheme base))` in §6.12 took out `(chibi test)`'s
+    ;; `test` macro and darkened the remaining 292 forms of the suite.
+    (define (%make-globals-table . opts)
       (let* ((cmd-args  (if (null? opts) '() (car opts)))
              ; cmd-cell is a HOST mutable pair; (car cmd-cell) = current command-line list.
              ; command-line is a HOST lambda closing over cmd-cell — safe to call from
@@ -370,8 +388,12 @@
                       ;; table per program, so any spec yields a fresh one with
                       ;; everything in it.  Honouring the specs would need the
                       ;; module system to build a table rather than splice.
+                      ;;
+                      ;; %make-globals-table, not pkaappi-make-globals: this
+                      ;; runs inside the caller's program, and the reset would
+                      ;; take the caller's own macros with it.
                       (environment                . ,(lambda specs
-                                                       (pkaappi-make-globals)))
+                                                       (%make-globals-table)))
                       (interaction-environment    . ,(lambda () (car g-cell)))
                       (load                       . ,(lambda (path . rest)
                                                        (paal-run-bc

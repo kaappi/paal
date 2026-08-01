@@ -2470,6 +2470,22 @@
   (test-equal "environment yields a usable table"
     2
     (pkaappi-run-bc-string "(eval '(+ 1 1) (environment '(scheme base)))"))
+  ;; `environment` builds a table *inside* a running program, and there is one
+  ;; macro table for the whole expander, so routing it through
+  ;; pkaappi-make-globals reset the caller's own macros: every define-syntax
+  ;; before an (environment ...) call became an unbound variable after it.
+  ;;
+  ;; It hides under whole-program compilation, where expansion finishes before
+  ;; anything runs -- which is why `paal eval` never showed it and this group
+  ;; did not catch it.  It is plain wherever forms are expanded and run one at a
+  ;; time.  Found by the R7RS harness: §6.12's (environment '(scheme base)) took
+  ;; out (chibi test)'s `test` macro and darkened the remaining 292 forms.
+  (test-equal "environment does not reset the caller's macro table"
+    10
+    (let ((g (pkaappi-make-globals)))
+      (pkaappi-run-string-in g "(define-syntax m (syntax-rules () ((_ x) (* x 2))))")
+      (pkaappi-run-string-in g "(environment '(scheme base))")
+      (pkaappi-run-string-in g "(m 5)")))
   ;; interaction-environment is the running program's own table, so a define
   ;; evaluated into it is visible to code compiled afterwards.
   (test-equal "a define through interaction-environment is visible"
