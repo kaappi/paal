@@ -29,10 +29,14 @@ the REPL, a positional file runs it, and subcommands (`check`, `fmt`, `compile`,
 `--version`) work the same way. Paal-only: `debug`, `--cache`, `--profile`,
 `--coverage`.
 
-**Exceptions:** `compile` outputs `.pbc` text bytecode (not a native binary); in a
-`make binary` build `check` and `fmt` are unreachable, because kaappi's own CLI
-consumes those words before paal starts (kaappi/kaappi#2010) — bootstrap mode is
-unaffected.
+**Exceptions:** `compile` outputs `.pbc` text bytecode (not a native binary).
+
+In a `make binary` build, kaappi's own CLI claims the first argument whenever it
+recognizes it — `check`, `fmt`, `compile`, `expand`, `ir`, `--lib-path`, `--help`
+(kaappi/kaappi#2010). It only inspects the first, so **prefix the command with
+`do`** and the rest arrives intact: `paal do check f.scm`, `paal do --lib-path lib
+f.scm`. Bare `help` works too, since `--help` answers as kaappi. `do` is a no-op in
+bootstrap mode.
 
 `paal debug <file>` stops at each call and return: `s`/`n`/`f`/`c` to step, step
 over, finish the frame and continue; `b <name>` to break on a procedure, `bt` for

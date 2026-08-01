@@ -31,7 +31,11 @@
   (display "  --profile               Count calls per procedure; report on exit\n")
   (display "  --coverage              Report which procedures were never called\n")
   (display "  -h, --help              Show this help\n")
-  (display "  --version               Show version\n"))
+  (display "  --version               Show version\n")
+  (display "\nIn a bundled binary, kaappi's CLI claims any first argument it\n")
+  (display "recognizes -- check, fmt, compile, expand, ir, --lib-path, --help.\n")
+  (display "Prefix the whole command with `do` to get it through:\n")
+  (display "  paal do check f.scm     paal do --lib-path lib f.scm\n"))
 
 ;; Run a file, forwarding extra-args to (command-line) inside the user program.
 (define (run-file path . extra-args)
@@ -112,8 +116,30 @@
     ; No args → REPL (matches kaappi's behavior)
     ((null? args)
      (pkaappi-self-repl))
-    ; Help
-    ((or (string=? (car args) "--help") (string=? (car args) "-h"))
+    ; do <anything...> — re-dispatch, skipping kaappi's CLI
+    ;
+    ; A -Dbundle binary is kaappi with paal's bytecode inside it, and kaappi
+    ; parses the argument vector before paal starts: it claims any first
+    ; argument that names one of its own subcommands or options, so
+    ; `paal check f.scm` arrives as ("f.scm") and runs the program, and
+    ; `paal --lib-path d f.scm` arrives as ("f.scm") with the directory gone
+    ; entirely (kaappi/kaappi#2010).
+    ;
+    ; It only inspects the *first* argument.  So one word kaappi does not
+    ; recognize, in front, shields everything after it — verified against a
+    ; bundled binary: `do --lib-path d z.scm` arrives whole. One escape hatch
+    ; rather than an alias per subcommand: it covers the options too, and
+    ; every subcommand paal has not written yet.
+    ;
+    ; Harmless in bootstrap mode, where nothing was being consumed.
+    ((string=? (car args) "do")
+     (if (null? (cdr args))
+         (usage)
+         (main (cdr args))))
+    ; Help.  Bare `help` as well as the flags, since a bundled binary answers
+    ; --help and -h as kaappi.
+    ((or (string=? (car args) "--help") (string=? (car args) "-h")
+         (string=? (car args) "help"))
      (usage))
     ; Version
     ((or (string=? (car args) "--version") (string=? (car args) "version"))

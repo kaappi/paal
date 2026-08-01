@@ -3,7 +3,7 @@
 Goal: make `paal` a correct R7RS-small Scheme implementation that runs the
 same programs as `kaappi`, with the same CLI conventions.
 
-Current: Stage 6 complete (self-hosting). **584 tests pass** (was 194 before Phase 1–2).
+Current: Stage 6 complete (self-hosting). **585 tests pass** (was 194 before Phase 1–2).
 
 ---
 
@@ -337,6 +337,12 @@ inferred:
 | `paal compile/expand/ir f.scm` | same |
 | `paal --lib-path d f.scm` | **path never reaches paal** — same bug |
 | `paal --help` | prints **kaappi's** usage |
+| `paal do check f.scm` | works — `do` shields everything after it |
+| `paal do fmt --check f.scm` | works |
+| `paal do compile f.scm -o o.pbc` | works |
+| `paal do --lib-path d f.scm` | works — imports resolve from `d` |
+| `paal do --cache f.scm` | works |
+| `paal help` | prints paal's usage |
 
 - [x] **Self-contained primitive env** — nothing to do. The entry assumed the
       binary would need its own implementations of what `paal-initial-env`
@@ -348,8 +354,10 @@ inferred:
       `("p.scm")` and lost it, then started the REPL. The symptom was
       `repl requires cache`, which reads like a missing cache and is not. Now
       matched against `main.scm` specifically.
-- [ ] **A bundled binary loses every argument kaappi's own CLI claims** —
-      **blocked upstream** by kaappi/kaappi#2010. A `-Dbundle` binary consumes
+- [x] **A bundled binary loses every argument kaappi's own CLI claims** —
+      **worked around**; the upstream bug is kaappi/kaappi#2010 and is still
+      open, but nothing of paal's is unreachable any more. A `-Dbundle` binary
+      consumes
       an argument that collides with one of kaappi's subcommand or option
       names, so `paal check f.scm` delivers `("f.scm")` and paal's dispatcher
       treats it as a positional file and runs it.
@@ -385,10 +393,25 @@ inferred:
       bundled, the binary *is* the bundled program, so the argument vector
       belongs to that program.
 
-      Not workable around from paal's side: the argument is gone before paal
-      starts, and a swallowed `check` is indistinguishable from never having
-      been typed. Bootstrap mode is unaffected, so `kaappi src/main.scm check
-      f.scm` is correct today.
+      **The workaround: `paal do <anything…>`.** kaappi inspects only the
+      *first* argument, so one word it does not recognize, in front, shields
+      everything after it. Verified against a bundled binary — `do --lib-path
+      d z.scm` arrives whole, as do `do check f.scm`, `do --cache f.scm` and
+      `do --help`. `paal do` re-enters paal's own dispatcher with the rest,
+      and is a no-op in bootstrap mode, where nothing was being consumed.
+
+      One escape hatch rather than an alias per subcommand: aliases would have
+      to be invented for `check`, `fmt`, `compile`, `expand` and `ir`, would
+      not help the options at all, and would outlive the bug as names users
+      had adopted. `do` covers the options too, and every subcommand paal has
+      not written yet, and comes out in one piece when kaappi#2010 is fixed.
+      Bare `help` is accepted alongside `--help`/`-h` for the same reason.
+
+      This entry previously said the collision was not workable around from
+      paal's side, on the grounds that the argument is gone before paal
+      starts. True of the argument kaappi claims — and irrelevant, since paal
+      chooses which argument that is. Bootstrap mode was unaffected
+      throughout, so `kaappi src/main.scm check f.scm` was always correct.
 
 - [x] **Bundle the SRFI libraries** — all ten are embedded as source in
       `(kaappi paal embedded)`, which the expander consults *before* the
