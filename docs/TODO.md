@@ -444,8 +444,17 @@ Requires significant new infrastructure; no fixed timeline.
 - [ ] **Coverage** — `--coverage` / `--coverage-xml` flags for procedure-level coverage
       (paal currently uses kaappi's `--coverage` for its own test suite)
 - [ ] **Stepping debugger** — breakpoints, step/next, frame navigation
-- [ ] **C FFI** — `(kaappi ffi)` equivalent for paal programs
-- [ ] **Fibers / concurrency** — cooperative green threads + channels
+- [ ] **C FFI** — smaller than written. A bundled paal runs on kaappi's
+      runtime, so the FFI machinery is *present*; it is simply not reachable,
+      because `paal-initial-env` never binds it — `(ffi-open "libc")` reports
+      an unbound variable rather than a missing capability. The work is
+      exposing the primitives and deciding which surface paal should present,
+      not building an FFI.
+- [ ] **Fibers / concurrency** — same shape as the FFI entry.
+      `spawn-fiber` and `make-channel` report unbound variables in a bundled
+      paal, not missing runtime support; kaappi's fibers are in the binary and
+      unexposed. Note the workspace treats SRFI 18 (OS threads) as out of
+      scope for paal, so this means kaappi's cooperative fibers specifically.
 - [ ] **Native backend** — LLVM or alternative native code generation
 - [x] **GC** — nothing to do, for the same reason the self-contained primitive
       environment turned out to be nothing to do: `make binary` bundles paal
@@ -458,7 +467,17 @@ Requires significant new infrastructure; no fixed timeline.
       kaappi's runtime. That is not the current design and is not on this
       list; the entry described a future that the `-Dbundle` approach does not
       lead to.
-- [ ] **Bignum / rationals / complex** — arbitrary-precision arithmetic
+- [x] **Bignum / rationals** — already work, and always did. `paal-initial-env`
+      maps `+`, `*`, `/`, `expt`, `quotient` and the rest onto kaappi's numeric
+      primitives, which carry the full numeric tower, so paal inherited it
+      without anyone writing it down. Verified in a bundled binary:
+      `(expt 2 100)` gives the exact 31-digit value, `(* (expt 10 30) (expt 10
+      30))` the exact 61-digit one, `(+ 1/3 1/6)` gives `1/2`, and
+      `numerator`/`exact`/`exact->inexact` behave across both.
+
+      Complex is the only part missing, and it is covered by the
+      `(scheme complex)` entry in Phase 2 — the R7RS procedures restricted to
+      the real line, erroring rather than silently dropping an imaginary part.
 
 ---
 
