@@ -17,7 +17,8 @@
 ;;; replaced by a bytecode emitter + register-based VM.
 
 (define-library (kaappi paal vm)
-  (import (scheme base) (scheme read) (kaappi paal ir) (kaappi paal expander))
+  (import (scheme base) (scheme read) (kaappi paal ir) (kaappi paal expander)
+          (kaappi ffi) (kaappi fibers))
   (export paal-eval paal-eval-program paal-initial-env)
   (begin
 
@@ -466,6 +467,37 @@
                           (* mag (cos ang))
                           (error "make-polar: paal has no complex numbers"
                                  mag ang)))))
+
+             ;; --- (kaappi ffi) and (kaappi fibers) ---
+             ;;
+             ;; These were never missing, only unreachable: paal runs on
+             ;; kaappi's runtime, so the machinery is in the binary and simply
+             ;; had no name here.  Binding the procedure object rather than
+             ;; declaring a signature means kaappi keeps enforcing arity, so
+             ;; there is nothing here to get wrong.
+             ;;
+             ;; The higher-order ones do not work from the bytecode path:
+             ;; `spawn` and `ffi-callback` take a procedure, and a paal closure
+             ;; is a tagged vector that HOST code cannot enter — the same
+             ;; boundary that made dynamic-wind and call-with-input-file fail.
+             ;; They are bound anyway, because they work on the tree-walking
+             ;; path and because an unbound variable is a worse diagnostic than
+             ;; a type error naming the closure.
+             (ffi-open . ,ffi-open) (ffi-fn . ,ffi-fn) (ffi-close . ,ffi-close)
+             (ffi-callback . ,ffi-callback)
+             (ffi-callback-release . ,ffi-callback-release)
+             (ffi-callback? . ,ffi-callback?)
+             (ffi-bytevector-ptr . ,ffi-bytevector-ptr)
+             (spawn . ,spawn) (yield . ,yield)
+             (fiber-join . ,fiber-join) (fiber? . ,fiber?)
+             (make-channel . ,make-channel)
+             (channel-send . ,channel-send)
+             (channel-receive . ,channel-receive)
+             (channel? . ,channel?)
+             (channel-close! . ,channel-close!)
+             (channel-closed? . ,channel-closed?)
+             (channel-timeout-exception? . ,channel-timeout-exception?)
+             (processor-count . ,processor-count)
 
              ;; Features
              (features . ,features)

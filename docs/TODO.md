@@ -3,7 +3,7 @@
 Goal: make `paal` a correct R7RS-small Scheme implementation that runs the
 same programs as `kaappi`, with the same CLI conventions.
 
-Current: Stage 6 complete (self-hosting). **557 tests pass** (was 194 before Phase 1–2).
+Current: Stage 6 complete (self-hosting). **563 tests pass** (was 194 before Phase 1–2).
 
 ---
 
@@ -393,26 +393,25 @@ inferred:
       The self-hosted path earns its keep by proving paal compiles itself, not
       by being fast. Nothing about the binary needs it.
 - [ ] **Stepping debugger** — breakpoints, step/next, frame navigation
-- [ ] **C FFI** — smaller than written. A bundled paal runs on kaappi's
-      runtime, so the FFI machinery is *present*; it is simply not reachable,
-      because `paal-initial-env` never binds it — `(ffi-open "libc")` reports
-      an unbound variable rather than a missing capability. The work is
-      exposing the primitives and deciding which surface paal should present,
-      not building an FFI.
+- [x] **C FFI** — bound, not built. `(kaappi ffi)`'s seven primitives
+      (`ffi-open`, `ffi-fn`, `ffi-close`, `ffi-callback`,
+      `ffi-callback-release`, `ffi-callback?`, `ffi-bytevector-ptr`) are now in
+      `paal-initial-env`. The binding is the procedure *object*, not a
+      signature, so kaappi keeps enforcing arity — there was nothing here to
+      get wrong, which is why the earlier worry about arities was misplaced.
+- [x] **Fibers / concurrency** — same: `spawn`, `yield`, `fiber-join`,
+      `fiber?`, the six channel procedures, and `processor-count` are bound.
+      Channels take values, so they cross the HOST boundary intact and work on
+      both pipelines — `(channel-send c 42)` then `(channel-receive c)`
+      round-trips.
 
-      `(import (kaappi ffi))` loads cleanly under kaappi, so the library is
-      reachable. It is runtime-provided rather than a `.sld`, so its export
-      list is in the Zig source; binding it means adding those names to
-      `paal-initial-env` with correct arities, and adding the import makes
-      paal depend on a library every kaappi build must have.
-- [ ] **Fibers / concurrency** — same shape as the FFI entry.
-      `spawn-fiber` and `make-channel` report unbound variables in a bundled
-      paal, not missing runtime support; kaappi's fibers are in the binary and
-      unexposed. `(import (kaappi fibers))` loads cleanly, and like the FFI it
-      is runtime-provided, so the same applies: bind its exports into
-      `paal-initial-env`. Note the workspace treats SRFI 18 (OS threads) as
-      out of scope for paal, so this means kaappi's cooperative fibers
-      specifically.
+      **`spawn` and `ffi-callback` do not work from the bytecode path.** They
+      take a procedure, and a paal closure there is a tagged vector HOST code
+      cannot enter — the same boundary that made `dynamic-wind` and
+      `call-with-input-file` fail. Both work on the tree-walking path, where
+      closures *are* HOST procedures. Making them work under bytecode needs the
+      VM-marker treatment `guard` and `apply` got: recognise the callee in
+      `do-call!` and re-enter the dispatch loop for the callback.
 - [ ] **Native backend** — LLVM or alternative native code generation
 - [x] **GC** — nothing to do, for the same reason the self-contained primitive
       environment turned out to be nothing to do: `make binary` bundles paal

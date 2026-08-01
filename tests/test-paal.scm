@@ -2734,4 +2734,42 @@
       (pkaappi-run-bc-string "(define (h) 1) (h)")
       (paal-profile-report))))
 
+;; ---------------------------------------------------------------
+;; (kaappi ffi) and (kaappi fibers)
+;; ---------------------------------------------------------------
+;;
+;; These were never missing, only unreachable: paal runs on kaappi's runtime,
+;; so the machinery was in the binary with no name bound to it.  The binding
+;; is the procedure object, not a signature, so kaappi keeps enforcing arity.
+
+(test-group "ffi and fibers"
+  (test-equal "the ffi primitives are bound"
+    '(#t #t #t)
+    (pkaappi-run-bc-string
+      "(list (procedure? ffi-open) (procedure? ffi-fn) (procedure? ffi-callback))"))
+  (test-equal "the fiber and channel primitives are bound"
+    '(#t #t #t)
+    (pkaappi-run-bc-string
+      "(list (procedure? spawn) (procedure? make-channel) (procedure? channel-send))"))
+  (test-equal "processor-count answers"
+    #t
+    (pkaappi-run-bc-string "(> (processor-count) 0)"))
+  ;; Channels take values, not procedures, so they cross the boundary intact
+  ;; and work on both pipelines.
+  (test-equal "a channel round-trips a value"
+    '(#t 42)
+    (pkaappi-run-bc-string
+      "(let ((c (make-channel))) (channel-send c 42)
+         (list (channel? c) (channel-receive c)))"))
+  ;; spawn takes a procedure.  On the bytecode path that is a tagged vector
+  ;; HOST code cannot enter -- the same boundary that made dynamic-wind and
+  ;; call-with-input-file fail -- so it is reachable but not usable there.
+  (test-equal "spawn works on the tree-walking path"
+    #t
+    (pkaappi-run-string "(fiber? (spawn (lambda () 1)))"))
+  (test-equal "spawn on the bytecode path fails at the closure boundary"
+    'boundary
+    (guard (e (#t 'boundary))
+      (pkaappi-run-bc-string "(fiber? (spawn (lambda () 1)))"))))
+
 (test-exit)
