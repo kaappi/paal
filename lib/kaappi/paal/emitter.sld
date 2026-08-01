@@ -412,7 +412,11 @@
     ;; Lambda compilation
     ;; ---------------------------------------------------------------
 
-    (define (emit-lambda! e node dst)
+    ;; `name` is the identifier a top-level define is binding this lambda to,
+    ;; or #f for a genuinely anonymous one.  It reaches the bytecode-function
+    ;; purely so a profile report can say `fact` rather than #f; nothing in the
+    ;; call path reads it.
+    (define (emit-lambda! e node dst . opt)
       (let* ((params    (ir:lambda-params node))
              (body      (ir:lambda-body   node))
              (variadic? (ir:lambda-rest?  node))
@@ -432,7 +436,7 @@
         (let ((body-dst (e-alloc-reg! child-e)))
           (emit-node! child-e body body-dst #t)
           (e-emit! child-e `(return ,body-dst))
-          (let* ((fn    (finalize! child-e #f))
+          (let* ((fn    (finalize! child-e (if (null? opt) #f (car opt))))
                  (specs (map (lambda (uv)
                                ; uv = (name is-local? src-idx is-boxed?)
                                ; VM only needs is-local? and src-idx to capture the value
@@ -488,8 +492,11 @@
               (let ((node    (car ns))
                     (is-last? (null? (cdr ns))))
                 (if (ir:define? node)
-                    (let ((val-reg (e-alloc-reg! top-e)))
-                      (emit-node! top-e (ir:define-val node) val-reg #f)
+                    (let ((val-reg (e-alloc-reg! top-e))
+                          (val     (ir:define-val node)))
+                      (if (ir:lambda? val)
+                          (emit-lambda! top-e val val-reg (ir:define-name node))
+                          (emit-node! top-e val val-reg #f))
                       (e-emit! top-e `(define-global ,(ir:define-name node) ,val-reg))
                       (e-free-reg! top-e)
                       (loop (cdr ns) val-reg))

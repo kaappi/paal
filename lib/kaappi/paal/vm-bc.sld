@@ -8,7 +8,8 @@
 (define-library (kaappi paal vm-bc)
   (import (scheme base) (kaappi paal bytecode) (kaappi paal frame))
   (export paal-run-bc paal-make-globals
-          %paal-guard-run-marker %paal-apply-marker paal-vm-raise-escape!)
+          %paal-guard-run-marker %paal-apply-marker paal-vm-raise-escape!
+          paal-profile-start! paal-profile-report)
   (begin
 
     (define REGS-SIZE 16384)
@@ -410,10 +411,40 @@
             acc
             (loop (- i 1) (cons (vector-ref regs (+ abs-base i)) acc)))))
 
+    ;; --- profiling ---------------------------------------------------
+    ;;
+    ;; Off unless paal-profile-start! is called, so the call path pays one
+    ;; boolean test and nothing else in the normal case.  Counted here rather
+    ;; than in paal-call-value because do-call! is where every paal-level call
+    ;; arrives, tail and non-tail alike; paal-call-value is only the HOST
+    ;; re-entry door and sees a small fraction of them.
+    ;;
+    ;; Keyed by the function's name, with anonymous lambdas sharing #f rather
+    ;; than being dropped, so the counts still add up to the calls made.
+
+    (define %profiling? #f)
+    (define %profile-counts '())
+
+    (define (paal-profile-start!)
+      (set! %profiling? #t)
+      (set! %profile-counts '()))
+
+    (define (paal-profile-count! callee)
+      (let* ((name (bytecode-function-name (closure-function callee)))
+             (hit  (assq name %profile-counts)))
+        (if hit
+            (set-cdr! hit (+ (cdr hit) 1))
+            (set! %profile-counts (cons (cons name 1) %profile-counts)))))
+
+    ;; Unsorted: the caller decides presentation, and sorting here would need
+    ;; a total order on names this VM has no reason to define.
+    (define (paal-profile-report) %profile-counts)
+
     (define (do-call! regs globals frames frame callee abs-base nargs base-off tail?)
       (cond
         ; Paal closure
         ((closure? callee)
+         (when %profiling? (paal-profile-count! callee))
          (let* ((fn        (closure-function callee))
                 (arity     (bytecode-function-arity fn))
                 (variadic? (bytecode-function-variadic? fn))

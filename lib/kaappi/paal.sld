@@ -47,7 +47,9 @@
     pkaappi-run-file-cached pkaappi-cache-path
     ;; Formatter
     paal-format-string paal-format-file paal-format-file!
-    paal-format-check-file)
+    paal-format-check-file
+    ;; Profiling
+    paal-profile-start! paal-profile-report)
   (begin
 
     ;; --- Tree-walking pipeline ---

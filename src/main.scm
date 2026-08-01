@@ -26,6 +26,7 @@
   (display "\nOptions:\n")
   (display "  --lib-path <dir>        Add a directory to the library search path\n")
   (display "  --cache                 Cache compiled bytecode beside the source\n")
+  (display "  --profile               Count calls per procedure; report on exit\n")
   (display "  -h, --help              Show this help\n")
   (display "  --version               Show version\n"))
 
@@ -34,24 +35,45 @@
   (let ((len (string-length path)))
     (if (and (>= len 4) (string=? (substring path (- len 4) len) ".pbc"))
         (pkaappi-run-pbc-file path)  ; .pbc: no command-line forwarding yet
-        (if %use-cache
-            (pkaappi-run-file-cached path (cons path extra-args))
-            (apply pkaappi-self-run-file path extra-args)))))
+        (cond
+          ;; --profile runs on the HOST pipeline deliberately.  The
+          ;; self-hosted path executes the user's program through the
+          ;; paal-compiled copy of the VM, which has its own %profiling? flag
+          ;; that setting this one does not reach -- the same two-copies
+          ;; problem as %paal-lib-paths.  Profiling there also buries the
+          ;; user's procedures under the pipeline's own map/filter traffic,
+          ;; which is not what anyone asked for.
+          (%profile (pkaappi-run-bc-file path))
+          (%use-cache (pkaappi-run-file-cached path (cons path extra-args)))
+          (else (apply pkaappi-self-run-file path extra-args))))))
 
 ;; --lib-path <dir> may appear any number of times, before the subcommand.
 ;; Directories are searched in the order given, after the default ".".
 ;; --cache turns on the opt-in bytecode cache; see pkaappi-run-file-cached.
 (define %use-cache #f)
 
+;; Drop one entry by identity, so the report can select repeatedly without
+;; needing a total order on procedure names.
+(define (%without lst entry)
+  (let loop ((l lst) (acc '()))
+    (cond ((null? l) (reverse acc))
+          ((eq? (car l) entry) (loop (cdr l) acc))
+          (else (loop (cdr l) (cons (car l) acc))))))
+
+;; --profile counts calls per procedure and prints a report on exit.
+(define %profile #f)
+
 (define (strip-lib-paths args)
   (let loop ((as args))
+    (if (and (pair? as) (string=? (car as) "--profile"))
+        (begin (set! %profile #t) (paal-profile-start!) (loop (cdr as)))
     (if (and (pair? as) (string=? (car as) "--cache"))
         (begin (set! %use-cache #t) (loop (cdr as)))
     (if (and (pair? as) (string=? (car as) "--lib-path"))
         (if (null? (cdr as))
             (begin (display "error: --lib-path: missing directory\n") (exit 1))
             (begin (paal-lib-path-add! (cadr as)) (loop (cddr as))))
-        as))))
+        as)))))
 
 (define (main raw-args)
   (define args (strip-lib-paths raw-args))
@@ -167,3 +189,24 @@
         args)))
 
 (main (prog-args))
+
+;; Printed after the program has run.  Descending by count, so the procedures
+;; worth looking at come first; ties keep whatever order the VM recorded.
+(when %profile
+  (let ((counts (paal-profile-report)))
+    (newline)
+    (display "Profile (calls):")
+    (newline)
+    (let loop ((remaining counts))
+      (unless (null? remaining)
+        (let pick ((rest (cdr remaining)) (best (car remaining)))
+          (cond
+            ((null? rest)
+             (display "  ")
+             (display (cdr best))
+             (display "  ")
+             (display (if (car best) (car best) "<anonymous>"))
+             (newline)
+             (loop (%without remaining best)))
+            ((> (cdr (car rest)) (cdr best)) (pick (cdr rest) (car rest)))
+            (else (pick (cdr rest) best))))))))

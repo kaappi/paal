@@ -2681,4 +2681,43 @@
         (delete-file p)
         (list reads before after)))))
 
+;; ---------------------------------------------------------------
+;; --profile
+;; ---------------------------------------------------------------
+;;
+;; Counted in do-call!, which is where every paal-level call arrives, tail and
+;; non-tail alike — paal-call-value is only the HOST re-entry door and sees a
+;; fraction of them.  Names reach the bytecode-function from the enclosing
+;; define; nothing on the call path reads them.
+
+(test-group "profile"
+  (test-equal "counts calls per procedure, by name"
+    '((f . 6) (g . 2))
+    (begin
+      (paal-profile-start!)
+      (pkaappi-run-bc-string
+        "(define (f x) (* x 2)) (define (g) (f 1) (f 2) (f 3)) (g) (g)")
+      (paal-profile-report)))
+  ;; Reconciles against the call graph rather than a remembered number:
+  ;; (fact 5) is 6 calls, then (twice fact 3) is fact(3)=4 plus fact(6)=7.
+  ;; The report is unsorted, so entries appear in reverse first-call order --
+  ;; fact is called first and ends up last.
+  (test-equal "counts recursion and higher-order calls"
+    '((twice . 1) (fact . 17))
+    (begin
+      (paal-profile-start!)
+      (pkaappi-run-bc-string
+        "(define (fact n) (if (= n 0) 1 (* n (fact (- n 1)))))
+         (define (twice f x) (f (f x)))
+         (fact 5) (twice fact 3)")
+      (paal-profile-report)))
+  (test-equal "starting again clears the previous counts"
+    '((h . 1))
+    (begin
+      (paal-profile-start!)
+      (pkaappi-run-bc-string "(define (h) 1) (h) (h) (h)")
+      (paal-profile-start!)
+      (pkaappi-run-bc-string "(define (h) 1) (h)")
+      (paal-profile-report))))
+
 (test-exit)

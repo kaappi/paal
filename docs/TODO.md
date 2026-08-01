@@ -3,7 +3,7 @@
 Goal: make `paal` a correct R7RS-small Scheme implementation that runs the
 same programs as `kaappi`, with the same CLI conventions.
 
-Current: Stage 6 complete (self-hosting). **551 tests pass** (was 194 before Phase 1–2).
+Current: Stage 6 complete (self-hosting). **554 tests pass** (was 194 before Phase 1–2).
 
 ---
 
@@ -440,7 +440,22 @@ would otherwise bind one identifier two ways, which R7RS 5.2 makes an error.
 Requires significant new infrastructure; no fixed timeline.
 
 - [x] **`(scheme eval)` / `eval`** — done in Phase 2.
-- [ ] **Profiling** — `--profile` flag with call-count report (matches kaappi `--profile`)
+- [x] **Profiling** — `paal --profile file.scm` counts calls per procedure and
+      prints a report, descending by count, after the program runs. Counted in
+      `do-call!`, which is where every paal-level call arrives, tail and
+      non-tail alike; `paal-call-value` is only the HOST re-entry door and sees
+      a fraction of them. Off unless started, so the call path pays one boolean
+      test otherwise.
+
+      Procedure names come from the enclosing `define` — the emitter passed
+      `#f` for every lambda, so the first working version reported
+      `((#f . 8))`. Nothing on the call path reads the name.
+
+      `--profile` runs the program on the HOST pipeline deliberately. The
+      self-hosted path executes it through the paal-compiled copy of the VM,
+      whose `%profiling?` flag setting this one does not reach — the same
+      two-copies problem as `%paal-lib-paths` — and profiling there buries the
+      user's procedures under the pipeline's own map/filter traffic.
 - [ ] **Coverage** — `--coverage` / `--coverage-xml` flags for procedure-level coverage
       (paal currently uses kaappi's `--coverage` for its own test suite)
 - [ ] **Stepping debugger** — breakpoints, step/next, frame navigation
