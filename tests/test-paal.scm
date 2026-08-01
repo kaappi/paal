@@ -2356,4 +2356,48 @@
     2
     (srfi-run 39 "(define p (make-parameter 1)) (parameterize ((p 2)) (p))")))
 
+;; ---------------------------------------------------------------
+;; (scheme eval) / (scheme load) / (scheme repl)
+;; ---------------------------------------------------------------
+;;
+;; eval re-enters the pipeline on a datum the program built at run time.  The
+;; bindings read the globals table out of a cell rather than closing over it,
+;; because the table does not exist yet when the alist holding them is built.
+
+(test-group "eval"
+  (test-equal "a literal expression"
+    3
+    (pkaappi-run-bc-string "(eval '(+ 1 2) (interaction-environment))"))
+  ;; The point of eval: the form is assembled at run time, not written out.
+  (test-equal "an expression built at run time"
+    7
+    (pkaappi-run-bc-string
+      "(define op '+) (eval (list op 3 4) (interaction-environment))"))
+  (test-equal "the environment argument is optional"
+    42
+    (pkaappi-run-bc-string "(eval '(* 6 7))"))
+  (test-equal "environment yields a usable table"
+    2
+    (pkaappi-run-bc-string "(eval '(+ 1 1) (environment '(scheme base)))"))
+  ;; interaction-environment is the running program's own table, so a define
+  ;; evaluated into it is visible to code compiled afterwards.
+  (test-equal "a define through interaction-environment is visible"
+    9
+    (pkaappi-run-bc-string
+      "(eval '(define zz 9) (interaction-environment)) zz"))
+  (test-equal "interaction-environment is stable across calls"
+    #t
+    (pkaappi-run-bc-string
+      "(eq? (interaction-environment) (interaction-environment))"))
+  (test-equal "load runs a file into the current environment"
+    11
+    (let ((p "paal-load-tmp.scm"))
+      (let ((port (open-output-file p)))
+        (display "(define loaded-value 11)" port)
+        (close-output-port port))
+      (let ((r (pkaappi-run-bc-string
+                 (string-append "(load \"" p "\") loaded-value"))))
+        (delete-file p)
+        r))))
+
 (test-exit)

@@ -107,6 +107,9 @@
              ; command-line is a HOST lambda closing over cmd-cell — safe to call from
              ; any pipeline (HOST or self-hosted) without closure-tag mismatch.
              (cmd-cell    (list cmd-args))
+             ; Holds the table being built, so eval/load/interaction-environment
+             ; can reach it; filled in by set-car! once paal-make-globals returns.
+             (g-cell      (list #f))
              ; Build a genuine HOST error object (so error-object? and friends
              ; recognize it) without raising past this point: HOST error raises it,
              ; and the guard hands the object back as an ordinary value.
@@ -145,8 +148,46 @@
                       ; do-call! implements the operation, so whichever copy of the
                       ; VM is running supplies the catch and the closure callbacks
                       ; (see vm-bc.sld).
-                      (%paal-guard-run            . ,%paal-guard-run-marker))
+                      (%paal-guard-run            . ,%paal-guard-run-marker)
+                      ;; --- (scheme eval) / (scheme load) / (scheme repl) ---
+                      ;;
+                      ;; eval re-enters the pipeline on a datum the program
+                      ;; built at run time.  Each reads the table out of
+                      ;; g-cell rather than closing over `g`, which is not
+                      ;; bound until this alist has been evaluated; set-car!
+                      ;; below fills it in.  Same trick as cmd-cell, and it
+                      ;; keeps working across the HOST/self-hosted boundary
+                      ;; because a pair is plain data.
+                      ;;
+                      ;; These use the HOST pipeline even under self-hosting.
+                      ;; The loaded pipeline would be the purer choice, but
+                      ;; reaching it means passing source *text* through
+                      ;; pkaappi-run-string-in, and eval's argument is a datum
+                      ;; -- writing it back out to re-read would lose every
+                      ;; object in it that has no read syntax.
+                      (%paal-globals-cell         . ,g-cell)
+                      (eval                       . ,(lambda (expr . rest)
+                                                       (paal-run-bc
+                                                         (pkaappi-compile-forms (list expr))
+                                                         (if (pair? rest)
+                                                             (car rest)
+                                                             (car g-cell)))))
+                      ;; R7RS environment takes import specs; paal has one flat
+                      ;; table per program, so any spec yields a fresh one with
+                      ;; everything in it.  Honouring the specs would need the
+                      ;; module system to build a table rather than splice.
+                      (environment                . ,(lambda specs
+                                                       (pkaappi-make-globals)))
+                      (interaction-environment    . ,(lambda () (car g-cell)))
+                      (load                       . ,(lambda (path . rest)
+                                                       (paal-run-bc
+                                                         (pkaappi-compile-forms
+                                                           (paal-read-file path))
+                                                         (if (pair? rest)
+                                                             (car rest)
+                                                             (car g-cell))))))
                     base-alist))))
+        (set-car! g-cell g)
         ; Install the paal-native exception handler stack.
         ;
         ; with-exception-handler cannot be a HOST procedure here: the handler and

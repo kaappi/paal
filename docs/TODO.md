@@ -3,7 +3,7 @@
 Goal: make `paal` a correct R7RS-small Scheme implementation that runs the
 same programs as `kaappi`, with the same CLI conventions.
 
-Current: Stage 6 complete (self-hosting). **498 tests pass** (was 194 before Phase 1–2).
+Current: Stage 6 complete (self-hosting). **505 tests pass** (was 194 before Phase 1–2).
 
 ---
 
@@ -179,9 +179,17 @@ User programs call `(import (scheme inexact))` etc. Currently `import` is a no-o
 - [x] `(scheme write)` completeness — `write-shared`, `write-simple` added
 - [ ] `(scheme complex)` — complex number arithmetic operations
 - [ ] `(scheme r5rs)` — R5RS compatibility subset
-- [ ] `(scheme eval)` — `eval`, `environment` (hard: re-entering pipeline from user code)
-- [ ] `(scheme load)` — `load`
-- [ ] `(scheme repl)` — `interaction-environment`
+- [x] `(scheme eval)` — `eval` and `environment`. `eval` compiles the datum it
+      is handed and runs it in the given table; the bindings read that table
+      out of a cell rather than closing over it, since it does not exist when
+      the alist holding them is built. They use the HOST pipeline even under
+      self-hosting: reaching the loaded one means passing source *text*, and
+      eval's argument is a datum — writing it back out to re-read would lose
+      every object in it that has no read syntax. `environment` ignores its
+      import specs and yields a full fresh table; honouring them needs the
+      module system to build a table rather than splice.
+- [x] `(scheme load)` — `load`, into the current table or a given one.
+- [x] `(scheme repl)` — `interaction-environment`, the running program's own table.
 
 ---
 
@@ -312,7 +320,7 @@ would otherwise bind one identifier two ways, which R7RS 5.2 makes an error.
 
 Requires significant new infrastructure; no fixed timeline.
 
-- [ ] **`(scheme eval)` / `eval`** — expose the paal pipeline as callable from within user code
+- [x] **`(scheme eval)` / `eval`** — done in Phase 2.
 - [ ] **Profiling** — `--profile` flag with call-count report (matches kaappi `--profile`)
 - [ ] **Coverage** — `--coverage` / `--coverage-xml` flags for procedure-level coverage
       (paal currently uses kaappi's `--coverage` for its own test suite)
