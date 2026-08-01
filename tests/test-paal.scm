@@ -2711,6 +2711,20 @@
          (define (twice f x) (f (f x)))
          (fact 5) (twice fact 3)")
       (paal-profile-report)))
+  ;; Coverage reuses the profile counts -- a procedure is covered exactly when
+  ;; it was called at least once -- and reads "defined" off the globals table,
+  ;; which needs no emitter support.  The snapshot taken at start is what keeps
+  ;; pkaappi-make-globals' own blob (map, filter, ...) out of the total.
+  (test-equal "coverage reports called over defined, and names the gaps"
+    '(2 3 (c))
+    (pkaappi-run-bc-string-covered
+      "(define (a) 1) (define (b) 2) (define (c) 3) (a) (b)"))
+  (test-equal "full coverage names nothing"
+    '(2 2 ())
+    (pkaappi-run-bc-string-covered "(define (a) 1) (define (b) 2) (a) (b)"))
+  (test-equal "a program defining no procedures is vacuously covered"
+    '(0 0 ())
+    (pkaappi-run-bc-string-covered "(+ 1 2)"))
   (test-equal "starting again clears the previous counts"
     '((h . 1))
     (begin

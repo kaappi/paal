@@ -5,6 +5,7 @@
 
 (import (scheme base)
         (scheme write)
+        (scheme file)
         (scheme process-context)
         (kaappi paal))
 
@@ -27,6 +28,7 @@
   (display "  --lib-path <dir>        Add a directory to the library search path\n")
   (display "  --cache                 Cache compiled bytecode beside the source\n")
   (display "  --profile               Count calls per procedure; report on exit\n")
+  (display "  --coverage              Report which procedures were never called\n")
   (display "  -h, --help              Show this help\n")
   (display "  --version               Show version\n"))
 
@@ -43,6 +45,9 @@
           ;; problem as %paal-lib-paths.  Profiling there also buries the
           ;; user's procedures under the pipeline's own map/filter traffic,
           ;; which is not what anyone asked for.
+          ;; Both run on the HOST pipeline, for the reason given below.
+          (%coverage (report-coverage! (pkaappi-run-bc-string-covered
+                                         (read-source path))))
           (%profile (pkaappi-run-bc-file path))
           (%use-cache (pkaappi-run-file-cached path (cons path extra-args)))
           (else (apply pkaappi-self-run-file path extra-args))))))
@@ -62,9 +67,13 @@
 
 ;; --profile counts calls per procedure and prints a report on exit.
 (define %profile #f)
+;; --coverage reports which of the program's procedures were ever called.
+(define %coverage #f)
 
 (define (strip-lib-paths args)
   (let loop ((as args))
+    (if (and (pair? as) (string=? (car as) "--coverage"))
+        (begin (set! %coverage #t) (loop (cdr as)))
     (if (and (pair? as) (string=? (car as) "--profile"))
         (begin (set! %profile #t) (paal-profile-start!) (loop (cdr as)))
     (if (and (pair? as) (string=? (car as) "--cache"))
@@ -73,7 +82,28 @@
         (if (null? (cdr as))
             (begin (display "error: --lib-path: missing directory\n") (exit 1))
             (begin (paal-lib-path-add! (cadr as)) (loop (cddr as))))
-        as)))))
+        as))))))
+
+(define (read-source path)
+  (let ((port (open-input-file path)))
+    (let loop ((acc ""))
+      (let ((chunk (read-string 4096 port)))
+        (if (eof-object? chunk)
+            (begin (close-input-port port) acc)
+            (loop (string-append acc chunk)))))))
+
+;; (covered total uncalled) from paal-coverage-report.
+(define (report-coverage! result)
+  (let ((covered (car result)) (total (cadr result)) (uncalled (caddr result)))
+    (newline)
+    (display "Coverage: ")
+    (display covered) (display "/") (display total)
+    (display " procedures called")
+    (newline)
+    (unless (null? uncalled)
+      (display "  uncalled:")
+      (for-each (lambda (n) (display " ") (display n)) uncalled)
+      (newline))))
 
 (define (main raw-args)
   (define args (strip-lib-paths raw-args))

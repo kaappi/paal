@@ -49,7 +49,9 @@
     paal-format-string paal-format-file paal-format-file!
     paal-format-check-file
     ;; Profiling
-    paal-profile-start! paal-profile-report)
+    paal-profile-start! paal-profile-report
+    paal-coverage-start! paal-coverage-report
+    pkaappi-run-bc-string-covered)
   (begin
 
     ;; --- Tree-walking pipeline ---
@@ -90,6 +92,14 @@
       ;; are available — HOST versions cannot call paal closures.
       (let ((g (pkaappi-make-globals)))
         (paal-run-bc (pkaappi-compile src) g)))
+
+    ;; Coverage needs the globals table both to snapshot and to report on, so
+    ;; it cannot go through pkaappi-run-bc-string, which builds one internally.
+    (define (pkaappi-run-bc-string-covered src)
+      (let ((g (pkaappi-make-globals)))
+        (paal-coverage-start! g)
+        (paal-run-bc (pkaappi-compile src) g)
+        (paal-coverage-report g)))
 
     (define (pkaappi-run-bc-file path)
       (let ((g (pkaappi-make-globals)))

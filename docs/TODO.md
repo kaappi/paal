@@ -3,7 +3,7 @@
 Goal: make `paal` a correct R7RS-small Scheme implementation that runs the
 same programs as `kaappi`, with the same CLI conventions.
 
-Current: Stage 6 complete (self-hosting). **554 tests pass** (was 194 before Phase 1–2).
+Current: Stage 6 complete (self-hosting). **557 tests pass** (was 194 before Phase 1–2).
 
 ---
 
@@ -456,8 +456,21 @@ Requires significant new infrastructure; no fixed timeline.
       whose `%profiling?` flag setting this one does not reach — the same
       two-copies problem as `%paal-lib-paths` — and profiling there buries the
       user's procedures under the pipeline's own map/filter traffic.
-- [ ] **Coverage** — `--coverage` / `--coverage-xml` flags for procedure-level coverage
-      (paal currently uses kaappi's `--coverage` for its own test suite)
+- [x] **Coverage** — `paal --coverage file.scm` reports procedures called over
+      procedures defined, and names the ones never called. It reuses the
+      profile counts, since a procedure is covered exactly when it was called
+      at least once, so this cost almost nothing on top of `--profile`.
+
+      "Defined" is read off the globals table at report time — every entry
+      whose value is a paal closure — which needs no emitter support. That
+      would also sweep up the procedures `pkaappi-make-globals` installs
+      (`map`, `filter`, the exception blob), so the start call snapshots the
+      table and only entries added afterwards count. Same `take-until` trick
+      the macro table uses for library-local macros.
+
+      `--coverage-xml` (Cobertura, for Codecov) is not implemented; the
+      nightly workflow uses kaappi's own `--coverage` against paal's suite,
+      which is unaffected.
 - [ ] **Stepping debugger** — breakpoints, step/next, frame navigation
 - [ ] **C FFI** — smaller than written. A bundled paal runs on kaappi's
       runtime, so the FFI machinery is *present*; it is simply not reachable,

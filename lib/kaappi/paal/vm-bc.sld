@@ -9,7 +9,8 @@
   (import (scheme base) (kaappi paal bytecode) (kaappi paal frame))
   (export paal-run-bc paal-make-globals
           %paal-guard-run-marker %paal-apply-marker paal-vm-raise-escape!
-          paal-profile-start! paal-profile-report)
+          paal-profile-start! paal-profile-report
+          paal-coverage-start! paal-coverage-report)
   (begin
 
     (define REGS-SIZE 16384)
@@ -439,6 +440,40 @@
     ;; Unsorted: the caller decides presentation, and sorting here would need
     ;; a total order on names this VM has no reason to define.
     (define (paal-profile-report) %profile-counts)
+
+    ;; --- coverage ------------------------------------------------------
+    ;;
+    ;; Which procedures a run actually called, over which it defined.  Reuses
+    ;; the profile counts for "called" -- a procedure is covered exactly when
+    ;; it was called at least once -- so starting coverage starts profiling.
+    ;;
+    ;; "Defined" is read off the globals table at report time: every entry
+    ;; whose value is a paal closure.  That needs no emitter support, but it
+    ;; would also sweep up the procedures pkaappi-make-globals installs (map,
+    ;; filter, with-exception-handler and the rest of the blob), which are not
+    ;; the user's code.  So the start call snapshots the table, and only
+    ;; entries added afterwards count -- the same take-until trick the macro
+    ;; table uses for library-local macros.
+
+    (define %coverage-baseline #f)
+
+    (define (paal-coverage-start! globals)
+      (paal-profile-start!)
+      (set! %coverage-baseline (vector-ref globals 0)))
+
+    ;; -> (covered total uncalled-names)
+    (define (paal-coverage-report globals)
+      (let loop ((alist (vector-ref globals 0))
+                 (total 0) (covered 0) (uncalled '()))
+        (cond
+          ((or (null? alist) (eq? alist %coverage-baseline))
+           (list covered total (reverse uncalled)))
+          ((closure? (cdr (car alist)))
+           (let ((name (car (car alist))))
+             (if (assq name %profile-counts)
+                 (loop (cdr alist) (+ total 1) (+ covered 1) uncalled)
+                 (loop (cdr alist) (+ total 1) covered (cons name uncalled)))))
+          (else (loop (cdr alist) total covered uncalled)))))
 
     (define (do-call! regs globals frames frame callee abs-base nargs base-off tail?)
       (cond
