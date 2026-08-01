@@ -450,11 +450,20 @@ Requires significant new infrastructure; no fixed timeline.
       an unbound variable rather than a missing capability. The work is
       exposing the primitives and deciding which surface paal should present,
       not building an FFI.
+
+      `(import (kaappi ffi))` loads cleanly under kaappi, so the library is
+      reachable. It is runtime-provided rather than a `.sld`, so its export
+      list is in the Zig source; binding it means adding those names to
+      `paal-initial-env` with correct arities, and adding the import makes
+      paal depend on a library every kaappi build must have.
 - [ ] **Fibers / concurrency** — same shape as the FFI entry.
       `spawn-fiber` and `make-channel` report unbound variables in a bundled
       paal, not missing runtime support; kaappi's fibers are in the binary and
-      unexposed. Note the workspace treats SRFI 18 (OS threads) as out of
-      scope for paal, so this means kaappi's cooperative fibers specifically.
+      unexposed. `(import (kaappi fibers))` loads cleanly, and like the FFI it
+      is runtime-provided, so the same applies: bind its exports into
+      `paal-initial-env`. Note the workspace treats SRFI 18 (OS threads) as
+      out of scope for paal, so this means kaappi's cooperative fibers
+      specifically.
 - [ ] **Native backend** — LLVM or alternative native code generation
 - [x] **GC** — nothing to do, for the same reason the self-contained primitive
       environment turned out to be nothing to do: `make binary` bundles paal
