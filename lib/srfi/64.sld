@@ -24,14 +24,7 @@
     test-runner-pass-count test-runner-fail-count
     test-runner-xpass-count test-runner-xfail-count
     test-runner-skip-count test-runner-test-name
-    test-exit
-    ;; Exported because the assertion macros name them in their templates.
-    ;; A library's private *values* are renamed to mangled names, and a
-    ;; template still names the original — the same limitation that leaks
-    ;; private macros, seen from the other side.  Exporting is the honest fix
-    ;; until templates can be rewritten; the % prefix keeps them out of the
-    ;; way, which paal reserves for exactly this.
-    %assert %compare %run-test)
+    test-exit)
   (begin
 
     ;; --- runner state -------------------------------------------------

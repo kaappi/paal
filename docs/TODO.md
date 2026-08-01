@@ -3,7 +3,7 @@
 Goal: make `paal` a correct R7RS-small Scheme implementation that runs the
 same programs as `kaappi`, with the same CLI conventions.
 
-Current: Stage 6 complete (self-hosting). **549 tests pass** (was 194 before Phase 1–2).
+Current: Stage 6 complete (self-hosting). **550 tests pass** (was 194 before Phase 1–2).
 
 ---
 
@@ -428,39 +428,21 @@ Issues that span stages rather than belonging to one phase.
 
 **Open:**
 
-- [ ] **A macro template cannot name a library's private binding** — two
-      sides of one limitation. A private *macro* leaks to the importer,
-      because dropping it breaks an exported macro whose template calls it.
-      And an exported macro whose template names a private *value* breaks
-      outright: the value is renamed to a mangled name and the template still
-      names the original. SRFI 64 hit the second half — its assertion macros
-      expand to `%compare` and friends — and works around it by exporting
-      them, which is why they appear in its export list.
+- [x] **A macro template can name a library's private binding** — both
+      directions of one problem, now closed. A template names things by their
+      original name, so renaming a library's bindings means rewriting the
+      templates that reach them. The `syntax-rules` spec is kept beside the
+      transformer, which is otherwise a closure over its rules, and
+      `install-library!` rebuilds each of the library's macros with the rename
+      map applied — pattern variables and clause literals excluded, since
+      those names come from the use site.
 
-      Both need exported templates rewritten to name the mangled binding, and
-      by the time a macro is in the table it is a closure over its rules
-      rather than data one can walk. Storing the rules alongside the
-      transformer is the way in.
-
-      Previously recorded as macro leakage only:
-      Dropping unexported macros after loading was tried first and breaks an
-      *exported* macro whose template calls a private one — the template still
-      names it and the table no longer has it. Fixing it properly means
-      rewriting exported templates to name the private macro under a mangled
-      name, and by then a transformer is a closure over its rules rather than
-      data one can walk. The current trade leaks a name that can collide;
-      the alternative silently breaks working library code.
-- [x] **Expander diagnostics name the form, not an internal accessor** — the
-      expander destructures with `car`/`cadr` and used to let the host's type
-      error escape, so `(let ((a)) a)` reported `type error in 'cadr'`. The
-      binding forms now check shape first and report e.g. `paal: let: binding
-      needs exactly one init expression`, showing the offending form. Named
-      `let` takes its bindings one position later and is checked separately.
-      `cond` and `do` are covered too — each with its own rules rather than
-      the binding-form ones: a `do` spec is `(name init [step])`, and `else`
-      has a position rule (it must come last) rather than a shape rule.
-      `case` and `define-record-type` are covered as well. Every derived form
-      that destructures its input now checks shape first.
+      So an exported macro whose template calls a private helper works, and an
+      unexported macro is renamed along with the private values and is no
+      longer reachable from the importer. SRFI 64 was the motivating case: its
+      assertions expand to `%compare`, and it had to export the helpers to
+      work. It no longer does, and that export list is back to what SRFI 64
+      specifies.
 
 - [ ] **`.pbc` files can become unreadable depending on byte offsets**
       (kaappi/kaappi#1920) — kaappi's `read` on a *file port* mis-handles a dotted

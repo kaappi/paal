@@ -2194,6 +2194,13 @@
   (test-equal "an exported macro may use a private one"
     500
     (module-run "(import (m mac)) (twice 5)"))
+  ;; A macro the library did not export is renamed along with its private
+  ;; values, so it is not reachable from the importer -- while an exported
+  ;; macro whose template calls it still works, because the template was
+  ;; rewritten to name the renamed one.
+  (test-equal "a private macro is not visible to the importer"
+    'hidden
+    (module-run "(import (m mac)) (guard (e (#t 'hidden)) (private-mac 5))"))
   (test-equal "a built-in library import yields nothing to run"
     7
     (module-run "(import (scheme base)) (+ 3 4)")))

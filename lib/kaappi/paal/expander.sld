@@ -40,8 +40,20 @@
 
     (define %paal-macros '())
 
-    (define (paal-macro-set! name transformer)
-      (set! %paal-macros (cons (cons name transformer) %paal-macros)))
+    ;; The syntax-rules spec is kept beside the transformer.  A transformer
+    ;; alone is a closure over its rules, and a library that renames its
+    ;; top-level bindings has to rewrite the templates that name them —
+    ;; which needs the rules as data.  See rename-macro-templates! below.
+    (define %paal-macro-specs '())
+
+    (define (paal-macro-set! name transformer . spec)
+      (set! %paal-macros (cons (cons name transformer) %paal-macros))
+      (unless (null? spec)
+        (set! %paal-macro-specs (cons (cons name (car spec)) %paal-macro-specs))))
+
+    (define (paal-macro-spec name)
+      (let ((hit (assq name %paal-macro-specs)))
+        (and hit (cdr hit))))
 
     (define (paal-macro-get name)
       (let ((entry (assq name %paal-macros)))
@@ -63,6 +75,7 @@
     ;; new call site cannot reset one and forget the other.
     (define (paal-macros-reset!)
       (set! %paal-macros '())
+      (set! %paal-macro-specs '())
       (paal-libraries-reset!))
 
     ;; ---------------------------------------------------------------
@@ -294,6 +307,7 @@
              (included (append-map (lambda (d) (cdr (expand-include (cdr d) #f)))
                                    includes))
              (exports  (export-alist decls))
+             (macros-before %paal-macros)
              ;; Expand to core forms.  Renaming afterwards only has to know
              ;; about `lambda`, since every other binder is gone by then.
              (core     (paal-expand-all (append included bodies)))
@@ -304,6 +318,26 @@
                                         (string-append tag (symbol->string n)))))
                             defined))
              (renamed  (map (lambda (f) (rename-core f renames)) core)))
+        ;; Rewrite this library's macro templates so they name the renamed
+        ;; bindings, and mangle the macros it did not export so they stop
+        ;; being visible to the importer.  Both directions of the same
+        ;; problem: a template names things by their original name, so
+        ;; renaming anything means rewriting the templates that reach it.
+        (let* ((own-entries (take-until %paal-macros macros-before))
+               (own-macros (map car own-entries))
+               (macro-renames
+                (filter-map
+                  (lambda (m)
+                    (and (not (assq m exports))
+                         (cons m (string->symbol
+                                   (string-append tag (symbol->string m))))))
+                  own-macros))
+               (all-renames (append renames macro-renames)))
+          ;; Paired with their specs, since the table entries are about to be
+          ;; dropped and looked up again under new names.
+          (rename-macro-templates!
+            (map (lambda (n) (cons n (paal-macro-spec n))) own-macros)
+            all-renames))
         ;; A library's macros all stay installed, including ones it did not
         ;; export.  Dropping the private ones is what you want for hygiene, and
         ;; it was the first thing tried — but an *exported* macro whose template
@@ -328,6 +362,62 @@
                 (append %paal-pending
                         (list (cons name (append prologue renamed)))))
           export-map)))
+
+    ;; Rewrite this library's macro templates so they name the renamed
+    ;; bindings.  Without it an exported macro whose template calls a private
+    ;; helper breaks at the use site: the helper is renamed and the template
+    ;; still names the original.  SRFI 64's assertions are exactly this shape.
+    ;;
+    ;; A template's pattern variables and the clause's literals are left
+    ;; alone -- those names come from the use site, not from here.
+    (define (rename-template tmpl renames pvars literals)
+      (cond
+        ((symbol? tmpl)
+         (if (or (eq? tmpl '...) (memq tmpl pvars) (memq tmpl literals))
+             tmpl
+             (let ((hit (assq tmpl renames))) (if hit (cdr hit) tmpl))))
+        ((pair? tmpl)
+         (cons (rename-template (car tmpl) renames pvars literals)
+               (rename-template (cdr tmpl) renames pvars literals)))
+        ((vector? tmpl)
+         (list->vector
+           (map (lambda (x) (rename-template x renames pvars literals))
+                (vector->list tmpl))))
+        (else tmpl)))
+
+    (define (rename-syntax-rules spec renames)
+      (let ((literals (cadr spec))
+            (clauses  (cddr spec)))
+        (cons 'syntax-rules
+              (cons literals
+                    (map (lambda (clause)
+                           (let ((pvars (pattern-vars (car clause) literals)))
+                             (list (car clause)
+                                   (rename-template (cadr clause) renames
+                                                    pvars literals))))
+                         clauses)))))
+
+    ;; Rebuild every macro `names` covers from its stored spec, with `renames`
+    ;; applied.  A macro whose own name is in `renames` is reinstalled under
+    ;; the new name, which is what actually hides an unexported one.
+    (define (rename-macro-templates! names renames)
+      ;; Drop the old entries first.  paal-macro-set! conses, so reinstalling
+      ;; without this would leave the unexported name resolvable and the
+      ;; mangling would hide nothing.
+      (let ((old (map car names)))
+        (set! %paal-macros
+              (filter (lambda (m) (not (memq (car m) old))) %paal-macros))
+        (set! %paal-macro-specs
+              (filter (lambda (m) (not (memq (car m) old))) %paal-macro-specs)))
+      (for-each
+        (lambda (entry)
+          (let ((name (car entry)) (spec (cdr entry)))
+            (when spec
+              (let* ((spec* (rename-syntax-rules spec renames))
+                     (hit   (assq name renames))
+                     (final (if hit (cdr hit) name)))
+                (paal-macro-set! final (make-transformer spec*) spec*)))))
+        names))
 
     ;; The entries %paal-macros gained since `older` — it only ever grows by
     ;; consing, so the new ones are exactly the prefix before the old head.
@@ -983,7 +1073,8 @@
             ((define-syntax)
              (let ((name          (cadr form))
                    (transformer-spec (caddr form)))
-               (paal-macro-set! name (make-transformer transformer-spec))
+               (paal-macro-set! name (make-transformer transformer-spec)
+                                transformer-spec)
                '(quote #f)))
             ((let-syntax)
              ;; R7RS 4.3.1: a keyword's region is the *body* only, so a binding
