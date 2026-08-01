@@ -1242,6 +1242,8 @@
     ;; ---------------------------------------------------------------
 
     (define (expand-case form)
+      (check-shape! form "case" 2)
+      (check-case-clauses! (cddr form))
       (let ((key     (cadr form))
             (clauses (cddr form))
             (k       (fresh-name "__paal_ck")))
@@ -1567,7 +1569,52 @@
     ;; define-record-type desugaring
     ;; ---------------------------------------------------------------
 
+    ;; A case clause is ((datum ...) expr ...) or (else expr ...).  The datum
+    ;; list must be a list -- (case x (1 'one)) is the usual slip, and without
+    ;; the check it reached memv as a bare atom.
+    (define (check-case-clauses! clauses)
+      (let loop ((cs clauses))
+        (unless (null? cs)
+          (let ((clause (car cs)))
+            (cond
+              ((not (pair? clause))
+               (syntax-error* "case: clause must be a list" clause))
+              ((eq? (car clause) 'else)
+               (when (pair? (cdr cs))
+                 (syntax-error* "case: else must be the last clause" clause))
+               (when (null? (cdr clause))
+                 (syntax-error* "case: else needs at least one expression" clause)))
+              ((not (list? (car clause)))
+               (syntax-error* "case: clause data must be a list" clause))
+              ((null? (cdr clause))
+               (syntax-error* "case: clause needs at least one expression" clause)))
+            (loop (cdr cs))))))
+
+    (define (check-record-fields! specs form)
+      (for-each
+        (lambda (spec)
+          (cond
+            ((not (pair? spec))
+             (syntax-error* "define-record-type: field spec must be a list" form))
+            ((not (symbol? (car spec)))
+             (syntax-error* "define-record-type: field name must be a symbol" form))
+            ((or (null? (cdr spec))
+                 (and (pair? (cddr spec)) (not (null? (cdddr spec)))))
+             (syntax-error*
+               "define-record-type: field spec must be (field accessor [modifier])"
+               form))))
+        specs))
+
     (define (expand-define-record-type form)
+      (check-shape! form "define-record-type" 4)
+      (unless (symbol? (cadr form))
+        (syntax-error* "define-record-type: type name must be a symbol" form))
+      (unless (and (pair? (caddr form)) (symbol? (car (caddr form))))
+        (syntax-error* "define-record-type: constructor must be (name field ...)"
+                       form))
+      (unless (symbol? (cadddr form))
+        (syntax-error* "define-record-type: predicate must be a symbol" form))
+      (check-record-fields! (cddddr form) form)
       (let* ((type-name   (cadr form))
              (ctor-spec   (caddr form))
              (pred-name   (cadddr form))

@@ -2479,9 +2479,31 @@
   (test-equal "a well-formed let still works"
     1
     (pkaappi-run-bc-string "(let ((a 1)) a)"))
+  ;; (case x (1 'one)) is the usual slip — the datum list is a list even when
+  ;; it holds one datum, and without the check a bare atom reached memv.
+  (test-equal "case clause data must be a list"
+    "paal: case: clause data must be a list"
+    (expand-error "(case 1 (1 'one))"))
+  (test-equal "case else must be last"
+    "paal: case: else must be the last clause"
+    (expand-error "(case 1 (else 1) ((2) 2))"))
+  (test-equal "a case clause with no body"
+    "paal: case: clause needs at least one expression"
+    (expand-error "(case 1 ((1)))"))
+  (test-equal "a record field spec with no accessor"
+    "paal: define-record-type: field spec must be (field accessor [modifier])"
+    (expand-error "(define-record-type <p> (mk a) p? (a)) 1"))
+  (test-equal "a record constructor that is not a list"
+    "paal: define-record-type: constructor must be (name field ...)"
+    (expand-error "(define-record-type <p> mk p? (a get-a)) 1"))
   (test-equal "a well-formed cond and do still work"
     '(7 3)
     (pkaappi-run-bc-string
-      "(list (cond (#t 7)) (do ((i 0 (+ i 1))) ((= i 3) i)))")))
+      "(list (cond (#t 7)) (do ((i 0 (+ i 1))) ((= i 3) i)))"))
+  (test-equal "a well-formed case and record still work"
+    '(one 5)
+    (pkaappi-run-bc-string
+      "(define-record-type <p> (mk a) p? (a get-a))
+       (list (case 1 ((1) 'one) (else 'other)) (get-a (mk 5)))")))
 
 (test-exit)
