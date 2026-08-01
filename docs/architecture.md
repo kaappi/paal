@@ -62,10 +62,10 @@ Each stage is a separate `define-library` importable independently:
 
 | Library | File | Role |
 |---------|------|------|
-| `(kaappi paal reader)` | `lib/kaappi/paal/reader.sld` | Stage 1 — text → S-expressions |
-| `(kaappi paal expander)` | `lib/kaappi/paal/expander.sld` | Stage 2 — macro expansion → core forms |
-| `(kaappi paal compiler)` | `lib/kaappi/paal/compiler.sld` | Stage 3 — core forms → IR |
-| `(kaappi paal vm)` | `lib/kaappi/paal/vm.sld` | Stage 4 — tree-walking IR interpreter |
+| `(kaappi paal reader)` | `lib/kaappi/paal/reader.sld` | Pipeline stage 1 — text → S-expressions |
+| `(kaappi paal expander)` | `lib/kaappi/paal/expander.sld` | Pipeline stage 2 — macro expansion → core forms |
+| `(kaappi paal compiler)` | `lib/kaappi/paal/compiler.sld` | Pipeline stage 3 — core forms → IR |
+| `(kaappi paal vm)` | `lib/kaappi/paal/vm.sld` | Pipeline stage 4 — tree-walking IR interpreter |
 | `(kaappi paal emitter)` | `lib/kaappi/paal/emitter.sld` | IR → bytecode (bytecode path) |
 | `(kaappi paal vm-bc)` | `lib/kaappi/paal/vm-bc.sld` | bytecode dispatch loop (bytecode path) |
 | `(kaappi paal ir)` | `lib/kaappi/paal/ir.sld` | shared — IR node constructors and accessors |
@@ -76,18 +76,21 @@ Each stage is a separate `define-library` importable independently:
 | `(kaappi paal embedded)` | `lib/kaappi/paal/embedded.sld` | bundled library source (outside the pipeline) |
 | `(kaappi paal)` | `lib/kaappi/paal.sld` | public API |
 
-Only the numbered stages have a walkthrough section below; the emitter and bytecode
+Only the numbered pipeline stages have a walkthrough section below; the emitter and bytecode
 VM are documented by topic instead (call convention, exceptions, the wind stack, the
 debugger), since most of what is interesting about them cuts across the whole path.
 
-**Two unrelated numbering schemes share the word "stage."** Here, Stage *N* is a
-position in the pipeline above. In `docs/bootstrapping.md` it is a self-hosting
-milestone — so that document's "Stage 3 — Bytecode Compiler" is this document's
-emitter, not this document's "Stage 3 — Compiler (Analyzer)".
+**Numbering.** A *pipeline stage* is a position in the diagram above; the term is used
+only in this document and in the header comment of the matching `.sld`. Three other
+schemes number other things and none of them line up: `docs/bootstrapping.md` has
+*bootstrap stages* (roadmap milestones — "bootstrap stage 6 complete") and *tiers*
+(rungs of the bootstrap chain), and `docs/TODO.md` has *phases* (batches of feature
+work). These used to be spelled "Stage *N*" indiscriminately, so a bare "Stage 3" in
+git history or an old issue may mean any of them — check which document it came from.
 
 ---
 
-## Stage 1 — Reader
+## Pipeline Stage 1 — Reader
 
 **Input:** source text (string or port)  
 **Output:** list of S-expressions
@@ -113,7 +116,7 @@ Key exports: `paal-read-string`, `paal-read-file`, `paal-read-all`, `paal-read`
 
 ---
 
-## Stage 2 — Expander
+## Pipeline Stage 2 — Expander
 
 **Input:** list of S-expressions (possibly containing derived forms)  
 **Output:** list of S-expressions in core form only
@@ -248,7 +251,7 @@ special form when it appears as a literal symbol inside a template, even inside
 
 ---
 
-## Stage 3 — Compiler (Analyzer)
+## Pipeline Stage 3 — Compiler (Analyzer)
 
 **Input:** list of core S-expressions  
 **Output:** list of IR nodes — the eight tags are in `docs/ir.md` § Node Types
@@ -273,7 +276,7 @@ Special cases in the analyzer:
 
 ---
 
-## Stage 4 — VM (Bootstrap)
+## Pipeline Stage 4 — VM (Bootstrap)
 
 **Input:** list of IR nodes  
 **Output:** result value of the last expression

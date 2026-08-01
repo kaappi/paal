@@ -1,6 +1,6 @@
 ;;; (kaappi paal expander) — Derived-form desugarer
 ;;;
-;;; Stage 2 of the Paal compilation pipeline.
+;;; Pipeline stage 2.
 ;;; Rewrites derived forms to core forms before analysis.
 ;;;
 ;;; Core forms passed through (recursing into sub-forms):

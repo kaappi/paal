@@ -107,7 +107,7 @@ Internal docs live in `docs/` (see `docs/README.md` for the index).
 |---------|--------|
 | Pipeline stage design, env model, public API | `docs/architecture.md` |
 | IR node types (add/remove/rename) | `docs/ir.md` |
-| Bootstrapping roadmap, ISA, stage status | `docs/bootstrapping.md` |
+| Bootstrapping roadmap, ISA, bootstrap stage status | `docs/bootstrapping.md` |
 
 "Major" means: new pipeline stage, new IR node type, changed calling convention,
 new public export, or any architectural decision that would surprise a reader of

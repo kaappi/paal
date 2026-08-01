@@ -3,7 +3,7 @@
 Goal: make `paal` a correct R7RS-small Scheme implementation that runs the
 same programs as `kaappi`, with the same CLI conventions.
 
-Current: Stage 6 complete (self-hosting). **649 tests pass** (was 194 before Phase 1–2).
+Current: bootstrap stage 6 complete (self-hosting). **649 tests pass** (was 194 before Phase 1–2).
 
 Phases 1–6 are done. Two of their entries rest on host bugs still open upstream —
 kaappi/kaappi#2010 and kaappi/kaappi#1920 / kaappi/kaappi#2043 — but paal has no

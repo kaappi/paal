@@ -462,11 +462,11 @@ compile paal itself.
 
 ## Why the bytecode backend added no new node types
 
-An earlier revision of this document predicted that the bytecode phase would add
+An earlier revision of this document predicted that the bytecode work would add
 `tailcall`, `upvalue-ref`/`upvalue-set!` and `local-ref`/`local-set!` nodes. The
-bytecode compiler and VM are both complete (`docs/bootstrapping.md` Stages 3 and 4)
-and **none of them were added**. Each turned out to belong on one side of the waist
-or the other:
+bytecode compiler and VM are both complete (`docs/bootstrapping.md` bootstrap stages
+3 and 4) and **none of them were added**. Each turned out to belong on one side of
+the waist or the other:
 
 | Predicted node | Where it actually lives |
 |----------------|-------------------------|
@@ -502,7 +502,7 @@ that will remind you:
 5. Decide whether the node is a tail position, and thread `tail?` accordingly in both
    backends.
 6. This document. If the analyzer's contract changes, also
-   `docs/architecture.md` § Stage 3 — Compiler (Analyzer).
+   `docs/architecture.md` § Pipeline Stage 3 — Compiler (Analyzer).
 
 Both self-hosting copies of a library must agree on representation, so a node type
 added here also needs the pipeline cache rebuilt (`make pbc-pipeline`).

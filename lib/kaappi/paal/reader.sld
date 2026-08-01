@@ -1,6 +1,6 @@
 ;;; (kaappi paal reader) — Self-hosted S-expression reader
 ;;;
-;;; Stage 1 of the Paal compilation pipeline.
+;;; Pipeline stage 1.
 ;;; Converts source text into a list of S-expressions.
 ;;;
 ;;; Supported token types:
