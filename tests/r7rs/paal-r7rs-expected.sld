@@ -7,7 +7,8 @@
 
     ;; (section-name passing failing) per test-end, in suite order.
     (define expected-sections
-      '(("4.1 Primitive expression types" 27 0)
+      '(("R7RS" 0 0)
+        ("4.1 Primitive expression types" 27 0)
         ("4.2 Derived expression types" 73 0)
         ("4.3 Macros" 12 8)
         ("5 Program structure" 14 0)
@@ -22,7 +23,8 @@
         ("6.9 Bytevectors" 39 0)
         ("6.10 Control Features" 29 5)
         ("6.11 Exceptions" 21 3)
-        ("6.12 Environments and evaluation" 3 1)
+        ("6.12 Environments and evaluation" 4 0)
+        ("6.13 Input and output" 63 0)
         ("Read syntax" 93 0)
         ("Numeric syntax" 220 0)
         ("6.14 System interface" 13 0)))

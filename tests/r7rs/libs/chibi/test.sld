@@ -37,7 +37,20 @@
       (set! total-pass 0) (set! total-fail 0)
       (set! current-section "") (set! %sections '()) (set! %section-open? #f))
 
+    (define (%close-section!)
+      (when %section-open?
+        (set! total-pass (+ total-pass pass-count))
+        (set! total-fail (+ total-fail fail-count))
+        (set! %sections (cons (list current-section pass-count fail-count) %sections))
+        (set! %section-open? #f)))
+
     (define (test-begin name)
+      ;; A test-begin that arrives while a section is still open closes it
+      ;; first.  The suite has no (test-end) for "6.13 Input and output" -- it
+      ;; goes straight on to (test-begin "Read syntax") -- so without this its
+      ;; assertions run but their counts are discarded, and the whole section
+      ;; is invisible to the baseline.
+      (%close-section!)
       (set! current-section name)
       (set! %section-open? #t)
       (set! pass-count 0)
@@ -48,11 +61,7 @@
       (newline))
 
     (define (test-end . args)
-      (set! total-pass (+ total-pass pass-count))
-      (set! total-fail (+ total-fail fail-count))
-      (when %section-open?
-        (set! %sections (cons (list current-section pass-count fail-count) %sections))
-        (set! %section-open? #f))
+      (%close-section!)
       (display "  ")
       (display pass-count)
       (display " pass, ")

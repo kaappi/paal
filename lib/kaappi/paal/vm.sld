@@ -19,9 +19,50 @@
 (define-library (kaappi paal vm)
   (import (scheme base) (scheme read) (scheme complex)
           (kaappi paal ir) (kaappi paal expander)
+          (kaappi paal bytecode) (kaappi paal frame)
           (kaappi ffi) (kaappi fibers))
   (export paal-eval paal-eval-program paal-initial-env)
   (begin
+
+    ;; --- printing paal values ------------------------------------------
+    ;;
+    ;; A paal closure on the bytecode path is a tagged vector holding its whole
+    ;; bytecode function, so `write` printed pages of nested vectors where every
+    ;; other Scheme prints `#<procedure>`.  These wrap write and display to
+    ;; recognize the two internal representations and delegate everything else.
+    ;;
+    ;; Deliberately shallow: `(write (list f))` still shows the vector.  Going
+    ;; deeper means a full R7RS writer in paal source -- cycle detection, datum
+    ;; labels, string and character escaping -- which is a second implementation
+    ;; to keep in step with kaappi's.  Same call the debugger's %debug-write
+    ;; already makes.
+    ;;
+    ;; On the tree-walking path a closure *is* a HOST procedure, so neither
+    ;; predicate fires and both fall through to the host's own printing.
+
+    ;; The name on a bytecode-function is a symbol, or #f for a lambda that no
+    ;; enclosing define gave a name to.
+    (define (%paal-proc-label name)
+      (if name (symbol->string name) "<anonymous>"))
+
+    (define (%paal-print-name v)
+      (cond
+        ((closure? v)
+         (string-append "#<procedure "
+                        (%paal-proc-label
+                          (bytecode-function-name (closure-function v)))
+                        ">"))
+        ((bytecode-function? v)
+         (string-append "#<code " (%paal-proc-label (bytecode-function-name v)) ">"))
+        (else #f)))
+
+    (define (%paal-write v . port)
+      (let ((s (%paal-print-name v)))
+        (if s (apply display s port) (apply write v port))))
+
+    (define (%paal-display v . port)
+      (let ((s (%paal-print-name v)))
+        (if s (apply display s port) (apply display v port))))
 
     ;; --- Mutable boxed environments ---
     ;; Each frame: (name . #(val))  — the vector is mutable in place.
@@ -242,7 +283,8 @@
              (%paal-host-procedure? . ,procedure?)
 
              ;; I/O
-             (display . ,display) (newline . ,newline) (write . ,write)
+             (display . ,%paal-display) (newline . ,newline)
+             (write . ,%paal-write)
              (read . ,read) (read-char . ,read-char) (peek-char . ,peek-char)
              (write-char . ,write-char) (write-string . ,write-string)
              (read-line . ,read-line) (read-string . ,read-string)
@@ -397,6 +439,16 @@
              (call-with-output-file . ,call-with-output-file)
              (with-input-from-file . ,with-input-from-file)
              (with-output-to-file . ,with-output-to-file)
+             ;; Bytevector ports.  Plain data in, plain data out -- no
+             ;; procedure arguments -- so paal-initial-env is the right home
+             ;; and both pipelines get them.  kaappi implements all six,
+             ;; read-bytevector! with start/end included.
+             (open-input-bytevector . ,open-input-bytevector)
+             (open-output-bytevector . ,open-output-bytevector)
+             (get-output-bytevector . ,get-output-bytevector)
+             (read-bytevector . ,read-bytevector)
+             (read-bytevector! . ,read-bytevector!)
+             (write-bytevector . ,write-bytevector)
              (open-binary-input-file . ,open-binary-input-file)
              (open-binary-output-file . ,open-binary-output-file)
 
@@ -494,7 +546,11 @@
              (processor-count . ,processor-count)
 
              ;; Features
-             (features . ,features)
+             ;; paal's own list, not the host's.  `features` used to answer
+             ;; with kaappi's -- which does not contain `paal` -- while
+             ;; cond-expand answered from the expander's, so the two disagreed
+             ;; about the same question.  One list, one owner.
+             (features . ,(lambda () (paal-feature-list)))
 
              ;; Write extras
              (write-shared . ,write-shared) (write-simple . ,write-simple)

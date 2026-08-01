@@ -18,7 +18,8 @@
   (import (scheme base) (scheme file) (scheme read)
           (kaappi paal embedded))
   (export paal-expand paal-expand-all paal-macros-reset! gref-name
-          paal-lib-path-add! paal-lib-paths-list paal-libraries-reset!)
+          paal-lib-path-add! paal-lib-paths-list paal-libraries-reset!
+          paal-feature-list)
   (begin
 
     ;; ---------------------------------------------------------------
@@ -87,7 +88,18 @@
     ;; guarded by (cond-expand (kaappi ...)) is written against primitives paal
     ;; also provides, and excluding ourselves would send such code down a
     ;; portable-fallback path for no reason.
-    (define %paal-features '(paal kaappi r7rs scheme))
+    ;; Only what actually holds.  exact-closed, exact-complex, ieee-float and
+    ;; posix are inherited from kaappi's runtime, which advertises exactly
+    ;; those; full-unicode and ratios are NOT in kaappi's list, so paal does not
+    ;; claim them either.  `scheme` is a paal extension rather than an R7RS
+    ;; feature identifier, kept because paal's own cond-expands use it.
+    (define %paal-features
+      '(paal kaappi r7rs exact-closed exact-complex ieee-float posix scheme))
+
+    ;; The same list `features` answers with.  It used to answer with the
+    ;; *host's*, which does not contain `paal`, so a program asking what it was
+    ;; running on and a cond-expand asking the same question disagreed.
+    (define (paal-feature-list) %paal-features)
 
     ;; ---------------------------------------------------------------
     ;; Library system
@@ -1029,7 +1041,16 @@
       (cond
         ((symbol? req) (if (memq req %paal-features) #t #f))
         ((not (pair? req)) #f)
-        ((eq? (car req) 'library) #f)
+        ;; (library <name>) asks whether that library can be imported here.
+        ;; It was hard-wired to #f, so the common
+        ;; `(cond-expand ((library (srfi 1)) ...) (else ...))` idiom always
+        ;; took the fallback even when (srfi 1) was right there.
+        ((eq? (car req) 'library)
+         (and (pair? (cdr req))
+              (let ((name (cadr req)))
+                (or (builtin-library? name)
+                    (and (paal-embedded-source name) #t)
+                    (and (find-library-file name) #t)))))
         ((eq? (car req) 'and) (feature-all? (cdr req)))
         ((eq? (car req) 'or)  (feature-any? (cdr req)))
         ((eq? (car req) 'not) (not (feature-req? (cadr req))))

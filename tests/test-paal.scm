@@ -1015,6 +1015,29 @@
   (test-equal "unknown feature → else"
     "no"
     (pkaappi-run-string "(cond-expand (unknown-thing \"yes\") (else \"no\"))"))
+  ;; (library <name>) was hard-wired to #f, so the common
+  ;; `(cond-expand ((library (srfi 1)) ...) (else ...))` idiom always took the
+  ;; fallback even with (srfi 1) right there.
+  (test-equal "library requirement — present"
+    'yes
+    (pkaappi-run-bc-string "(cond-expand ((library (srfi 1)) 'yes) (else 'no))"))
+  (test-equal "library requirement — absent"
+    'no
+    (pkaappi-run-bc-string "(cond-expand ((library (no such lib)) 'yes) (else 'no))"))
+  (test-equal "library requirement — a builtin name"
+    'yes
+    (pkaappi-run-bc-string "(cond-expand ((library (scheme base)) 'yes) (else 'no))"))
+  ;; `features` answered with the *host's* list, which does not contain `paal`,
+  ;; while cond-expand answered from the expander's — two answers to the same
+  ;; question. One list, one owner, and it claims only what holds: no
+  ;; full-unicode or ratios, since kaappi does not advertise those either.
+  (test-equal "features agrees with cond-expand"
+    '(#t #t #t #f)
+    (pkaappi-run-bc-string
+      "(list (and (memq 'paal (features)) #t)
+             (and (memq 'r7rs (features)) #t)
+             (cond-expand (paal #t) (else #f))
+             (and (memq 'kaappi-threads (features)) #t))"))
   (test-equal "and requirement"
     "both"
     (pkaappi-run-string "(cond-expand ((and paal r7rs) \"both\") (else \"no\"))"))
@@ -2725,7 +2748,94 @@
     '(1+2i 1.0 2.0 5.0 +i 4.0+6.0i)
     (pkaappi-run-bc-string
       "(list (make-rectangular 1 2) (real-part 1+2i) (imag-part 1+2i)
-             (magnitude (make-rectangular 3 4)) (sqrt -1) (* 2+3i 2))")))
+             (magnitude (make-rectangular 3 4)) (sqrt -1) (* 2+3i 2))"))
+  ;; (scheme r5rs)'s two environment constructors.  Same honest limitation as
+  ;; `environment` -- paal has one flat table per program, so any spec yields a
+  ;; full one -- but the version argument is checked, 5 being the only one R7RS
+  ;; defines.
+  (test-equal "null-environment 5 is usable"
+    20
+    (pkaappi-run-bc-string
+      "(eval '((lambda (f x) (f x x)) + 10) (null-environment 5))"))
+  (test-equal "scheme-report-environment 5 is usable"
+    7
+    (pkaappi-run-bc-string
+      "(eval '(+ 3 4) (scheme-report-environment 5))"))
+  (test-equal "an unsupported version is rejected"
+    '(bad bad)
+    (pkaappi-run-bc-string
+      "(list (guard (e (#t 'bad)) (null-environment 4))
+             (guard (e (#t 'bad)) (scheme-report-environment 6)))")))
+
+;; ---------------------------------------------------------------
+;; Bytevector ports
+;; ---------------------------------------------------------------
+;;
+;; All six were simply unbound -- §6.13 of the R7RS suite could not run.  They
+;; take and return plain data, so they live in paal-initial-env and both
+;; pipelines get them.
+
+(test-group "bytevector ports"
+  (test-equal "output bytevector round trip"
+    #u8(65 66)
+    (pkaappi-run-bc-string
+      "(define bv (open-output-bytevector))
+       (write-u8 65 bv) (write-u8 66 bv)
+       (get-output-bytevector bv)"))
+  (test-equal "read-bytevector stops at eof"
+    #u8(1 2)
+    (pkaappi-run-bc-string "(read-bytevector 3 (open-input-bytevector (bytevector 1 2)))"))
+  (test-equal "read-bytevector! fills in place"
+    #u8(7 8 0)
+    (pkaappi-run-bc-string
+      "(let ((b (bytevector 0 0 0)))
+         (read-bytevector! b (open-input-bytevector (bytevector 7 8)))
+         b)"))
+  (test-equal "write-bytevector"
+    #u8(1 2 3)
+    (pkaappi-run-bc-string
+      "(define o (open-output-bytevector))
+       (write-bytevector (bytevector 1 2 3) o)
+       (get-output-bytevector o)"))
+  (test-equal "a bytevector port is a binary port"
+    '(#t #f)
+    (pkaappi-run-bc-string
+      "(let ((p (open-input-bytevector (bytevector 1))))
+         (list (binary-port? p) (textual-port? p)))"))
+  (test-equal "both pipelines have them"
+    #u8(9)
+    (pkaappi-run-string
+      "(define o (open-output-bytevector)) (write-u8 9 o) (get-output-bytevector o)")))
+
+;; ---------------------------------------------------------------
+;; Printing a procedure
+;; ---------------------------------------------------------------
+;;
+;; A paal closure on the bytecode path is a tagged vector holding its whole
+;; bytecode function, so `write` printed pages of nested vectors.  The wrapper
+;; is deliberately shallow -- (write (list f)) still shows the vector -- because
+;; going deeper means a full R7RS writer in paal source, with cycle detection,
+;; datum labels and escaping, to keep in step with kaappi's.
+
+(test-group "writing a procedure"
+  (test-equal "a named procedure"
+    "#<procedure f>"
+    (pkaappi-run-bc-string
+      "(define (f x) x)
+       (let ((o (open-output-string))) (write f o) (get-output-string o))"))
+  (test-equal "an anonymous lambda"
+    "#<procedure <anonymous>>"
+    (pkaappi-run-bc-string
+      "(let ((o (open-output-string))) (write (lambda (x) x) o) (get-output-string o))"))
+  (test-equal "ordinary values are unaffected"
+    '("(1 2)" "\"a\\nb\"" "#\\a" "sym")
+    (pkaappi-run-bc-string
+      "(define (w v) (let ((o (open-output-string))) (write v o) (get-output-string o)))
+       (list (w '(1 2)) (w \"a\\nb\") (w #\\a) (w 'sym))"))
+  (test-equal "display of a string is still unquoted"
+    "hi"
+    (pkaappi-run-bc-string
+      "(let ((o (open-output-string))) (display \"hi\" o) (get-output-string o))")))
 
 ;; ---------------------------------------------------------------
 ;; Expander diagnostics

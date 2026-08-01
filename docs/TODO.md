@@ -3,7 +3,7 @@
 Goal: make `paal` a correct R7RS-small Scheme implementation that runs the
 same programs as `kaappi`, with the same CLI conventions.
 
-Current: Stage 6 complete (self-hosting). **620 tests pass** (was 194 before Phase 1–2).
+Current: Stage 6 complete (self-hosting). **637 tests pass** (was 194 before Phase 1–2).
 
 Phases 1–6 are done. Two of their entries rest on host bugs still open upstream —
 kaappi/kaappi#2010 and kaappi/kaappi#1920 / kaappi/kaappi#2043 — but paal has no
@@ -819,11 +819,38 @@ no value representation and no cross-copy protocol — so they can land in any o
       seven template shapes, and a variable used below its depth is still
       rejected — widening the search must not turn a depth mistake into a
       silent wrong answer.
-- [ ] **Six bytevector-port procedures unbound**, and
-      `scheme-report-environment`/`null-environment`.
-- [ ] **`(features)` answers with kaappi's list**, which does not contain
-      `paal`; `cond-expand` answers from a different list. One list, one owner.
-- [ ] **`write` of a procedure dumps the whole closure vector.**
+- [x] **Six bytevector-port procedures were unbound**, and
+      `scheme-report-environment` / `null-environment` with them. The first six
+      take and return plain data, so they went into `paal-initial-env` and both
+      pipelines have them; the two environment constructors need
+      `%make-globals-table` itself, so they live in the
+      `pkaappi-make-globals` alist and check their version argument, 5 being
+      the only one R7RS defines.
+
+      This is what unblocked §6.13 — which turned out to be running all along
+      and reporting nothing, see below.
+- [x] **`(features)` answered with kaappi's list**, which does not contain
+      `paal`, while `cond-expand` answered from the expander's — two answers to
+      the same question. One list now, owned by the expander and exported as
+      `paal-feature-list`. It claims only what holds: `exact-closed`,
+      `exact-complex`, `ieee-float` and `posix` are inherited from kaappi's
+      runtime, which advertises exactly those; `full-unicode` and `ratios` are
+      not in kaappi's list so paal does not claim them either.
+
+      `cond-expand`'s `(library <name>)` requirement was also hard-wired to
+      `#f`, so `(cond-expand ((library (srfi 1)) ...) (else ...))` always took
+      the fallback with `(srfi 1)` right there. It consults the embedded
+      sources and the search path now.
+- [x] **`write` of a procedure dumped the whole closure vector** — pages of
+      nested vectors, since a paal closure on the bytecode path carries its
+      entire bytecode function. `write` and `display` recognize the two
+      internal tags now and print `#<procedure name>` / `#<code name>`.
+
+      Deliberately shallow: `(write (list f))` still shows the vector. Going
+      deeper means a full R7RS writer in paal source — cycle detection, datum
+      labels, string and character escaping — a second implementation to keep
+      in step with kaappi's. Same call the debugger's `%debug-write` already
+      makes.
 - [ ] **`call/cc` is bound but type-errors on the bytecode path** — worse than
       absent, since `(procedure? call/cc)` is `#t` and feature detection takes
       the wrong branch. Escape-only is honest and covers the overwhelming

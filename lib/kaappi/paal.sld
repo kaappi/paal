@@ -394,6 +394,23 @@
                       ;; take the caller's own macros with it.
                       (environment                . ,(lambda specs
                                                        (%make-globals-table)))
+                      ;; (scheme r5rs).  Same honest limitation as
+                      ;; `environment` -- paal has one flat table per program,
+                      ;; so any spec yields a full one -- but the version
+                      ;; argument is at least checked, since 5 is the only one
+                      ;; R7RS defines.  %make-globals-table, not
+                      ;; pkaappi-make-globals: these run inside the caller's
+                      ;; program and the reset would take its macros with it.
+                      (scheme-report-environment
+                        . ,(lambda (v)
+                             (if (eqv? v 5)
+                                 (%make-globals-table)
+                                 (error "scheme-report-environment: unsupported version" v))))
+                      (null-environment
+                        . ,(lambda (v)
+                             (if (eqv? v 5)
+                                 (%make-globals-table)
+                                 (error "null-environment: unsupported version" v))))
                       (interaction-environment    . ,(lambda () (car g-cell)))
                       (load                       . ,(lambda (path . rest)
                                                        (paal-run-bc
