@@ -2290,6 +2290,50 @@
 ;; structure containing a marker.  References after the definition resolve on
 ;; the spot, so only pairs and vectors need walking.
 
+;; ---------------------------------------------------------------
+;; reader: #!fold-case / #!no-fold-case
+;; ---------------------------------------------------------------
+;;
+;; R7RS 2.1.  Every answer below was checked against kaappi's reader on the
+;; same input.  Only program files go through paal's reader — .sld and included
+;; files are read by HOST kaappi's `read`, which already honours both.
+
+(test-group "reader: fold-case directives"
+  (test-equal "fold-case folds symbols"
+    '((quote abc))
+    (paal-read-string "#!fold-case (quote ABC)"))
+  (test-equal "no-fold-case turns it back off"
+    '(abc DEF)
+    (paal-read-string "#!fold-case ABC #!no-fold-case DEF"))
+  (test-equal "symbols are case-sensitive by default"
+    '(ABC)
+    (paal-read-string "ABC"))
+  ;; A single-character literal is NOT folded — #\A is #\A — but a character
+  ;; *name* is, so #\NEWLINE reads.
+  (test-equal "a single-character literal is not folded"
+    '(#\A)
+    (paal-read-string "#!fold-case #\\A"))
+  (test-equal "a character name is folded"
+    '(#\newline)
+    (paal-read-string "#!fold-case #\\NEWLINE"))
+  ;; Folding happens after the numeric test, so a radix literal is untouched.
+  (test-equal "numbers are unaffected"
+    '(123 255)
+    (paal-read-string "#!fold-case 123 #xFF"))
+  (test-equal "an unknown directive is an error"
+    'rejected
+    (guard (e (#t 'rejected)) (paal-read-string "#!bogus 1")))
+  ;; The directive is scoped to the rest of the file, so paal-read-all resets
+  ;; it and paal-read deliberately does not — resetting per datum would make
+  ;; the directive apply to nothing.
+  (test-equal "the directive does not leak into the next file"
+    '((abc) (ABC))
+    (list (paal-read-string "#!fold-case ABC")
+          (paal-read-string "ABC")))
+  (test-equal "a folded program runs"
+    6
+    (pkaappi-run-bc-string "#!fold-case (DEFINE (F X) (* X 2)) (F 3)")))
+
 (test-group "reader: datum labels"
   (test-equal "shared structure is one object, not two equal ones"
     '(#t (1 2))

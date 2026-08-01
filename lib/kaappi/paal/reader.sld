@@ -102,12 +102,21 @@
     ;; Atom reader: numbers and symbols
     ;; ---------------------------------------------------------------
 
+    ;; #!fold-case / #!no-fold-case.  R7RS 2.1 scopes the directive to the rest
+    ;; of the file it appears in, so this is reset per file rather than per
+    ;; datum — see paal-read-all, and note that paal-read is deliberately not a
+    ;; reset point.
+    (define %fold-case? #f)
+
     (define (read-atom port first-ch)
       (let* ((rest (read-until-delimiter port))
              (chars (cons first-ch rest))
              (s    (list->string chars))
              (n    (string->number s)))
-        (or n (string->symbol s))))
+        ;; Fold the symbol branch only.  Numbers are unaffected by case beyond
+        ;; what string->number already handles, and folding before the numeric
+        ;; test would turn #xFF into a different token.
+        (or n (string->symbol (if %fold-case? (string-foldcase s) s)))))
 
     ;; ---------------------------------------------------------------
     ;; String reader
@@ -158,7 +167,13 @@
            ch)                              ; single char: #\a #\(
           (else
            (let* ((rest (read-until-delimiter port))
-                  (name (list->string (cons ch rest))))
+                  (name (list->string (cons ch rest)))
+                  ;; Under #!fold-case the character *name* folds, so #\NEWLINE
+                  ;; reads.  A single-character literal does not — #\A stays
+                  ;; #\A — which is why only this branch consults it; the
+                  ;; single-char case above returns ch untouched.  The hex
+                  ;; escape stays keyed on the unfolded ch and rest.
+                  (name (if %fold-case? (string-foldcase name) name)))
              (cond
                ((string=? name "space")      #\space)
                ((string=? name "newline")    #\newline)
@@ -313,6 +328,17 @@
                                  (bytevector-u8-set! bv i b)
                                  (loop (+ i 1) (cdr es)))))))))))
 
+          ;; Directives: #!fold-case / #!no-fold-case.  Not data — they set
+          ;; reader state and yield whatever comes next, the same shape as the
+          ;; comment branches below.
+          ((char=? ch #\!)
+           (let ((name (list->string (read-until-delimiter port))))
+             (cond
+               ((string=? name "fold-case")    (set! %fold-case? #t))
+               ((string=? name "no-fold-case") (set! %fold-case? #f))
+               (else (error "paal-read: unknown directive" (string-append "#!" name))))
+             (read-datum port)))
+
           ;; Block comment: #| ... |#
           ((char=? ch #\|)
            (skip-block-comment! port 0)
@@ -465,7 +491,11 @@
       (set! %labels '())
       (read-datum port))
 
+    ;; The fold-case directive is scoped to the rest of the file, so it is reset
+    ;; here and NOT in paal-read: paal-read is one datum, and resetting there
+    ;; would make the directive apply to nothing but itself.
     (define (paal-read-all port)
+      (set! %fold-case? #f)
       (let loop ((acc '()))
         (skip-whitespace! port)
         (let ((datum (paal-read port)))

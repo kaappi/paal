@@ -3,7 +3,7 @@
 Goal: make `paal` a correct R7RS-small Scheme implementation that runs the
 same programs as `kaappi`, with the same CLI conventions.
 
-Current: Stage 6 complete (self-hosting). **637 tests pass** (was 194 before Phase 1–2).
+Current: Stage 6 complete (self-hosting). **649 tests pass** (was 194 before Phase 1–2).
 
 Phases 1–6 are done. Two of their entries rest on host bugs still open upstream —
 kaappi/kaappi#2010 and kaappi/kaappi#1920 / kaappi/kaappi#2043 — but paal has no
@@ -851,11 +851,36 @@ no value representation and no cross-copy protocol — so they can land in any o
       labels, string and character escaping — a second implementation to keep
       in step with kaappi's. Same call the debugger's `%debug-write` already
       makes.
-- [ ] **`call/cc` is bound but type-errors on the bytecode path** — worse than
-      absent, since `(procedure? call/cc)` is `#t` and feature detection takes
-      the wrong branch. Escape-only is honest and covers the overwhelming
-      majority of uses; full re-entrant continuations stay out of scope.
-- [ ] **`#!fold-case` / `#!no-fold-case`** unsupported.
+- [x] **`call/cc` was bound but type-errored on the bytecode path** — worse
+      than absent: `(procedure? call/cc)` answered `#t` while calling it
+      failed, so feature-detecting code took the wrong branch and got a
+      confusing error deep inside. Both names are now **unbound on the bytecode
+      path** and kept on the tree-walking path, where a paal closure *is* a
+      HOST procedure and they genuinely work.
+
+      An escape-only replacement in paal source was written and reverted, and
+      the reason is worth recording. It raises a tagged escape and claims its
+      own tag in a `guard`, which is sound in isolation. But `%paal-guard-catch`
+      has to intercept escapes *before* the clauses run — otherwise any
+      intervening `(guard (e (#t ...)) ...)` swallows them, which is a subtler
+      wrong answer than the type error it replaced — and once it intercepts,
+      it also intercepts the escape belonging to `call/cc`'s *own* guard, which
+      it cannot recognize because a clauses procedure carries no identity.
+      Making that work means teaching the VM about continuations, which is the
+      re-entrant design that is out of scope.
+
+      So: unbound, which is a true statement, and the branch a program takes on
+      finding it absent is now the correct one.
+- [x] **`#!fold-case` / `#!no-fold-case`** — supported, and checked against
+      kaappi's reader on every case. Folding applies to the symbol branch only:
+      numbers are unaffected, a single-character literal is not folded (`#\A`
+      stays `#\A`) but a character *name* is (`#\NEWLINE` reads). R7RS 2.1
+      scopes the directive to the rest of the file, so `paal-read-all` resets it
+      and `paal-read` deliberately does not — resetting per datum would make the
+      directive apply to nothing but itself.
+
+      Only program files go through paal's reader; `.sld` and `include`d files
+      are read by HOST kaappi's `read`, which already honours both.
 
 Deferred with reasons: R7RS §4.3's keyword-shadowing torture cases (variables
 named `let`, `if`) need an environment threaded through every `expand-*`; the
