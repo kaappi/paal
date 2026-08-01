@@ -9,6 +9,7 @@ eventually compile itself, producing the `paal` binary.
 ## Running
 
 ```sh
+make                                   # build the paal binary (needs ../kaappi + zig)
 make test                              # run test suite via kaappi
 make coverage                          # test with procedure coverage report
 make run                               # start REPL (no args → REPL, like kaappi)

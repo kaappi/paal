@@ -7,7 +7,10 @@ LIBS = --lib-path $(LIB) --lib-path $(KAAPPI_TEST)
 
 .PHONY: all test coverage run binary check-binary pbc-pipeline embed-srfi clean-cache clean
 
-all: test
+# Bare `make` builds the binary.  That needs the kaappi *source* checkout and
+# zig, not just a kaappi on PATH — `make test` is the target that runs against
+# the interpreter alone, and is what CI calls.
+all: binary
 
 test:
 	$(KAAPPI) --coverage-xml coverage.xml $(LIBS) tests/test-paal.scm
