@@ -27,7 +27,7 @@ Stage 4: paal can compile paal
 Stage 5: paal binary (no host dependency)
 ```
 
-## Current Status: Stage 6 complete — 581 tests pass
+## Current Status: Stage 6 complete — 584 tests pass
 
 Paal can load all 8 of its own library files through its bytecode pipeline and
 compile and execute arbitrary Scheme through its own loaded pipeline with no HOST
@@ -64,8 +64,15 @@ pipeline involvement in the compute path:
 
 ### Remaining work
 
-- `define-syntax` / `syntax-rules` — not used in paal source, deferred.
-- `case-lambda` — not used in paal source, deferred.
+None. This section listed `define-syntax` / `syntax-rules` and `case-lambda` as
+deferred because paal's own source does not use them, so self-compilation never
+needed them. Both were built anyway in Phase 1 of `docs/TODO.md` — programs paal
+*runs* use them constantly — and the entries here outlived that:
+
+```sh
+paal eval "(define-syntax swap! (syntax-rules () ((_ a b) (let ((t a)) (set! a b) (set! b t)))))
+           (define x 1) (define y 2) (swap! x y) (list x y)"   ; → (2 1)
+```
 
 ## Remaining Stages
 

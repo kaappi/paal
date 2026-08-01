@@ -3,7 +3,7 @@
 Goal: make `paal` a correct R7RS-small Scheme implementation that runs the
 same programs as `kaappi`, with the same CLI conventions.
 
-Current: Stage 6 complete (self-hosting). **581 tests pass** (was 194 before Phase 1–2).
+Current: Stage 6 complete (self-hosting). **584 tests pass** (was 194 before Phase 1–2).
 
 ---
 
@@ -348,19 +348,47 @@ inferred:
       `("p.scm")` and lost it, then started the REPL. The symptom was
       `repl requires cache`, which reads like a missing cache and is not. Now
       matched against `main.scm` specifically.
-- [ ] **`check` and `fmt` are unreachable in a bundled binary** — **blocked
-      upstream** by kaappi/kaappi#2010. A `-Dbundle` binary silently consumes
-      an argument that collides with one of kaappi's own subcommand names, so
-      `paal check f.scm` delivers `("f.scm")` and paal's dispatcher treats it
-      as a positional file and runs it. `check`, `fmt`, `ast` and `compile` are
-      swallowed; `eval`, `repl`, `run` and any non-subcommand word pass through
-      intact, which is what shows it to be unintended.
+- [ ] **A bundled binary loses every argument kaappi's own CLI claims** —
+      **blocked upstream** by kaappi/kaappi#2010. A `-Dbundle` binary consumes
+      an argument that collides with one of kaappi's subcommand or option
+      names, so `paal check f.scm` delivers `("f.scm")` and paal's dispatcher
+      treats it as a positional file and runs it.
+
+      The rule is simply *every name kaappi's CLI recognizes*. Of paal's own
+      subcommands that is `check`, `fmt`, `compile`, `expand` and `ir`; of its
+      options, `--lib-path`, `--profile` and `--coverage` are consumed,
+      `--help`/`-h` and `--version` answer as kaappi, and `--cache` is
+      rejected as an unknown kaappi option. `debug`, `eval`, `repl`, `run` and
+      `version` survive because kaappi has no such name — which is the check
+      to run before naming any future subcommand.
+
+      **`--lib-path` is the consequential one**, not `check`. It takes its
+      *value* with it — a minimal bundled program run as `avbin --lib-path
+      z.scm` receives `()`, not a shortened list it might notice — so a
+      bundled paal cannot add a library search directory at all, and
+      `paal --lib-path d prog.scm` reports `library not found ((m util)
+      "m/util.sld" ("." "lib"))`. Imports work only from `.`, `lib/`, or the
+      embedded SRFI sources.
+
+      And the option namespace is closed outright, not merely contended:
+      `--cache` is not a kaappi option and not a collision, yet kaappi refuses
+      the run with `unknown option: --cache` before paal starts. A bundled
+      program cannot introduce an option of its own at all. Verified with a
+      four-line repro carrying no paal in it, and reported upstream.
+
+      Two earlier claims in this entry were wrong and are corrected above.
+      `ast` was listed among paal's swallowed subcommands — it is kaappi's,
+      and paal has none. And "`eval`, `repl`, `run` … pass through, which is
+      what shows it to be unintended" was not evidence of anything: those are
+      not kaappi subcommands either, so there was no inconsistency to point
+      at. The argument for it being unintended is simpler — with bytecode
+      bundled, the binary *is* the bundled program, so the argument vector
+      belongs to that program.
 
       Not workable around from paal's side: the argument is gone before paal
       starts, and a swallowed `check` is indistinguishable from never having
-      been typed. Flag spellings do not help — kaappi's CLI intercepts those
-      too. Bootstrap mode is unaffected, so `kaappi src/main.scm check f.scm`
-      is correct today.
+      been typed. Bootstrap mode is unaffected, so `kaappi src/main.scm check
+      f.scm` is correct today.
 
 - [x] **Bundle the SRFI libraries** — all ten are embedded as source in
       `(kaappi paal embedded)`, which the expander consults *before* the
@@ -533,6 +561,37 @@ Issues that span stages rather than belonging to one phase.
       alongside. `pkaappi-load-file` and `pkaappi-run-string-in` add to an
       existing table and deliberately do not reset, so a loaded file's macros
       stay visible and the REPL still accumulates them across inputs.
+- [x] **The bundled binary's REPL echoed definitions** — `(define q 9)` printed
+      `9`. Paal has three REPL routes (cached pipeline, `.sld` pipeline, and a
+      HOST fallback for a binary that has neither), and only the fallback was
+      wrong: it suppressed the echo when the result was the unspecified value,
+      but a paal `define` evaluates to the thing defined. The other two decide
+      from the *form*, which is the right test, and the fallback now shares it.
+      Only the binary was affected, since the fallback is unreachable inside a
+      checkout — which is also why the new test covers whichever of the other
+      two routes the checkout has rather than this one.
+- [x] **The self-hosted path could not resolve any import** — `paal file.scm`
+      in a checkout with a built cache failed on every non-builtin import,
+      `(srfi 1)` included, with `unbound variable paal-embedded-source`. The
+      loaded expander resolves imports through `paal-embedded-source`, which
+      lives in `(kaappi paal embedded)` — a library outside the pipeline, so
+      it is in neither `cache/*.pbc` nor `%paal-lib-files` and was never
+      defined in the table the loaded pipeline runs against. A regression from
+      bundling the SRFI sources: before that, `load-library!` went straight to
+      the search path.
+
+      Fixed by installing the HOST `paal-embedded-source` into the table after
+      the pipeline loads. That is what the boundary allows — it takes a
+      library name and returns source text, both plain data, exactly like the
+      HOST `command-line` already there — and it avoids pushing 1300 lines of
+      embedded SRFI source through the pipeline on every run to reach one
+      procedure. The same helper now also replays `--lib-path`, which three of
+      the six pipeline-load sites were missing, so `paal compile` and the REPL
+      honour it as `paal run` already did.
+
+      Nothing caught this because every module-system test runs the HOST
+      pipeline; two tests now run an import through each self-hosted entry
+      point.
 - [x] **Test suite silently skipped tests and exited nonzero** — an uncaught error
       aborted the rest of its `test-group` without counting the remaining tests, so
       `make test` reported "all passed" while exiting 1 and running 10 fewer tests
@@ -575,6 +634,21 @@ Issues that span stages rather than belonging to one phase.
       was never a real defence — it only shifted byte offsets.
       NB the earlier "large and deeply nested" diagnosis in this entry was wrong:
       `paal-expander.pbc` is both bigger and deeper and reads back fine.
+
+      Re-checked against v0.22.1, and the boundary drops more than dotted
+      pairs. Two further constructs, now **kaappi/kaappi#2043**: a `;` line
+      comment straddling the boundary has its tail returned *as data* — no
+      error, just datums the file does not contain — and a string literal
+      straddling it raises `read error`. Both reproduce on v0.22.0 and
+      v0.22.1 with a Scheme-only repro and no paal in it, and both read
+      correctly from a string port.
+
+      Paal's own reader is unaffected either way: it works in `read-char` /
+      `peek-char` over the port rather than calling kaappi's `read`, so the
+      chunking never reaches it. `paal-read-file` on the same file returns
+      the correct datums where kaappi's `read` returns two extra. The
+      exposure is only where paal calls HOST `read`, which after the
+      workaround is nowhere on the `.pbc` path.
 
 ---
 
