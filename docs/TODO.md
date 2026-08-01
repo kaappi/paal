@@ -325,7 +325,7 @@ no `cache/` and no `lib/` present:
 | `paal eval '(* 6 7)'` | works |
 | `paal version` | works |
 | `(import (srfi 1))` | fails — the SRFI `.sld` files are on disk, not in the binary |
-| `paal check f.scm` | **runs the program** instead of only compiling it |
+| `paal check f.scm` | **runs the program** — kaappi/kaappi#2010 |
 | `paal fmt --check f.scm` | same |
 
 - [x] **Self-contained primitive env** — nothing to do. The entry assumed the
@@ -338,13 +338,20 @@ no `cache/` and no `lib/` present:
       `("p.scm")` and lost it, then started the REPL. The symptom was
       `repl requires cache`, which reads like a missing cache and is not. Now
       matched against `main.scm` specifically.
-- [ ] **Subcommands other than `eval` misbehave in the bundled binary** —
-      `paal check f.scm` and `paal fmt --check f.scm` execute the program
-      rather than only compiling or formatting it, while the same commands are
-      correct in bootstrap mode. Not diagnosed; a probe of `(command-line)`
-      inside a bundled program returns `()`, so argument delivery differs from
-      bootstrap in a way that is not yet understood. Reproduce with a binary
-      from `make binary`, run from a directory that is not the repo.
+- [ ] **`check` and `fmt` are unreachable in a bundled binary** — **blocked
+      upstream** by kaappi/kaappi#2010. A `-Dbundle` binary silently consumes
+      an argument that collides with one of kaappi's own subcommand names, so
+      `paal check f.scm` delivers `("f.scm")` and paal's dispatcher treats it
+      as a positional file and runs it. `check`, `fmt`, `ast` and `compile` are
+      swallowed; `eval`, `repl`, `run` and any non-subcommand word pass through
+      intact, which is what shows it to be unintended.
+
+      Not workable around from paal's side: the argument is gone before paal
+      starts, and a swallowed `check` is indistinguishable from never having
+      been typed. Flag spellings do not help — kaappi's CLI intercepts those
+      too. Bootstrap mode is unaffected, so `kaappi src/main.scm check f.scm`
+      is correct today.
+
 - [ ] **Bundle the SRFI libraries** — `(import (srfi 1))` fails from a binary
       run outside the repo: the `.sld` files are read from disk. Either embed
       them or resolve the search path relative to the executable, which R7RS
