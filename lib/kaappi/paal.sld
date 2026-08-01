@@ -509,7 +509,20 @@
         (paal-run-bc
           (pkaappi-compile
             "(define %paal-mvr-tag (list 'paal-mvr))
-             (define (values . vals) (cons %paal-mvr-tag vals))
+             ; One value is that value, not a one-element MVR.  R7RS 6.10: a
+             ; call to values with a single argument is equivalent to the
+             ; argument itself, and every context that is not
+             ; call-with-values sees exactly that.  Tagging it made
+             ; (+ (values 1) 2) a type error and (list (values 'a)) return the
+             ; tag -- roughly a hundred assertions of the R7RS suite, mostly in
+             ; numeric syntax, where the reader's own (values n) round trip
+             ; goes through here.
+             ; (values) still tags: (pair? '()) is #f, so zero values stays an
+             ; MVR and call-with-values still hands the consumer nothing.
+             (define (values . vals)
+               (if (and (pair? vals) (null? (cdr vals)))
+                   (car vals)
+                   (cons %paal-mvr-tag vals)))
              ; The consumer's arity is only known at run time, which is exactly
              ; what apply now handles — so no unrolled dispatch and no ceiling.
              ; Both arms stay in tail position, so apply re-dispatches as a tail

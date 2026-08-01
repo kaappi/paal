@@ -718,9 +718,10 @@ Everything above was found by looking. This phase is what an outside oracle foun
       enforces is that the per-section counts do not move — in either direction,
       so a new failure cannot hide behind a new pass in the same section.
       `make r7rs-baseline` prints a replacement baseline; the diff of that
-      refresh is the evidence a fix did what it claimed. Baseline at landing:
-      **974 passing, 131 failing** across 19 sections, plus 12 top-level forms
-      that raise before any test inside them runs.
+      refresh is the evidence a fix did what it claimed. Baseline when it landed:
+      974 passing, 131 failing across 19 sections, plus 12 top-level forms that
+      raise before any test inside them runs. One line of Phase 7 moved that to
+      **1078/30** with 11 raising, which is the harness paying for itself.
 
       See `tests/r7rs/README.md`.
 - [x] **`environment` destroyed the caller's macro table** — there is one macro
@@ -743,9 +744,16 @@ Everything above was found by looking. This phase is what an outside oracle foun
 Open, and ordered. Each is a leaf edit — one function or one blob entry, changing
 no value representation and no cross-copy protocol — so they can land in any order.
 
-- [ ] **`(values x)` must be `x`** — a single value leaks the MVR tag as
-      `((paal-mvr) 1)`, so `(+ (values 1) 2)` is a type error. One line, and
-      the largest single win available: roughly 100 suite assertions.
+- [x] **`(values x)` must be `x`** — a single value leaks the MVR tag as
+      `((paal-mvr) 1)`, so `(+ (values 1) 2)` was a type error and
+      `(list (values 'a))` returned the tag. R7RS 6.10 says a call to `values`
+      with one argument is equivalent to the argument itself.
+
+      One line, and the largest single win available. The suite went from
+      **974/131 to 1078/30**: Numeric syntax alone from 121/99 to 220/0,
+      because the reader's numeric round trip runs through it. `(values)` still
+      tags — `(pair? '())` is `#f` — so zero values stays an MVR and
+      `call-with-values` still applies the consumer to nothing.
 - [ ] **`procedure?` is `#f` for every paal-defined procedure** — and
       `(vector? f)` is `#t`. First-order wrong answer; every predicate dispatch
       on procedures is broken on the bytecode path. Fix `procedure?` in the

@@ -1412,6 +1412,32 @@
        (reverse acc)")))
 
 (test-group "values / call-with-values / apply"
+  ;; R7RS 6.10: a call to `values` with one argument is equivalent to the
+  ;; argument itself.  paal used to tag it anyway, so `(values 1)` was the pair
+  ;; ((paal-mvr) 1) and every context other than call-with-values saw the tag --
+  ;; (+ (values 1) 2) was a type error.  Roughly a hundred assertions of the
+  ;; R7RS suite, since the reader's numeric round trip goes through it.
+  ;; Asserted on both pipelines: the tree-walking path uses HOST `values` and
+  ;; was always right, and pinning the two together is what stops them drifting.
+  (test-equal "one value is that value, not a one-element MVR"
+    '(3 (a) 1)
+    (pkaappi-run-bc-string
+      "(list (+ (values 1) 2) (list (values 'a)) (values 1))"))
+  (test-equal "one value is that value — tree-walking path"
+    '(3 (a) 1)
+    (pkaappi-run-string
+      "(list (+ (values 1) 2) (list (values 'a)) (values 1))"))
+  (test-equal "call-with-values still sees one value as one value"
+    '(1)
+    (pkaappi-run-bc-string "(call-with-values (lambda () (values 1)) list)"))
+  ;; Zero values keeps the tag -- (pair? '()) is #f -- so the consumer is still
+  ;; applied to nothing rather than to the empty list.
+  (test-equal "zero values"
+    '()
+    (pkaappi-run-bc-string "(call-with-values (lambda () (values)) list)"))
+  (test-equal "a producer returning a plain value"
+    '(7)
+    (pkaappi-run-bc-string "(call-with-values (lambda () 7) list)"))
   (test-equal "values two"
     30
     (pkaappi-run-bc-string "(call-with-values (lambda () (values 10 20)) +)"))

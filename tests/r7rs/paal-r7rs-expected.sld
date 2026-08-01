@@ -8,13 +8,13 @@
     ;; (section-name passing failing) per test-end, in suite order.
     (define expected-sections
       '(("4.1 Primitive expression types" 27 0)
-        ("4.2 Derived expression types" 68 2)
+        ("4.2 Derived expression types" 71 2)
         ("4.3 Macros" 12 8)
         ("5 Program structure" 14 0)
         ("6.1 Equivalence Predicates" 25 0)
         ("6.2 Numbers" 202 8)
         ("6.3 Booleans" 18 0)
-        ("6.4 Lists" 63 2)
+        ("6.4 Lists" 65 0)
         ("6.5 Symbols" 17 0)
         ("6.6 Characters" 79 0)
         ("6.7 Strings" 130 0)
@@ -24,9 +24,9 @@
         ("6.11 Exceptions" 21 3)
         ("6.12 Environments and evaluation" 3 1)
         ("Read syntax" 93 0)
-        ("Numeric syntax" 121 99)
+        ("Numeric syntax" 220 0)
         ("6.14 System interface" 13 0)))
 
     ;; Top-level forms that raise before any test inside them runs.
     (define expected-errors
-      '(54 65 118 127 148 152 154 161 307 878 879 880))))
+      '(65 118 127 148 152 154 161 307 878 879 880))))
