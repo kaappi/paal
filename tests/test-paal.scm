@@ -2592,4 +2592,80 @@
           (delete-file p1) (delete-file p2) (delete-file src)
           (list a b))))))
 
+;; ---------------------------------------------------------------
+;; fmt — canonical formatter
+;; ---------------------------------------------------------------
+;;
+;; It cannot use paal-read, which discards comments, so it has its own scanner
+;; producing a tree that keeps comments and blank lines as nodes.  The property
+;; that matters is that formatting never changes what the reader sees, which is
+;; asserted for every case below rather than being taken on trust.
+
+(define (fmt-preserves? src)
+  (equal? (paal-read-string src)
+          (paal-read-string (paal-format-string src))))
+
+(define (fmt-idempotent? src)
+  (let ((once (paal-format-string src)))
+    (string=? once (paal-format-string once))))
+
+(test-group "fmt"
+  (test-equal "collapses a short form to one line"
+    "(define (f x) (* x 2))\n"
+    (paal-format-string "(define (f x)(* x 2))"))
+  ;; A body that does not fit indents 2 from the open paren, not under the
+  ;; first argument -- define is a special form, not a call.
+  (test-equal "a long define breaks with a 2-space body"
+    "(define (long-procedure-name alpha beta gamma delta)\n  (+ alpha beta gamma delta (* alpha beta) (* gamma delta)))\n"
+    (paal-format-string
+      "(define (long-procedure-name alpha beta gamma delta) (+ alpha beta gamma delta (* alpha beta) (* gamma delta)))"))
+  (test-equal "a comment on its own line stays there"
+    ";; top\n(define x 1)\n"
+    (paal-format-string ";; top\n(define x 1)\n"))
+  ;; A comment with code before it on the same line is trailing and must not
+  ;; migrate to a line of its own.
+  (test-equal "a trailing comment stays on its line"
+    "(define x 1) ; trailing\n"
+    (paal-format-string "(define x 1) ; trailing\n"))
+  (test-equal "runs of blank lines collapse to one"
+    "(define a 1)\n\n(define b 2)\n"
+    (paal-format-string "(define a 1)\n\n\n\n(define b 2)\n"))
+  (test-equal "a comment inside a form keeps its place"
+    "(define (f x)\n  ;; explain\n  (* x 2))\n"
+    (paal-format-string "(define (f x)\n  ;; explain\n  (* x 2))"))
+  ;; Strings are scanned whole, so a semicolon inside one is not a comment and
+  ;; nothing inside is ever reflowed.
+  (test-assert "a semicolon inside a string is not a comment"
+    (fmt-preserves? "(display \"a ; not a comment\")"))
+  (test-assert "vectors keep their #( prefix"
+    (fmt-preserves? "(define v #(1 2 3))"))
+  (test-assert "bytevectors keep their #u8( prefix"
+    (fmt-preserves? "(define v #u8(1 2 3))"))
+  (test-assert "quote stays attached to what it quotes"
+    (fmt-preserves? "(define l '(a b c))"))
+  (test-assert "a datum comment survives"
+    (fmt-preserves? "(list 1 #;(2 3) 4)"))
+  (test-assert "a block comment survives"
+    (fmt-preserves? "#| block |#\n(define z 1)"))
+  (test-assert "characters survive"
+    (fmt-preserves? "(list #\\a #\\space #\\( )"))
+  (test-assert "formatting is idempotent"
+    (fmt-idempotent?
+      "(cond ((= x 1) 'one)((= x 2) 'two)(else 'other))(define (f a b) (+ a b))"))
+  ;; The end-to-end property: a real source file formats, still reads the
+  ;; same, and check reports it clean afterwards.
+  (test-equal "a file round-trips through fmt"
+    '(#t #f #t)
+    (let ((p "paal-fmt-tmp.scm"))
+      (let ((port (open-output-file p)))
+        (display "(define (f x)(* x 2))\n(display (f 21))" port)
+        (close-output-port port))
+      (let* ((before (paal-format-check-file p))
+             (_      (paal-format-file! p))
+             (after  (paal-format-check-file p))
+             (reads  (equal? (paal-read-file p)
+                             '((define (f x) (* x 2)) (display (f 21))))))
+        (delete-file p)
+        (list reads before after)))))
+
 (test-exit)

@@ -13,7 +13,8 @@
           (kaappi paal vm)
           (kaappi paal emitter)
           (kaappi paal vm-bc)
-          (kaappi paal serializer))
+          (kaappi paal serializer)
+          (kaappi paal formatter))
   (export
     ;; Reader
     paal-read paal-read-string paal-read-all paal-read-file
@@ -43,7 +44,10 @@
     ;; Compile-only checking
     pkaappi-check-file pkaappi-check-files
     ;; Opt-in bytecode cache for user programs
-    pkaappi-run-file-cached pkaappi-cache-path)
+    pkaappi-run-file-cached pkaappi-cache-path
+    ;; Formatter
+    paal-format-string paal-format-file paal-format-file!
+    paal-format-check-file)
   (begin
 
     ;; --- Tree-walking pipeline ---

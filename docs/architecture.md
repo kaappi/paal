@@ -50,6 +50,7 @@ Each stage is a separate `define-library` importable independently:
 | `(kaappi paal compiler)` | `lib/kaappi/paal/compiler.sld` | 3 |
 | `(kaappi paal vm)` | `lib/kaappi/paal/vm.sld` | 4 |
 | `(kaappi paal ir)` | `lib/kaappi/paal/ir.sld` | (shared) |
+| `(kaappi paal formatter)` | `lib/kaappi/paal/formatter.sld` | `fmt` |
 | `(kaappi paal)` | `lib/kaappi/paal.sld` | public API |
 
 ---

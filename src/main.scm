@@ -17,6 +17,7 @@
   (display "\nWith no arguments, starts an interactive REPL.\n")
   (display "\nSubcommands:\n")
   (display "  check <file>...         Compile without running; report errors\n")
+  (display "  fmt [--check] <file>... Reprint with canonical 2-space indentation\n")
   (display "  compile <f> -o <out>    Compile to .pbc bytecode\n")
   (display "  expand <file>           Print expanded forms\n")
   (display "  ir <file>               Print IR nodes\n")
@@ -77,6 +78,32 @@
      (if (null? (cdr args))
          (begin (display "error: check: missing file\n") (exit 1))
          (if (pkaappi-check-files (cdr args)) (exit 0) (exit 1))))
+    ; fmt [--check] <file>... — reprint with canonical indentation
+    ((string=? (car args) "fmt")
+     (let* ((check? (and (pair? (cdr args)) (string=? (cadr args) "--check")))
+            (files  (if check? (cddr args) (cdr args))))
+       (if (null? files)
+           (begin (display "error: fmt: missing file\n") (exit 1))
+           (let loop ((fs files) (dirty '()))
+             (cond
+               ((null? fs)
+                (if (null? dirty)
+                    (exit 0)
+                    (begin
+                      (for-each (lambda (f)
+                                  (display "not formatted: " (current-error-port))
+                                  (display f (current-error-port))
+                                  (newline (current-error-port)))
+                                (reverse dirty))
+                      (exit 1))))
+               (check?
+                (loop (cdr fs)
+                      (if (paal-format-check-file (car fs))
+                          dirty
+                          (cons (car fs) dirty))))
+               (else
+                (paal-format-file! (car fs))
+                (loop (cdr fs) dirty)))))))
     ; compile <input> -o <output>
     ((string=? (car args) "compile")
      (cond

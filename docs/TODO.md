@@ -3,7 +3,7 @@
 Goal: make `paal` a correct R7RS-small Scheme implementation that runs the
 same programs as `kaappi`, with the same CLI conventions.
 
-Current: Stage 6 complete (self-hosting). **534 tests pass** (was 194 before Phase 1–2).
+Current: Stage 6 complete (self-hosting). **549 tests pass** (was 194 before Phase 1–2).
 
 ---
 
@@ -249,7 +249,23 @@ Gaps in `lib/kaappi/paal/reader.sld`:
       the exit status is 1 if any file failed. Each file gets a fresh macro
       table, so a `define-syntax` in one cannot silently satisfy a reference in
       the next.
-- [ ] **`fmt` subcommand** — canonical 2-space formatter with `--check` mode for CI
+- [x] **`fmt` subcommand** — `paal fmt <file>...` reprints with canonical
+      2-space indentation; `paal fmt --check` reports files that are not
+      already formatted and exits 1, for CI. It cannot use `paal-read` —
+      the reader discards comments, and a formatter that drops them is worse
+      than none — so it has its own scanner producing a tree that keeps
+      comments and blank lines as nodes beside the code. Strings and
+      characters are scanned whole and never reflowed.
+
+      A form that fits goes on one line. One that does not indents 2 from the
+      open paren for special forms and aligns under the first argument for
+      calls, which is the usual Scheme convention. A comment with code before
+      it on the same line stays there; runs of blank lines collapse to one.
+
+      The property that matters is that formatting never changes what the
+      reader sees. That is asserted per case in the suite, and verified across
+      all 18 of paal's own source files — reader-equal and idempotent for
+      every one, including the ~1500-line expander.
 - [x] **Bytecode cache for user programs** — `paal --cache file.scm` writes
       `file.scm.<hash>.pbc` beside the source and reuses it while the source is
       unchanged. Opt-in, because R7RS has no way to create a directory, so the
