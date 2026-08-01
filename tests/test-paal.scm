@@ -2400,4 +2400,25 @@
         (delete-file p)
         r))))
 
+;; ---------------------------------------------------------------
+;; (scheme r5rs) / (scheme complex)
+;; ---------------------------------------------------------------
+
+(test-group "r5rs and complex"
+  ;; The only two R5RS names R7RS renamed.
+  (test-equal "exact->inexact and inexact->exact"
+    '(1.0 2)
+    (pkaappi-run-bc-string "(list (exact->inexact 1) (inexact->exact 2.0))"))
+  ;; Paal has no complex type, so these are the R7RS procedures restricted to
+  ;; the real line: every number is its own real part, with a zero imaginary
+  ;; part.  Useful because portable code calls them unconditionally.
+  (test-equal "complex accessors on reals"
+    '(5 0 3 2)
+    (pkaappi-run-bc-string
+      "(list (real-part 5) (imag-part 5) (magnitude -3) (make-rectangular 2 0))"))
+  ;; Erroring beats silently dropping the imaginary part.
+  (test-equal "make-rectangular refuses a non-zero imaginary part"
+    'errs
+    (pkaappi-run-bc-string "(guard (e (#t 'errs)) (make-rectangular 1 2))")))
+
 (test-exit)

@@ -3,7 +3,7 @@
 Goal: make `paal` a correct R7RS-small Scheme implementation that runs the
 same programs as `kaappi`, with the same CLI conventions.
 
-Current: Stage 6 complete (self-hosting). **505 tests pass** (was 194 before Phase 1–2).
+Current: Stage 6 complete (self-hosting). **508 tests pass** (was 194 before Phase 1–2).
 
 ---
 
@@ -177,8 +177,15 @@ User programs call `(import (scheme inexact))` etc. Currently `import` is a no-o
       `open-binary-input-file`, `open-binary-output-file`,
       `file-exists?`, `delete-file` added
 - [x] `(scheme write)` completeness — `write-shared`, `write-simple` added
-- [ ] `(scheme complex)` — complex number arithmetic operations
-- [ ] `(scheme r5rs)` — R5RS compatibility subset
+- [x] `(scheme complex)` — the R7RS procedures restricted to the real line:
+      every number is its own real part with a zero imaginary part.
+      `make-rectangular`/`make-polar` error on a non-zero imaginary component
+      rather than silently dropping it. Paal has no complex type — that is
+      Phase 8's bignum/rational/complex item — but portable code calls these
+      unconditionally, so having them is what matters.
+- [x] `(scheme r5rs)` — `exact->inexact` and `inexact->exact`, the only two
+      names R7RS renamed. Everything else R5RS specifies is already present
+      under an unchanged name.
 - [x] `(scheme eval)` — `eval` and `environment`. `eval` compiles the datum it
       is handed and runs it in the given table; the bindings read that table
       out of a cell rather than closing over it, since it does not exist when

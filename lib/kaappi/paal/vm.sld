@@ -439,6 +439,34 @@
                         (set! %paal-winds saved)
                         result))))
 
+             ;; (scheme r5rs) — the two names R7RS renamed.  Everything else
+             ;; R5RS specifies is already here under an unchanged name.
+             (exact->inexact . ,inexact) (inexact->exact . ,exact)
+
+             ;; (scheme complex) — real numbers only.  Paal has no complex
+             ;; type, so these are the restrictions of the R7RS procedures to
+             ;; the real line: every number is its own real part with a zero
+             ;; imaginary part.  make-rectangular and make-polar are exact
+             ;; where the result is real and an error otherwise, rather than
+             ;; silently dropping the imaginary component.
+             (real-part . ,(lambda (z) z))
+             (imag-part . ,(lambda (z) 0))
+             (magnitude . ,abs)
+             (angle . ,(lambda (z) (if (negative? z) (* 4 (atan 1)) 0)))
+             (make-rectangular
+               . ,(lambda (re im)
+                    (if (zero? im)
+                        re
+                        (error "make-rectangular: paal has no complex numbers"
+                               re im))))
+             (make-polar
+               . ,(lambda (mag ang)
+                    (let ((im (* mag (sin ang))))
+                      (if (zero? im)
+                          (* mag (cos ang))
+                          (error "make-polar: paal has no complex numbers"
+                                 mag ang)))))
+
              ;; Features
              (features . ,features)
 
