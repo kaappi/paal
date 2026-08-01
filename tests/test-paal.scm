@@ -2552,6 +2552,23 @@
   (test-assert "prefix hides the unprefixed name"
     (not (compiles? "(import (scheme base) (prefix (scheme inexact) m:)) (sin 0)")))
   (test-assert "rename" (compiles? "(import (scheme base) (rename (scheme inexact) (sin sine))) (sine 0)"))
+  ;; (scheme cxr) is the 24 compositions of depth three and four.  Depth two --
+  ;; caar, cadr, cdar, cddr -- is base and stays there; R7RS 6.4 counts
+  ;; twenty-eight in all, so the split is 4 + 24.
+  (test-assert "base keeps the depth-two accessors"
+    (compiles? "(import (scheme base)) (list (caar '((1))) (cadr '(1 2)) (cdar '((1 . 2))) (cddr '(1 2 3)))"))
+  (test-assert "base does not grant depth three"
+    (not (compiles? "(import (scheme base)) (caddr '(1 2 3))")))
+  (test-assert "base does not grant depth four"
+    (not (compiles? "(import (scheme base)) (cddddr '(1 2 3 4 5))")))
+  (test-assert "importing cxr grants both depths"
+    (compiles? "(import (scheme base) (scheme cxr)) (list (caddr '(1 2 3)) (cadddr '(1 2 3 4)))"))
+  ;; paal's own libraries use caddr and cadddr freely while importing only
+  ;; (scheme base) -- they are define-library forms, never subject to the
+  ;; check, and their bodies are skipped when spliced into an importer.  (srfi
+  ;; 1) is the one to watch, since a program really does import it.
+  (test-assert "a library may use them without importing cxr"
+    (compiles? "(import (scheme base) (srfi 1)) (fold + 0 '(1 2 3))"))
   ;; A library's own imports are its own.  (srfi 1) imports (scheme base), and
   ;; that used to leak: `sin` was correctly rejected while `car` sailed through
   ;; — the signature of an unearned base grant.

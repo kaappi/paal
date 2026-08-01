@@ -3,7 +3,7 @@
 Goal: make `paal` a correct R7RS-small Scheme implementation that runs the
 same programs as `kaappi`, with the same CLI conventions.
 
-Current: bootstrap stage 6 complete (self-hosting). **666 tests pass** (was 194 before Phase 1–2).
+Current: bootstrap stage 6 complete (self-hosting). **671 tests pass** (was 194 before Phase 1–2).
 
 Phases 1–6 are done. Two of their entries rest on host bugs still open upstream —
 kaappi/kaappi#2010 and kaappi/kaappi#1920 / kaappi/kaappi#2043 — but paal has no
@@ -946,11 +946,18 @@ later as unbound variables rather than failing to parse.
       - the emitted **alias forms** were checked, and `(define m:sin sin)` names
         the internal binding that `prefix` exists to hide.
 
-      Known limits, all over-permissive rather than wrongly rejecting:
-      `(scheme cxr)` is not partitioned, so base grants `caddr`; a modifier over
-      base does not narrow it, so `(only (scheme base) car)` still grants base;
-      and because base is "everything else", a name belonging to no library at
-      all reaches the runtime rather than the check.
+      `(scheme cxr)` is partitioned too — the 24 compositions of depth three
+      and four, with depth two (`caar`, `cadr`, `cdar`, `cddr`) left in base.
+      R7RS 6.4 counts twenty-eight in all; the split is 4 + 24. paal's own
+      libraries use `caddr` and `cadddr` freely while importing only
+      `(scheme base)`, which is fine: a `define-library` is never checked, and
+      its body is skipped when spliced into an importer.
+
+      Two limits remain, both over-permissive rather than wrongly rejecting: a
+      modifier over base does not narrow it, so `(only (scheme base) car)`
+      still grants base; and because base is "everything else", a name
+      belonging to no library at all reaches the runtime rather than the
+      check.
 - [x] **A library's import prologue leaked into its importer** — imports were
       effectively transitive. `install-library!` renamed the library's *body*
       and spliced its prologue in untouched, so `(import (m greet))` handed you

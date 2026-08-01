@@ -833,9 +833,16 @@ The first two are handled by `expand-nested` plus a save/restore of the import-s
 state around the whole of `install-library!` — prologue as well as body. The third by
 recording alias-defined names and skipping those forms.
 
-Deliberate limits, all over-permissive rather than wrongly rejecting: `(scheme cxr)` is
-not partitioned, a modifier over base does not narrow it, and a name belonging to no
-library reaches the runtime rather than the check.
+`(scheme cxr)` is partitioned too: the 24 compositions of depth three and four, with
+depth two — `caar`, `cadr`, `cdar`, `cddr` — left in base. R7RS 6.4 counts twenty-eight
+in all, so the split is 4 + 24. paal's own libraries use `caddr` and `cadddr` freely
+while importing only `(scheme base)`, which is fine because a `define-library` is never
+checked and its body is skipped when spliced into an importer.
+
+Two deliberate limits remain, both over-permissive rather than wrongly rejecting: a
+modifier over base does not narrow it, so `(only (scheme base) car)` still grants base;
+and because base is "everything else", a name belonging to no library at all reaches the
+runtime rather than the check.
 
 ### One feature list, one owner
 

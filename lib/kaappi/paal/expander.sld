@@ -192,6 +192,13 @@
                           sin sqrt tan)
         ((scheme complex) angle imag-part magnitude make-polar make-rectangular
                           real-part)
+        ;; The 24 compositions of depth three and four.  Depth two — caar,
+        ;; cadr, cdar, cddr — is `(scheme base)` and stays out of this list;
+        ;; R7RS 6.4 counts twenty-eight in all, and the split is 4 + 24.
+        ((scheme cxr)     caaar caadr cadar caddr cdaar cdadr cddar cdddr
+                          caaaar caaadr caadar caaddr cadaar cadadr caddar
+                          cadddr cdaaar cdaadr cdadar cdaddr cddaar cddadr
+                          cdddar cddddr)
         ((scheme char)    char-alphabetic? char-ci<=? char-ci<? char-ci=?
                           char-ci>=? char-ci>? char-downcase char-foldcase
                           char-lower-case? char-numeric? char-upcase

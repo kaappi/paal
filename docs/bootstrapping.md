@@ -39,7 +39,7 @@ Tiers 0–4 are reached. Tier 5 is reached at run time — `make binary` produce
 source checkout and zig. Status is tracked in one place only, the section below;
 this ladder deliberately carries no per-rung markers, because when it did they drifted.
 
-## Current Status: Bootstrap Stage 6 complete — 666 tests pass
+## Current Status: Bootstrap Stage 6 complete — 671 tests pass
 
 Paal can load all 8 of its own library files through its bytecode pipeline and
 compile and execute arbitrary Scheme through its own loaded pipeline with no HOST
