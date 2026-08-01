@@ -3,7 +3,7 @@
 Goal: make `paal` a correct R7RS-small Scheme implementation that runs the
 same programs as `kaappi`, with the same CLI conventions.
 
-Current: Stage 6 complete (self-hosting). **562 tests pass** (was 194 before Phase 1–2).
+Current: Stage 6 complete (self-hosting). **581 tests pass** (was 194 before Phase 1–2).
 
 ---
 
@@ -328,8 +328,12 @@ inferred:
 | `paal version` | works |
 | `paal` (no args) | works — REPL over the HOST pipeline, definitions accumulate |
 | `(import (srfi 1))` | works — the SRFI sources are embedded |
+| `paal debug f.scm` | works — `debug` is not a kaappi subcommand |
 | `paal check f.scm` | **runs the program** — kaappi/kaappi#2010 |
 | `paal fmt --check f.scm` | same |
+| `paal compile/expand/ir f.scm` | same |
+| `paal --lib-path d f.scm` | **path never reaches paal** — same bug |
+| `paal --help` | prints **kaappi's** usage |
 
 - [x] **Self-contained primitive env** — nothing to do. The entry assumed the
       binary would need its own implementations of what `paal-initial-env`
@@ -393,7 +397,41 @@ inferred:
 
       The self-hosted path earns its keep by proving paal compiles itself, not
       by being fast. Nothing about the binary needs it.
-- [ ] **Stepping debugger** — breakpoints, step/next, frame navigation
+- [x] **Stepping debugger** — `paal debug <file>`. Breakpoints by procedure
+      name, `step` / `next` / `finish` / `continue`, a backtrace naming every
+      live frame with the arguments it was called with, and `p <name>` to read
+      a top-level binding.
+
+      Two halves. The VM raises an event wherever the frame stack changes
+      shape and asks a hook what to do next; the hook is handed **data only**
+      — kind, name, value, depth, backtrace — so it cannot disturb the run it
+      is watching, and the test suite drives the whole thing with a procedure
+      returning a scripted list of commands rather than needing a terminal.
+      The console half is one such hook.
+
+      Three event sites, not two: a `return` instruction is not the only way
+      out of a frame. A procedure whose body ends in a call to a primitive
+      leaves through `deliver-result!`, and for a program written entirely in
+      tail position that is *every* return it makes — hooking only the opcode
+      showed none of them.
+
+      `next` and `finish` measure depth as the frame's register base rather
+      than the length of the frame list, because a re-entrant
+      `paal-call-value` (a `guard` body) runs on a fresh singleton list, and
+      comparing lengths made `next` stop at the first event inside it. Bases
+      keep growing across the boundary; list lengths restart.
+
+      Stepping skips the `map`/`filter`/`apply` blob `pkaappi-make-globals`
+      installs, by closure identity rather than by name — so an anonymous
+      lambda handed to `map` still stops, which keying on names could not have
+      given.
+
+      No `up`/`down`: selecting a frame is only useful if something can be
+      evaluated in it, and registers carry no variable names by the time the
+      emitter is done, so nothing can answer "what is `x` here". Arguments are
+      recoverable — they are `regs[base … base+arity]` — and `bt` prints them
+      for every frame at once. See `docs/architecture.md` § The stepping
+      debugger.
 - [x] **C FFI** — bound, not built. `(kaappi ffi)`'s seven primitives
       (`ffi-open`, `ffi-fn`, `ffi-close`, `ffi-callback`,
       `ffi-callback-release`, `ffi-callback?`, `ffi-bytevector-ptr`) are now in

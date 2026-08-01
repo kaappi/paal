@@ -18,6 +18,7 @@
   (display "\nWith no arguments, starts an interactive REPL.\n")
   (display "\nSubcommands:\n")
   (display "  check <file>...         Compile without running; report errors\n")
+  (display "  debug <file> [args...]  Run under the stepping debugger\n")
   (display "  fmt [--check] <file>... Reprint with canonical 2-space indentation\n")
   (display "  compile <f> -o <out>    Compile to .pbc bytecode\n")
   (display "  expand <file>           Print expanded forms\n")
@@ -130,6 +131,11 @@
      (if (null? (cdr args))
          (begin (display "error: check: missing file\n") (exit 1))
          (if (pkaappi-check-files (cdr args)) (exit 0) (exit 1))))
+    ; debug <file> [args...] — run under the stepping debugger
+    ((string=? (car args) "debug")
+     (if (null? (cdr args))
+         (begin (display "error: debug: missing file\n") (exit 1))
+         (apply pkaappi-debug-file (cadr args) (cddr args))))
     ; fmt [--check] <file>... — reprint with canonical indentation
     ((string=? (car args) "fmt")
      (let* ((check? (and (pair? (cdr args)) (string=? (cadr args) "--check")))

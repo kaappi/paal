@@ -10,7 +10,9 @@
   (export paal-run-bc paal-make-globals
           %paal-guard-run-marker %paal-apply-marker paal-vm-raise-escape!
           paal-profile-start! paal-profile-report
-          paal-coverage-start! paal-coverage-report)
+          paal-coverage-start! paal-coverage-report
+          paal-debug-start! paal-debug-stop!
+          paal-debug-break! paal-debug-unbreak! paal-debug-breaks)
   (begin
 
     (define REGS-SIZE 16384)
@@ -263,6 +265,7 @@
         ((return)
          (let* ((result   (vector-ref regs (abs (cadr instr))))
                 (rest     (cdr frames)))
+           (when %debug-hook (debug-return! regs frames frame result))
            (if (null? rest)
                result
                (let ((caller (car rest)))
@@ -385,7 +388,16 @@
             result)))
 
     ;; Hand `result` back to the caller of a completed HOST call or guard.
+    ;;
+    ;; With tail? the current frame is finishing, so this is a frame return and
+    ;; the debugger hears about it — a `return` instruction is not the only way
+    ;; out of a frame.  A procedure whose body ends in a call to a primitive
+    ;; leaves through here instead, which for a program written entirely in tail
+    ;; position is *every* return it makes.  Without tail? the frame carries on
+    ;; with the primitive's value in a register, which is not an event.
     (define (deliver-result! regs globals frames frame abs-base result tail?)
+      (when (and %debug-hook tail?)
+        (debug-return! regs frames frame result))
       (if tail?
           ; Tail call: deliver to the caller's dst, or return if there is none.
           (let ((rest (cdr frames)))
@@ -475,11 +487,163 @@
                  (loop (cdr alist) (+ total 1) covered (cons name uncalled)))))
           (else (loop (cdr alist) total covered uncalled)))))
 
+    ;; --- stepping debugger ---------------------------------------------
+    ;;
+    ;; Same shape as profiling: nothing runs unless a hook is installed, so the
+    ;; call path pays one test against #f.  Events fire at the two places where
+    ;; the frame stack changes shape — a call to a paal closure in do-call!, and
+    ;; a frame return in dispatch! — which between them are every point a
+    ;; debugger has anything to say about.
+    ;;
+    ;; The hook is HOST code and is handed nothing but data:
+    ;;
+    ;;   (hook kind name value depth backtrace) -> command
+    ;;
+    ;;     kind       'call or 'return
+    ;;     name       the procedure's name, or #f for an anonymous lambda
+    ;;     value      the argument list ('call) or the returned value ('return)
+    ;;     depth      how many frames are live
+    ;;     backtrace  ((name arg ...) ...), innermost frame first
+    ;;
+    ;; and answers 'step, 'next, 'finish or 'continue.  No frame, register or
+    ;; closure object is exposed, so a hook cannot disturb the run it is
+    ;; watching — and a test hook is an ordinary procedure returning a scripted
+    ;; sequence of commands, which is how the suite drives this without a
+    ;; terminal.
+    ;;
+    ;; A frame is described by its procedure's name and the values of its
+    ;; parameters.  That is not a choice: registers carry no variable names by
+    ;; the time the emitter is done with them, and regs[base .. base+arity] is
+    ;; the one stretch of the register file whose meaning is recoverable without
+    ;; debug info the emitter does not record.
+
+    (define %debug-hook   #f)             ; procedure, or #f when not debugging
+    (define %debug-mode   'off)           ; off | run | step | next | finish
+    (define %debug-base   0)              ; register base next/finish resume at
+    (define %debug-breaks '())            ; procedure names to stop on
+    (define %debug-skip   '())            ; closures never to stop on
+
+    ;; `next` and `finish` both mean "run until an event no deeper than here",
+    ;; and depth is measured as the frame's *register base* rather than the
+    ;; length of the frame list.  The emitter allocates a call's base above
+    ;; everything live, so bases grow with depth — and unlike the list length
+    ;; they keep growing across a re-entrant paal-call-value, whose frame list
+    ;; is a fresh singleton.  Comparing lengths would make a `next` inside a
+    ;; guard body stop at the first event in the nested loop.
+    ;;
+    ;; A tail call is reached with the caller's frame still current, so its base
+    ;; compares equal and `next` stops there.  That is right: a tail call is the
+    ;; last thing the frame does, so there is no "rest of this frame" left to
+    ;; step over.
+
+    (define (paal-debug-start! globals hook . opts)
+      (set! %debug-hook hook)
+      (set! %debug-mode (if (null? opts) 'step (car opts)))
+      (set! %debug-base 0)
+      (set! %debug-breaks '())
+      ;; pkaappi-make-globals installs paal-compiled map, filter, apply, force
+      ;; and the rest of the blob into the table before the user's program is
+      ;; even compiled, and stepping into those is never what anyone means.
+      ;; Skipping by closure identity rather than by name: the user's own
+      ;; procedures are defined during the run, so they are not in the snapshot,
+      ;; and an anonymous lambda handed to `map` still stops — it is a different
+      ;; object from `map` itself.
+      (set! %debug-skip
+            (let loop ((a (vector-ref globals 0)) (acc '()))
+              (cond ((null? a) acc)
+                    ((closure? (cdr (car a))) (loop (cdr a) (cons (cdr (car a)) acc)))
+                    (else (loop (cdr a) acc)))))
+      #t)
+
+    (define (paal-debug-stop!)
+      (set! %debug-hook #f)
+      (set! %debug-mode 'off)
+      #t)
+
+    (define (paal-debug-break! name)
+      (if (memq name %debug-breaks)
+          %debug-breaks
+          (begin (set! %debug-breaks (cons name %debug-breaks))
+                 %debug-breaks)))
+
+    (define (paal-debug-unbreak! name)
+      (set! %debug-breaks
+            (let loop ((l %debug-breaks) (acc '()))
+              (cond ((null? l) (reverse acc))
+                    ((eq? (car l) name) (loop (cdr l) acc))
+                    (else (loop (cdr l) (cons (car l) acc))))))
+      %debug-breaks)
+
+    (define (paal-debug-breaks) %debug-breaks)
+
+    ;; A frame's parameters: regs[base .. base+arity-1], plus the rest list at
+    ;; regs[base+arity] when the procedure is variadic.
+    (define (debug-frame-args regs frame)
+      (let* ((fn    (closure-function (frame-closure frame)))
+             (base  (frame-base frame))
+             (n     (+ (bytecode-function-arity fn)
+                       (if (bytecode-function-variadic? fn) 1 0))))
+        (let loop ((i (- n 1)) (acc '()))
+          (if (< i 0) acc (loop (- i 1) (cons (vector-ref regs (+ base i)) acc))))))
+
+    (define (debug-backtrace regs frames)
+      (let loop ((fs frames) (acc '()))
+        (if (null? fs)
+            (reverse acc)
+            (loop (cdr fs)
+                  (cons (cons (bytecode-function-name
+                                (closure-function (frame-closure (car fs))))
+                              (debug-frame-args regs (car fs)))
+                        acc)))))
+
+    ;; Ask the hook what to do next.  `here` is the register base of the frame
+    ;; that resumes once this event is done — the caller for a call, the frame
+    ;; being returned into for a return — which is what next and finish measure
+    ;; against.  An unrecognized answer continues, so a hook that returns
+    ;; something odd cannot wedge the program.
+    (define (debug-stop! kind name value frames here backtrace)
+      (let ((cmd (%debug-hook kind name value (length frames) backtrace)))
+        (set! %debug-base here)
+        (set! %debug-mode
+              (cond ((eq? cmd 'step)   'step)
+                    ((eq? cmd 'next)   'next)
+                    ((eq? cmd 'finish) 'finish)
+                    (else              'run)))))
+
+    ;; A breakpoint fires in every mode, `finish` included — the same as any
+    ;; other debugger, where running to the end of a frame still stops at a
+    ;; breakpoint hit on the way.
+    (define (debug-call! regs frames frame callee args)
+      (let ((name (bytecode-function-name (closure-function callee)))
+            (base (frame-base frame)))
+        (when (and (not (memq callee %debug-skip))
+                   (or (memq name %debug-breaks)
+                       (eq? %debug-mode 'step)
+                       (and (eq? %debug-mode 'next) (<= base %debug-base))))
+          (debug-stop! 'call name args frames base
+                       (debug-backtrace regs frames)))))
+
+    (define (debug-return! regs frames frame result)
+      (let ((base (frame-base frame))
+            (rest (cdr frames)))
+        (when (and (not (memq (frame-closure frame) %debug-skip))
+                   (or (eq? %debug-mode 'step)
+                       (and (or (eq? %debug-mode 'next) (eq? %debug-mode 'finish))
+                            (<= base %debug-base))))
+          (debug-stop! 'return
+                       (bytecode-function-name
+                         (closure-function (frame-closure frame)))
+                       result frames
+                       (if (null? rest) 0 (frame-base (car rest)))
+                       (debug-backtrace regs frames)))))
+
     (define (do-call! regs globals frames frame callee abs-base nargs base-off tail?)
       (cond
         ; Paal closure
         ((closure? callee)
          (when %profiling? (paal-profile-count! callee))
+         (when %debug-hook
+           (debug-call! regs frames frame callee (call-args regs abs-base nargs)))
          (let* ((fn        (closure-function callee))
                 (arity     (bytecode-function-arity fn))
                 (variadic? (bytecode-function-variadic? fn))

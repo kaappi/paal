@@ -604,6 +604,98 @@ installs by paal-compiling it (`map`, `for-each`, `apply`, `filter`, `vector-map
 
 ---
 
+## The stepping debugger
+
+`paal debug <file>` runs a program with breakpoints, step / next / finish, and a
+backtrace. It is in two halves: the events live in `lib/kaappi/paal/vm-bc.sld`, and the
+hooks that consume them in `lib/kaappi/paal.sld`.
+
+### Where events come from
+
+The VM raises an event at the places the frame stack changes shape, and nowhere else:
+
+| Where | Event |
+|---|---|
+| `do-call!`, closure branch | a paal closure is about to be entered |
+| `dispatch!`, `return` opcode | a frame returns through a `return` instruction |
+| `deliver-result!` with `tail?` | a frame returns through a tail call to a primitive |
+
+The third is not an afterthought. A procedure whose body ends in a call to a primitive —
+`(define (double x) (* x 2))` — never executes a `return` instruction; it leaves through
+`deliver-result!`. For a program written entirely in tail position that is *every*
+return it makes, and hooking only the opcode showed none of them.
+
+Calls to HOST procedures raise no event: they have no frame, so there is nothing to step
+through. A `guard`'s body thunk and handler are entered through `paal-call-value` rather
+than `do-call!` and so raise no *call* event either — what shows up instead is the calls
+made inside them, which is what the user of `guard` wrote.
+
+### The hook protocol
+
+```scheme
+(hook kind name value depth backtrace) → 'step | 'next | 'finish | 'continue
+```
+
+| | |
+|---|---|
+| `kind` | `'call` or `'return` |
+| `name` | the procedure's name, or `#f` for an anonymous lambda |
+| `value` | the argument list (`'call`) or the returned value (`'return`) |
+| `depth` | how many frames are live |
+| `backtrace` | `((name arg …) …)`, innermost frame first |
+
+Data only — no frame, register or closure object is handed over, so a hook cannot
+disturb the run it is watching, and a test hook is an ordinary procedure returning a
+scripted list of commands. An answer the VM does not recognize continues, so a hook that
+returns something odd cannot wedge the program.
+
+A frame is described by its procedure's name and the values of its parameters. That is
+not a choice: registers carry no variable names by the time the emitter is done with
+them, and `regs[base … base+arity]` is the one stretch of the register file whose
+meaning is recoverable without debug info the emitter does not record. A call event
+reports the arguments *as passed*; the backtrace reports them *as bound*, so for a
+variadic procedure the rest list is already built in the second and not in the first.
+
+### How next and finish measure depth
+
+Both mean "run until an event no deeper than here", and depth is the frame's **register
+base**, not the length of the frame list. The emitter allocates a call's base above
+everything live, so bases grow with depth — and unlike the list length they keep growing
+across a re-entrant `paal-call-value`, whose frame list is a fresh singleton. Comparing
+lengths would make a `next` inside a `guard` body stop at the first event of the nested
+loop.
+
+`finish` at a call event finishes the frame the call is made *from*, matching gdb, where
+`finish` completes the selected frame. A tail call is reached with the caller's frame
+still current, so its base compares equal and `next` stops there — which is right: a
+tail call is the last thing the frame does, so there is no rest of the frame to step
+over. A breakpoint fires in every mode, `finish` included.
+
+### Why the globals blob is skipped
+
+`pkaappi-make-globals` installs paal-compiled `map`, `filter`, `apply`, `force` and the
+rest of the blob into the table before the user's program is even compiled, and stepping
+into those is never what anyone means. `paal-debug-start!` snapshots the closures already
+in the table and no event fires for them.
+
+The skip is by closure **identity**, not by name. The user's own procedures are defined
+during the run, so they are not in the snapshot; and an anonymous lambda handed to `map`
+still stops, because it is a different object from `map` itself. Keying on names would
+have had to choose between skipping every anonymous lambda and stepping through the blob.
+
+### What it does not do
+
+There is no `up`/`down`. Selecting a frame is only useful if something can then be
+evaluated in it, and a register file without variable names cannot answer "what is `x`
+here". `bt` prints every frame with its arguments in one go, which is the part that is
+recoverable; `p <name>` reads a top-level binding out of the globals table.
+
+Like `--profile`, the debugger runs the HOST pipeline. The self-hosted path executes the
+program through the paal-compiled copy of the VM, which has its own `%debug-hook` that
+setting this one does not reach — the same two-copies problem as `%paal-lib-paths`.
+
+---
+
 ## Public API (`lib/kaappi/paal.sld`)
 
 High-level entry points that run the full pipeline:

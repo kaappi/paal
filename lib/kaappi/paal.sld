@@ -7,6 +7,10 @@
   (import (scheme base)
           (scheme file)
           (scheme write)
+          (scheme process-context)
+          (kaappi paal bytecode)
+          (kaappi paal frame)
+          (kaappi paal embedded)
           (kaappi paal reader)
           (kaappi paal expander)
           (kaappi paal compiler)
@@ -51,7 +55,11 @@
     ;; Profiling
     paal-profile-start! paal-profile-report
     paal-coverage-start! paal-coverage-report
-    pkaappi-run-bc-string-covered)
+    pkaappi-run-bc-string-covered
+    ;; Stepping debugger
+    paal-debug-start! paal-debug-stop!
+    paal-debug-break! paal-debug-unbreak! paal-debug-breaks
+    pkaappi-debug-string pkaappi-debug-file)
   (begin
 
     ;; --- Tree-walking pipeline ---
@@ -104,6 +112,174 @@
     (define (pkaappi-run-bc-file path)
       (let ((g (pkaappi-make-globals)))
         (paal-run-bc (pkaappi-compile-forms (paal-read-file path)) g)))
+
+    ;; --- Stepping debugger ---
+    ;;
+    ;; The VM half is in (kaappi paal vm-bc): it raises call and return events
+    ;; and asks a hook what to do next.  This half supplies the two hooks worth
+    ;; having — one scripted, for the test suite, and one that talks to a
+    ;; terminal, for `paal debug`.
+    ;;
+    ;; Both run the HOST pipeline, for the same reason `--profile` does: the
+    ;; self-hosted path executes the program through the paal-compiled copy of
+    ;; the VM, which has its own %debug-hook that setting this one does not
+    ;; reach.
+
+    ;; Run `src` under `hook`.  With breakpoint names given the session starts
+    ;; running and first stops at one of them; with none it stops at the first
+    ;; call, which is where an interactive session sets its breakpoints.
+    ;;
+    ;; The debugger is turned off again even if the program raises — otherwise
+    ;; a hook installed by a failed run would still be armed for the next one.
+    (define (pkaappi-debug-string src hook . opts)
+      (let ((g      (pkaappi-make-globals))
+            (breaks (if (null? opts) '() (car opts))))
+        (paal-debug-start! g hook (if (null? breaks) 'step 'run))
+        (for-each paal-debug-break! breaks)
+        (guard (e (#t (paal-debug-stop!) (raise e)))
+          (let ((result (paal-run-bc (pkaappi-compile src) g)))
+            (paal-debug-stop!)
+            result))))
+
+    (define (pkaappi-debug-file path . user-args)
+      (let ((g (pkaappi-make-globals (cons path user-args))))
+        (paal-debug-start! g (%debug-console-hook g))
+        (display "paal debugger: h for help, c to run, q to quit\n")
+        (guard (e (#t (paal-debug-stop!) (raise e)))
+          (let ((result (paal-run-bc
+                          (pkaappi-compile-forms (paal-read-file path)) g)))
+            (paal-debug-stop!)
+            result))))
+
+    ;; A procedure printed in full is its entire bytecode function — pages of
+    ;; vectors.  Anything a debugger displays goes through here first.  Only the
+    ;; value itself is abbreviated, not procedures buried inside a list; that is
+    ;; rare enough not to justify walking every structure a program prints.
+    (define (%debug-write v)
+      (cond
+        ((closure? v)
+         (display "#<procedure ")
+         (display (%debug-label (bytecode-function-name (closure-function v))))
+         (display ">"))
+        ((bytecode-function? v)
+         (display "#<code ")
+         (display (%debug-label (bytecode-function-name v)))
+         (display ">"))
+        (else (write v))))
+
+    (define (%debug-label name) (if name name "<anonymous>"))
+
+    ;; (name arg ...) shown as the call it was.
+    (define (%debug-form name args)
+      (display "(")
+      (display (%debug-label name))
+      (for-each (lambda (a) (display " ") (%debug-write a)) args)
+      (display ")"))
+
+    (define (%debug-announce kind name value depth)
+      (if (eq? kind 'call)
+          (begin (display "call   ") (%debug-form name value))
+          (begin (display "return ")
+                 (display (%debug-label name))
+                 (display " -> ")
+                 (%debug-write value)))
+      (display "   [depth ") (display depth) (display "]")
+      (newline))
+
+    (define (%debug-backtrace-show bt)
+      (let loop ((fs bt) (i 0))
+        (unless (null? fs)
+          (display "#") (display i) (display "  ")
+          (%debug-form (car (car fs)) (cdr (car fs)))
+          (newline)
+          (loop (cdr fs) (+ i 1)))))
+
+    (define (%debug-breaks-show)
+      (let ((bs (paal-debug-breaks)))
+        (if (null? bs)
+            (display "no breakpoints\n")
+            (begin
+              (display "breakpoints:")
+              (for-each (lambda (b) (display " ") (display b)) bs)
+              (newline)))))
+
+    (define (%debug-help)
+      (display "  s, step      run to the next call or return\n")
+      (display "  n, next      run to the next event in this frame or a caller\n")
+      (display "  f, finish    run until this frame returns\n")
+      (display "  c, continue  run to the next breakpoint\n")
+      (display "  b [name]     set a breakpoint on a procedure, or list them\n")
+      (display "  d <name>     delete a breakpoint\n")
+      (display "  bt           backtrace: every live frame and its arguments\n")
+      (display "  p <name>     print a top-level binding\n")
+      (display "  q, quit      stop the program\n")
+      (display "  h, help      this list\n")
+      (display "  <enter>      repeat step\n"))
+
+    ;; Whitespace-separated words.  A one-line splitter rather than `read`,
+    ;; because a command is not a datum: `b foo` is two words, and `bt` must not
+    ;; read as the symbol bt followed by whatever the next line happens to hold.
+    (define (%debug-tokens line)
+      (let ((n (string-length line)))
+        (let loop ((i 0) (start 0) (acc '()))
+          (define (flush) (if (> i start) (cons (substring line start i) acc) acc))
+          (cond
+            ((= i n) (reverse (flush)))
+            ((or (char=? (string-ref line i) #\space)
+                 (char=? (string-ref line i) #\tab))
+             (loop (+ i 1) (+ i 1) (flush)))
+            (else (loop (+ i 1) start acc))))))
+
+    ;; Closes over the globals table so `p` can look a binding up.  The hook
+    ;; protocol deliberately hands over data only, so the table has to come from
+    ;; here — the one place that has both it and the terminal.
+    (define (%debug-console-hook g)
+      (lambda (kind name value depth backtrace)
+        (%debug-announce kind name value depth)
+        (let prompt ()
+          (display "(paal) ")
+          (let ((line (read-line)))
+            (if (eof-object? line)
+                ;; No terminal left to ask.  Continuing runs the program to
+                ;; completion, which is the only answer that terminates.
+                'continue
+                (let ((ts (%debug-tokens line)))
+                  (if (null? ts)
+                      'step
+                      (let ((cmd (car ts)) (rest (cdr ts)))
+                        (cond
+                          ((or (string=? cmd "s") (string=? cmd "step"))     'step)
+                          ((or (string=? cmd "n") (string=? cmd "next"))     'next)
+                          ((or (string=? cmd "f") (string=? cmd "finish"))   'finish)
+                          ((or (string=? cmd "c") (string=? cmd "continue")) 'continue)
+                          ((or (string=? cmd "q") (string=? cmd "quit"))     (exit 0))
+                          ((or (string=? cmd "bt") (string=? cmd "where"))
+                           (%debug-backtrace-show backtrace) (prompt))
+                          ((string=? cmd "b")
+                           (unless (null? rest)
+                             (paal-debug-break! (string->symbol (car rest))))
+                           (%debug-breaks-show) (prompt))
+                          ((string=? cmd "d")
+                           (if (null? rest)
+                               (display "usage: d <name>\n")
+                               (paal-debug-unbreak! (string->symbol (car rest))))
+                           (%debug-breaks-show) (prompt))
+                          ((string=? cmd "p")
+                           (if (null? rest)
+                               (display "usage: p <name>\n")
+                               (let ((hit (assq (string->symbol (car rest))
+                                                (vector-ref g 0))))
+                                 (if hit
+                                     (begin (%debug-write (cdr hit)) (newline))
+                                     (display "unbound\n"))))
+                           (prompt))
+                          ((or (string=? cmd "h") (string=? cmd "help")
+                               (string=? cmd "?"))
+                           (%debug-help) (prompt))
+                          (else
+                           (display "unknown command: ") (display cmd)
+                           (display "  (h for help)") (newline)
+                           (prompt)))))))))))
 
     ;; --- Multi-file sequential loading ---
 

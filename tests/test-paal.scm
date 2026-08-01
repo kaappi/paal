@@ -2769,4 +2769,213 @@
     (guard (e (#t 'boundary))
       (pkaappi-run-bc-string "(fiber? (spawn (lambda () 1)))"))))
 
+;; ---------------------------------------------------------------
+;; Stepping debugger
+;; ---------------------------------------------------------------
+;;
+;; The VM raises call and return events and asks a hook what to do next.  The
+;; hook is handed data only — no frame, register or closure object — so a test
+;; hook is an ordinary procedure recording what it saw and replaying a scripted
+;; list of commands, and the whole debugger is testable without a terminal.
+;;
+;; The programs below use (+ 0 ...) around each inner call on purpose: that
+;; makes the call non-tail, so each one really pushes a frame and the depths
+;; below are the depths of a chain rather than of a reused frame.
+
+(define (debug-events src cmds . opts)
+  (let ((log '()) (rest cmds))
+    (apply pkaappi-debug-string src
+           (lambda (kind name value depth backtrace)
+             (set! log (cons (list kind name value depth backtrace) log))
+             (if (null? rest)
+                 'continue
+                 (let ((c (car rest))) (set! rest (cdr rest)) c)))
+           opts)
+    (reverse log)))
+
+;; (kind name) per event — the shape of a session, without the values.
+(define (debug-steps src cmds . opts)
+  (map (lambda (e) (list (car e) (cadr e)))
+       (apply debug-events src cmds opts)))
+
+(define debug-chain
+  "(define (leaf x) (+ 1 (* x 2)))
+   (define (mid y) (+ 0 (leaf y)))
+   (define (top z) (+ 0 (mid z)))
+   (top 3)")
+
+(test-group "debugger"
+  ;; Six events, not seven: (top 3) is the program's last expression and so a
+  ;; tail call, which reuses the top-level frame rather than pushing one.  `top`
+  ;; returning is therefore the program returning.
+  (test-equal "step visits every call and every return"
+    '((call top) (call mid) (call leaf)
+      (return leaf) (return mid) (return top))
+    (debug-steps debug-chain '(step step step step step step)))
+
+  ;; next at (call mid) runs mid to completion — including leaf, and mid's own
+  ;; return, both of which are deeper than the frame next was issued in.  The
+  ;; next thing that happens in `top` is `top` returning.
+  (test-equal "next runs the callee to completion"
+    '((call top) (call mid) (return top))
+    (debug-steps debug-chain '(step next next next)))
+
+  ;; finish at a call event finishes the frame the call is being made *from*,
+  ;; which is the enclosing frame — the same as gdb, where finish completes the
+  ;; selected frame.  Issued at (call leaf) it runs to (return mid), skipping
+  ;; leaf's own return underneath it.
+  (test-equal "finish runs out the enclosing frame"
+    '((call top) (call mid) (call leaf) (return mid) (return top))
+    (debug-steps debug-chain '(step step finish finish finish)))
+
+  ;; With breakpoints given the session starts running rather than stopping at
+  ;; the first call, so this whole program produces exactly one event.
+  (test-equal "a breakpoint stops at its procedure and nothing else"
+    '((call leaf))
+    (debug-steps debug-chain '() '(leaf)))
+
+  (test-equal "a breakpoint fires on every call"
+    '((call leaf) (call leaf) (call leaf))
+    (debug-steps "(define (leaf x) (* x 2))
+                  (list (leaf 1) (leaf 2) (leaf 3))"
+                 '() '(leaf)))
+
+  ;; The backtrace names each live frame and the arguments it was called with.
+  ;; The top-level frame is absent here for the reason given above — (top 3)
+  ;; replaced it.
+  (test-equal "the backtrace carries each frame's arguments"
+    '(((mid 3) (top 3)))
+    (map (lambda (e) (car (cddddr e)))
+         (debug-events debug-chain '() '(leaf))))
+
+  (test-equal "the backtrace depth counts live frames"
+    '(2)
+    (map cadddr (debug-events debug-chain '() '(leaf))))
+
+  ;; pkaappi-make-globals installs paal-compiled map, filter and friends before
+  ;; the program is compiled, and paal-debug-start! snapshots them so stepping
+  ;; never descends into the blob.  The skip is by closure identity, so the
+  ;; anonymous lambda handed to map still stops — four events for two elements,
+  ;; none of them map's.
+  (test-equal "the globals blob is skipped but a lambda passed to it is not"
+    '((call #f) (return #f) (call #f) (return #f))
+    (debug-steps "(map (lambda (v) (* v v)) '(1 2))" '(step step step step)))
+
+  ;; A call event reports the arguments as passed; the backtrace reports them as
+  ;; bound, which for a variadic procedure means the rest list is already built.
+  ;; Both are right, and they differ.
+  (test-equal "variadic arguments: as passed at the call, as bound in the frame"
+    '((call (1 2 3)) (return ((v 1 (2 3)))))
+    (map (lambda (e)
+           (list (car e) (if (eq? (car e) 'call) (caddr e) (car (cddddr e)))))
+         (debug-events "(define (v a . r) (list a r)) (v 1 2 3)" '(step step))))
+
+  ;; Each of the three frames hands 7 up: leaf computes it, and mid and top
+  ;; each add 0 to it.
+  (test-equal "a return event carries the value"
+    '(7 7 7)
+    (let loop ((es (debug-events debug-chain '(step step step step step step)))
+               (acc '()))
+      (cond ((null? es) (reverse acc))
+            ((eq? (car (car es)) 'return) (loop (cdr es) (cons (caddr (car es)) acc)))
+            (else (loop (cdr es) acc)))))
+
+  ;; An answer the VM does not recognize continues, so a hook returning
+  ;; something odd cannot wedge the program it is watching.
+  (test-equal "an unrecognized command continues"
+    '((call top))
+    (debug-steps debug-chain '(nonsense)))
+
+  ;; paal-debug-start! clears them, so one session cannot inherit another's.
+  (test-equal "starting a session clears the previous breakpoints"
+    '()
+    (begin
+      (debug-steps debug-chain '() '(leaf))
+      (debug-steps "1" '(continue))
+      (paal-debug-breaks)))
+
+  (test-equal "breakpoints can be set and deleted"
+    '((b) (a b) (a) ())
+    (let* ((r1 (begin (paal-debug-break! 'b) (paal-debug-breaks)))
+           (r2 (begin (paal-debug-break! 'a) (paal-debug-breaks)))
+           (r3 (begin (paal-debug-unbreak! 'b) (paal-debug-breaks)))
+           (r4 (begin (paal-debug-unbreak! 'a) (paal-debug-breaks))))
+      (list r1 r2 r3 r4)))
+
+  ;; Setting the same name twice is not two breakpoints.
+  (test-equal "a breakpoint set twice is set once"
+    '(dup)
+    (begin (paal-debug-break! 'dup) (paal-debug-break! 'dup)
+           (let ((bs (paal-debug-breaks))) (paal-debug-unbreak! 'dup) bs)))
+
+  ;; A hook left armed by a failed run would fire during the next one, which is
+  ;; how a debugger session leaks into a program that never asked for one.
+  ;; The count is taken over the *second* run, which asked for no debugger at
+  ;; all: if the first run's hook were still armed it would fire there.
+  (test-equal "a raise inside the program still turns the debugger off"
+    0
+    (let ((n 0))
+      (guard (e (#t #f))
+        (pkaappi-debug-string "(define (f) (raise 'boom)) (f)"
+                              (lambda (kind name value depth bt)
+                                (set! n (+ n 1))
+                                'continue)))
+      (set! n 0)
+      (pkaappi-run-bc-string "(define (g) 1) (g)")
+      n))
+
+  (test-equal "the debugged program still returns its value"
+    7
+    (pkaappi-debug-string debug-chain
+                          (lambda (kind name value depth bt) 'continue)))
+
+  ;; A guard's body thunk and handler are entered through paal-call-value, not
+  ;; do-call!, so they raise no call event of their own — what you see is the
+  ;; calls made inside them.  Stepping through a guard therefore works; it just
+  ;; does not announce the compiler-generated thunk.
+  (test-equal "stepping works inside a guard body"
+    '((call k) (call h) (return h) (return k))
+    (debug-steps "(define (h) 1)
+                  (define (k) (guard (e (#t 'caught)) (h)))
+                  (k)"
+                 '(step step step step)))
+
+  ;; `paal debug` end to end, terminal and all — the console hook is the only
+  ;; part of this that talks to ports, so it is driven through string ports
+  ;; rather than left to a manual check.  The transcript is asserted whole: it
+  ;; is the debugger's entire user interface, and a change to it should have to
+  ;; be written down.
+  (test-equal "the console debugger runs a file"
+    (string-append
+      "paal debugger: h for help, c to run, q to quit\n"
+      "call   (leaf 4)   [depth 1]\n"
+      "(paal) #0  (top-level)\n"       ; bt, before leaf is entered
+      "(paal) #<procedure leaf>\n"     ; p leaf — abbreviated, not pages of bytecode
+      "(paal) unbound\n"               ; p nosuch
+      "(paal) no breakpoints\n"        ; b with no name lists them
+      "(paal) ")                       ; c, and the program runs out
+    (let ((p "paal-debug-tmp.scm"))
+      (let ((port (open-output-file p)))
+        (display "(define (leaf x) (* x 2))\n(+ 0 (leaf 4))\n" port)
+        (close-output-port port))
+      (let ((out (open-output-string)))
+        (parameterize ((current-input-port
+                         (open-input-string "bt\np leaf\np nosuch\nb\nc\n"))
+                       (current-output-port out))
+          (pkaappi-debug-file p))
+        (delete-file p)
+        (get-output-string out))))
+
+  (test-equal "the console debugger returns the program's value"
+    8
+    (let ((p "paal-debug-val-tmp.scm"))
+      (let ((port (open-output-file p)))
+        (display "(define (leaf x) (* x 2))\n(+ 0 (leaf 4))\n" port)
+        (close-output-port port))
+      (let ((r (parameterize ((current-input-port (open-input-string "c\n"))
+                              (current-output-port (open-output-string)))
+                 (pkaappi-debug-file p))))
+        (delete-file p)
+        r))))
+
 (test-exit)

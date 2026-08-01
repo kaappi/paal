@@ -17,17 +17,27 @@ make run ARGS="compile f.scm -o f.pbc" # compile to .pbc bytecode
 make run ARGS="eval '(+ 1 2)'"         # evaluate an expression
 make run ARGS="expand file.scm"        # print expanded forms (diagnostic)
 make run ARGS="ir file.scm"            # print IR nodes (diagnostic)
+make run ARGS="debug file.scm"         # run under the stepping debugger
 make pbc-pipeline                      # build pipeline cache (speeds up self-hosted path)
 ```
 
 ## CLI
 
 `paal` follows the same interpreter-style conventions as `kaappi`: no args starts
-the REPL, a positional file runs it, subcommands (`expand`, `ir`, `eval`, `compile`,
-`repl`) and flags (`--help`, `--version`) work the same way.
+the REPL, a positional file runs it, and subcommands (`check`, `fmt`, `compile`,
+`expand`, `ir`, `eval`, `repl`, `run`) and flags (`--lib-path`, `--help`,
+`--version`) work the same way. Paal-only: `debug`, `--cache`, `--profile`,
+`--coverage`.
 
-**Exceptions:** `compile` outputs `.pbc` text bytecode (not a native binary); `--lib-path`
-is not accepted.
+**Exceptions:** `compile` outputs `.pbc` text bytecode (not a native binary); in a
+`make binary` build `check` and `fmt` are unreachable, because kaappi's own CLI
+consumes those words before paal starts (kaappi/kaappi#2010) — bootstrap mode is
+unaffected.
+
+`paal debug <file>` stops at each call and return: `s`/`n`/`f`/`c` to step, step
+over, finish the frame and continue; `b <name>` to break on a procedure, `bt` for
+a backtrace with arguments, `p <name>` to print a top-level binding, `h` for the
+list. See `docs/architecture.md` § The stepping debugger.
 
 ## Architecture
 
