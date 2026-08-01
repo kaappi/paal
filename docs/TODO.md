@@ -325,7 +325,7 @@ no `cache/` and no `lib/` present:
 | `paal eval '(* 6 7)'` | works |
 | `paal version` | works |
 | `paal` (no args) | works — REPL over the HOST pipeline |
-| `(import (srfi 1))` | fails — the SRFI `.sld` files are on disk, not in the binary |
+| `(import (srfi 1))` | works — the SRFI sources are embedded |
 | `paal check f.scm` | **runs the program** — kaappi/kaappi#2010 |
 | `paal fmt --check f.scm` | same |
 
@@ -353,10 +353,18 @@ no `cache/` and no `lib/` present:
       too. Bootstrap mode is unaffected, so `kaappi src/main.scm check f.scm`
       is correct today.
 
-- [ ] **Bundle the SRFI libraries** — `(import (srfi 1))` fails from a binary
-      run outside the repo: the `.sld` files are read from disk. Either embed
-      them or resolve the search path relative to the executable, which R7RS
-      gives no way to locate.
+- [x] **Bundle the SRFI libraries** — all ten are embedded as source in
+      `(kaappi paal embedded)`, which the expander consults *before* the
+      search path, so a file on disk cannot shadow a bundled library — that
+      would make a binary's behaviour depend on its working directory, which
+      is the thing bundling exists to avoid. Verified with `lib/srfi/` removed
+      entirely: `(import (srfi 1))` still resolves.
+
+      `make embed-srfi` regenerates it, and `make binary` runs the generator
+      first so a binary can never ship libraries that differ from
+      `lib/srfi/`. The file is committed rather than built on demand, so a
+      fresh checkout works without the generator having run and so the diff
+      shows when a bundled library changes.
 - [ ] **Bundle pipeline `.pbc` files** — not needed for correctness now that
       the HOST fallback is compiled in, but the self-hosted path is the faster
       one and is unavailable without `cache/`.

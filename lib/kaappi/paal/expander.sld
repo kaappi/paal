@@ -15,7 +15,8 @@
 ;;;   define-record-type
 
 (define-library (kaappi paal expander)
-  (import (scheme base) (scheme file) (scheme read))
+  (import (scheme base) (scheme file) (scheme read)
+          (kaappi paal embedded))
   (export paal-expand paal-expand-all paal-macros-reset! gref-name
           paal-lib-path-add! paal-lib-paths-list paal-libraries-reset!)
   (begin
@@ -254,7 +255,37 @@
     ;; are recognised by builtin-library? now, so nothing legitimate reaches
     ;; here.  The error names the searched path, since "not found" is almost
     ;; always a --lib-path that was not passed.
+    ;; A bundled library is consulted before the search path, so a file on
+    ;; disk cannot shadow one — that would make a binary's behaviour depend on
+    ;; its working directory, which is what bundling exists to avoid.
     (define (load-library! name)
+      (let ((embedded (paal-embedded-source name)))
+        (if embedded
+            (begin
+              (set! %paal-loading (cons name %paal-loading))
+              (let ((result (install-library-source! name embedded)))
+                (set! %paal-loading (cdr %paal-loading))
+                result))
+            (load-library-from-path! name))))
+
+    (define (install-library-source! name text)
+      (let ((form (let loop ((fs (paal-read-forms-from-string text)))
+                    (cond
+                      ((null? fs)
+                       (error "paal: no define-library in bundled source" name))
+                      ((and (pair? (car fs)) (eq? (caar fs) 'define-library))
+                       (car fs))
+                      (else (loop (cdr fs)))))))
+        (install-library! name (cddr form))))
+
+    (define (paal-read-forms-from-string text)
+      (let ((port (open-input-string text)))
+        (let loop ((form (read port)) (acc '()))
+          (if (eof-object? form)
+              (reverse acc)
+              (loop (read port) (cons form acc))))))
+
+    (define (load-library-from-path! name)
       (let ((path (find-library-file name)))
         (if (not path)
             (error "paal: library not found"

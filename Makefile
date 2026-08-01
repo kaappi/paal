@@ -5,7 +5,7 @@ KAAPPI_TEST ?= ../kaappi-test/lib
 
 LIBS = --lib-path $(LIB) --lib-path $(KAAPPI_TEST)
 
-.PHONY: all test coverage run binary check-binary pbc-pipeline clean-cache clean
+.PHONY: all test coverage run binary check-binary pbc-pipeline embed-srfi clean-cache clean
 
 all: test
 
@@ -30,6 +30,9 @@ run:
 KAAPPI_BIN = $(KAAPPI_SRC)/zig-out/bin/kaappi
 
 binary: src/main.scm
+	# Fail early if the embedded SRFI sources are stale, rather than shipping
+	# a binary whose bundled libraries differ from lib/srfi/.
+	python3 tools/embed-srfi.py
 	# Build plain kaappi first so KAAPPI_BIN is not a previous bundled paal.
 	# zig caches aggressively, so this is fast if nothing changed.
 	cd $(KAAPPI_SRC) && zig build
@@ -49,6 +52,11 @@ check-binary: paal
 	./paal version
 	./paal eval '(+ 1 2)'
 	./paal eval '(define (fact n) (if (= n 0) 1 (* n (fact (- n 1))))) (fact 5)'
+
+# Regenerate the embedded SRFI sources compiled into the binary.  Run after
+# changing anything under lib/srfi/; the result is committed.
+embed-srfi:
+	python3 tools/embed-srfi.py
 
 # Build the pipeline bytecode cache (speeds up self-hosted run/compile).
 # Run once after checkout, and again whenever a paal library file changes.

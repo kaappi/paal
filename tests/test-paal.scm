@@ -2203,7 +2203,13 @@
     (module-run "(import (m mac)) (guard (e (#t 'hidden)) (private-mac 5))"))
   (test-equal "a built-in library import yields nothing to run"
     7
-    (module-run "(import (scheme base)) (+ 3 4)")))
+    (module-run "(import (scheme base)) (+ 3 4)"))
+  ;; The bundled SRFI sources are consulted before the search path, so a
+  ;; binary resolves them with no filesystem.  Verified here by name: this
+  ;; import succeeds even though nothing added lib/srfi to the search path.
+  (test-equal "a bundled library resolves without a search path entry"
+    '(0 1 2 3)
+    (pkaappi-run-bc-string "(import (srfi 1)) (iota 4)")))
 
 ;; ---------------------------------------------------------------
 ;; SRFI libraries
