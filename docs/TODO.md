@@ -3,7 +3,7 @@
 Goal: make `paal` a correct R7RS-small Scheme implementation that runs the
 same programs as `kaappi`, with the same CLI conventions.
 
-Current: Stage 6 complete (self-hosting). **529 tests pass** (was 194 before Phase 1–2).
+Current: Stage 6 complete (self-hosting). **532 tests pass** (was 194 before Phase 1–2).
 
 ---
 
@@ -314,7 +314,13 @@ would otherwise bind one identifier two ways, which R7RS 5.2 makes an error.
       (char *or* predicate), contains, join/split/tokenize, fold, filter.
 - [x] SRFI 9 — import path for the core `define-record-type`.
 - [x] SRFI 23 — import path for `error`.
-- [ ] SRFI 64 — test framework (needed to eventually replace `(kaappi test)` dependency)
+- [x] SRFI 64 — test framework. Test forms, grouping, `test-skip` /
+      `test-expect-fail`, and the result counters. The assertions are *syntax*,
+      not procedures: a procedural `(test-equal expected actual)` evaluates
+      `actual` at the call site, so a raise escapes before the framework sees
+      it and takes the rest of the group with it — the failure mode
+      `(kaappi test)` had. Not implemented: `test-apply`,
+      `test-with-runner`, custom runners.
 - [x] SRFI 39 — import path for `make-parameter`/`parameterize`. SRFI 39 also
       permits `(p v)` to set a parameter, which R7RS dropped and paal does not
       support.
@@ -398,8 +404,21 @@ Issues that span stages rather than belonging to one phase.
 
 **Open:**
 
-- [ ] **A library's private macros leak to its importer** — private *values*
-      are renamed, and the renaming is what hides them; macros are not.
+- [ ] **A macro template cannot name a library's private binding** — two
+      sides of one limitation. A private *macro* leaks to the importer,
+      because dropping it breaks an exported macro whose template calls it.
+      And an exported macro whose template names a private *value* breaks
+      outright: the value is renamed to a mangled name and the template still
+      names the original. SRFI 64 hit the second half — its assertion macros
+      expand to `%compare` and friends — and works around it by exporting
+      them, which is why they appear in its export list.
+
+      Both need exported templates rewritten to name the mangled binding, and
+      by the time a macro is in the table it is a closure over its rules
+      rather than data one can walk. Storing the rules alongside the
+      transformer is the way in.
+
+      Previously recorded as macro leakage only:
       Dropping unexported macros after loading was tried first and breaks an
       *exported* macro whose template calls a private one — the template still
       names it and the table no longer has it. Fixing it properly means

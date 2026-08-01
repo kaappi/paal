@@ -2506,4 +2506,50 @@
       "(define-record-type <p> (mk a) p? (a get-a))
        (list (case 1 ((1) 'one) (else 'other)) (get-a (mk 5)))")))
 
+;; ---------------------------------------------------------------
+;; SRFI 64
+;; ---------------------------------------------------------------
+;;
+;; The assertions are syntax, not procedures: a procedural
+;; (test-equal expected actual) evaluates `actual` at the call site, so a
+;; raise escapes before the framework sees it and takes the rest of the group
+;; with it.  Thunking inside the macro is what makes a raise a failed test.
+
+(test-group "srfi 64"
+  ;; 5 pass (a c d e g), 3 fail (b, f which does not raise, j which raises),
+  ;; 1 skip, 1 expected failure.
+  (test-equal "counts passes, failures, skips and expected failures"
+    '(5 3 1 1)
+    (pkaappi-run-bc-string
+      "(import (srfi 64))
+       (test-begin \"demo\")
+       (test-equal \"a\" 4 (+ 2 2))
+       (test-equal \"b\" 5 (+ 2 2))
+       (test-assert \"c\" (= 1 1))
+       (test-eqv \"d\" 'a 'a)
+       (test-error \"e\" (car '()))
+       (test-error \"f\" 1)
+       (test-approximate \"g\" 1.0 1.05 0.1)
+       (test-skip \"h\") (test-equal \"h\" 1 2)
+       (test-expect-fail \"i\") (test-equal \"i\" 1 2)
+       (test-equal \"j\" 1 (car '()))
+       (test-end \"demo\")
+       (list (test-runner-pass-count) (test-runner-fail-count)
+             (test-runner-skip-count) (test-runner-xfail-count))"))
+  ;; The property the whole design exists for.
+  (test-equal "a raising test fails that test and the run continues"
+    '(1 1)
+    (pkaappi-run-bc-string
+      "(import (srfi 64))
+       (test-equal \"raises\" 1 (car '()))
+       (test-equal \"after\" 2 2)
+       (list (test-runner-pass-count) (test-runner-fail-count))"))
+  (test-equal "groups nest"
+    2
+    (pkaappi-run-bc-string
+      "(import (srfi 64))
+       (test-group \"outer\" (test-group \"inner\" (test-assert \"x\" #t))
+                            (test-assert \"y\" #t))
+       (test-runner-pass-count)")))
+
 (test-exit)
