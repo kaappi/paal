@@ -2552,4 +2552,44 @@
                             (test-assert \"y\" #t))
        (test-runner-pass-count)")))
 
+;; ---------------------------------------------------------------
+;; Bytecode cache for user programs
+;; ---------------------------------------------------------------
+;;
+;; Opt-in (`paal --cache file.scm`) because the cache file lands beside the
+;; source — R7RS has no mkdir, so there is nowhere else to put it.  The hash
+;; is in the *name*, so a hit is an existence check and an edited source
+;; simply misses instead of needing the stale entry detected.
+
+(test-group "bytecode cache"
+  (test-equal "a miss compiles and writes, a hit reuses"
+    '(42 42 #t)
+    (let ((src "paal-cache-tmp.scm"))
+      (let ((port (open-output-file src)))
+        (display "(* 6 7)" port) (close-output-port port))
+      (let* ((a      (pkaappi-run-file-cached src))
+             (cached (pkaappi-cache-path src))
+             (wrote  (file-exists? cached))
+             (b      (pkaappi-run-file-cached src)))
+        (delete-file cached)
+        (delete-file src)
+        (list a b wrote))))
+  ;; The hash is in the name, so an edit misses rather than needing the stale
+  ;; entry detected -- and leaves the old entry behind, which is why
+  ;; pkaappi-cache-path is exported.
+  (test-equal "an edited source misses and recompiles"
+    '(1 2)
+    (let ((src "paal-cache-edit-tmp.scm"))
+      (define (write-src! text)
+        (let ((port (open-output-file src)))
+          (display text port) (close-output-port port)))
+      (write-src! "1")
+      (let* ((p1 (begin (pkaappi-cache-path src)))
+             (a  (pkaappi-run-file-cached src)))
+        (write-src! "2")
+        (let* ((p2 (pkaappi-cache-path src))
+               (b  (pkaappi-run-file-cached src)))
+          (delete-file p1) (delete-file p2) (delete-file src)
+          (list a b))))))
+
 (test-exit)

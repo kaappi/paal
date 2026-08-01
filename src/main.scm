@@ -24,6 +24,7 @@
   (display "  eval <expr>             Evaluate an expression\n")
   (display "\nOptions:\n")
   (display "  --lib-path <dir>        Add a directory to the library search path\n")
+  (display "  --cache                 Cache compiled bytecode beside the source\n")
   (display "  -h, --help              Show this help\n")
   (display "  --version               Show version\n"))
 
@@ -32,17 +33,24 @@
   (let ((len (string-length path)))
     (if (and (>= len 4) (string=? (substring path (- len 4) len) ".pbc"))
         (pkaappi-run-pbc-file path)  ; .pbc: no command-line forwarding yet
-        (apply pkaappi-self-run-file path extra-args))))
+        (if %use-cache
+            (pkaappi-run-file-cached path (cons path extra-args))
+            (apply pkaappi-self-run-file path extra-args)))))
 
 ;; --lib-path <dir> may appear any number of times, before the subcommand.
 ;; Directories are searched in the order given, after the default ".".
+;; --cache turns on the opt-in bytecode cache; see pkaappi-run-file-cached.
+(define %use-cache #f)
+
 (define (strip-lib-paths args)
   (let loop ((as args))
+    (if (and (pair? as) (string=? (car as) "--cache"))
+        (begin (set! %use-cache #t) (loop (cdr as)))
     (if (and (pair? as) (string=? (car as) "--lib-path"))
         (if (null? (cdr as))
             (begin (display "error: --lib-path: missing directory\n") (exit 1))
             (begin (paal-lib-path-add! (cadr as)) (loop (cddr as))))
-        as)))
+        as))))
 
 (define (main raw-args)
   (define args (strip-lib-paths raw-args))

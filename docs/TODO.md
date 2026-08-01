@@ -3,7 +3,7 @@
 Goal: make `paal` a correct R7RS-small Scheme implementation that runs the
 same programs as `kaappi`, with the same CLI conventions.
 
-Current: Stage 6 complete (self-hosting). **532 tests pass** (was 194 before Phase 1–2).
+Current: Stage 6 complete (self-hosting). **534 tests pass** (was 194 before Phase 1–2).
 
 ---
 
@@ -250,8 +250,16 @@ Gaps in `lib/kaappi/paal/reader.sld`:
       table, so a `define-syntax` in one cannot silently satisfy a reference in
       the next.
 - [ ] **`fmt` subcommand** — canonical 2-space formatter with `--check` mode for CI
-- [ ] **Bytecode cache for user programs** — cache compiled `.scm` keyed by source
-      hash; currently every run recompiles from source
+- [x] **Bytecode cache for user programs** — `paal --cache file.scm` writes
+      `file.scm.<hash>.pbc` beside the source and reuses it while the source is
+      unchanged. Opt-in, because R7RS has no way to create a directory, so the
+      cache file has nowhere to go but the user's tree — and a run of their
+      program should not put it there unasked. The hash is in the *name*, so a
+      hit is an existence check and an edit simply misses rather than needing
+      the stale entry detected; the cost is that old entries accumulate, and
+      paal never removes them because it cannot tell its own leavings from a
+      `.pbc` compiled on purpose. `pkaappi-cache-path` names the current entry
+      so a caller can clean up.
 
 ---
 

@@ -41,7 +41,9 @@
     paal-write-bc paal-read-bc paal-write-bc-file paal-read-bc-file
     pkaappi-compile-to-file pkaappi-run-pbc-file
     ;; Compile-only checking
-    pkaappi-check-file pkaappi-check-files)
+    pkaappi-check-file pkaappi-check-files
+    ;; Opt-in bytecode cache for user programs
+    pkaappi-run-file-cached pkaappi-cache-path)
   (begin
 
     ;; --- Tree-walking pipeline ---
@@ -529,6 +531,58 @@
     (define (pkaappi-compile-to-file input output)
       (let ((fn (pkaappi-compile-forms (paal-read-file input))))
         (paal-write-bc-file fn output)))
+
+    ;; --- Bytecode cache for user programs ---
+    ;;
+    ;; Opt-in, via `paal --cache file.scm`.  Off by default because the cache
+    ;; file lands beside the source: R7RS has no way to create a directory, so
+    ;; there is nowhere else to put it, and writing into a user's tree without
+    ;; being asked is not something a run of their program should do.
+    ;;
+    ;; The hash goes in the *name*, so a hit is an existence check and a source
+    ;; edit simply misses rather than needing the stale entry detected.  Old
+    ;; entries accumulate; `paal --cache` never deletes, since it cannot tell
+    ;; its own leavings from a .pbc the user compiled on purpose.
+
+    (define (%paal-source-hash text)
+      ;; djb2 over the characters, reduced mod a prime that fits a fixnum.
+      (let loop ((i 0) (h 5381))
+        (if (= i (string-length text))
+            h
+            (loop (+ i 1)
+                  (modulo (+ (* h 33) (char->integer (string-ref text i)))
+                          1000000007)))))
+
+    ;; Exported: paal never deletes cache entries -- it cannot tell its own
+    ;; leavings from a .pbc the user compiled on purpose -- so anything that
+    ;; wants to clean up needs to be able to name them.
+    (define (pkaappi-cache-path path)
+      (%paal-cache-path path (%paal-read-whole-file path)))
+
+    (define (%paal-cache-path path text)
+      (string-append path "." (number->string (%paal-source-hash text)) ".pbc"))
+
+    ;; Returns the program's value.  A cache miss compiles, writes, and runs;
+    ;; a hit skips the reader, expander, analyzer and emitter entirely.
+    (define (pkaappi-run-file-cached path . opts)
+      (let* ((text  (%paal-read-whole-file path))
+             (cache (%paal-cache-path path text))
+             (args  (if (null? opts) '() (car opts))))
+        (if (file-exists? cache)
+            (paal-run-bc (paal-read-bc-file cache) (pkaappi-make-globals args))
+            (let ((fn (pkaappi-compile text)))
+              ;; Written before running, so a program that fails partway still
+              ;; leaves a usable cache entry -- compilation is what succeeded.
+              (paal-write-bc-file fn cache)
+              (paal-run-bc fn (pkaappi-make-globals args))))))
+
+    (define (%paal-read-whole-file path)
+      (let ((port (open-input-file path)))
+        (let loop ((acc ""))
+          (let ((chunk (read-string 4096 port)))
+            (if (eof-object? chunk)
+                (begin (close-input-port port) acc)
+                (loop (string-append acc chunk)))))))
 
     ;; --- check: compile without running ---
 
