@@ -3,7 +3,7 @@
 Goal: make `paal` a correct R7RS-small Scheme implementation that runs the
 same programs as `kaappi`, with the same CLI conventions.
 
-Current: Stage 6 complete (self-hosting). **550 tests pass** (was 194 before Phase 1–2).
+Current: Stage 6 complete (self-hosting). **551 tests pass** (was 194 before Phase 1–2).
 
 ---
 
@@ -447,7 +447,17 @@ Requires significant new infrastructure; no fixed timeline.
 - [ ] **C FFI** — `(kaappi ffi)` equivalent for paal programs
 - [ ] **Fibers / concurrency** — cooperative green threads + channels
 - [ ] **Native backend** — LLVM or alternative native code generation
-- [ ] **GC** — standalone binary needs its own garbage collector
+- [x] **GC** — nothing to do, for the same reason the self-contained primitive
+      environment turned out to be nothing to do: `make binary` bundles paal
+      into kaappi's runtime, so paal's binary already has kaappi's
+      mark-and-sweep collector. Verified against a bundled binary run outside
+      the repo — 300,000 vector allocations complete, which is far past any
+      plausible heap if nothing were being collected.
+
+      A collector only becomes paal's problem if paal ever stops building on
+      kaappi's runtime. That is not the current design and is not on this
+      list; the entry described a future that the `-Dbundle` approach does not
+      lead to.
 - [ ] **Bignum / rationals / complex** — arbitrary-precision arithmetic
 
 ---
