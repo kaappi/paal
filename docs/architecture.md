@@ -802,6 +802,41 @@ High-level entry points that run the full pipeline:
 
 Individual stage exports are also re-exported for embedding or incremental use.
 
+### Import scope
+
+`(import (scheme base))` is enforced, and the mechanism is a **check rather than
+aliases**. Aliases cannot restrict anything: the globals table holds every primitive
+under its public name, so `(define sin sin)` is a no-op and `get-global sin` resolves
+regardless. Making aliases bite would need a mangled-only table, which breaks the
+globals blob and every cached pipeline library, since both resolve public names.
+
+So after expansion the expander walks the program for free global references, and each
+must be one the program is entitled to: defined by the program, granted by an import, or
+`%`-prefixed (paal's own plumbing). **Only programs with a top-level `import` are
+checked** — every bare script, `paal eval`, the REPL, the blob and each `.pbc` is
+untouched, which is what makes the change safe to land at all.
+
+The partition names the *small* libraries exhaustively and lets `(scheme base)` be
+everything else, because base has some 200 names and a typo while enumerating it would
+sit between a correct program and compiling. A name missing from a small library is only
+over-permissive.
+
+Three things must not leak into the check, and each did once:
+
+| | |
+|---|---|
+| a spliced library **body** | governed by its own imports, not its importer's |
+| a library's **own imports** | `(srfi 1)` imports base; that must not grant the importer base |
+| the emitted **alias forms** | `(define m:sin sin)` names what `prefix` exists to hide |
+
+The first two are handled by `expand-nested` plus a save/restore of the import-scope
+state around the whole of `install-library!` — prologue as well as body. The third by
+recording alias-defined names and skipping those forms.
+
+Deliberate limits, all over-permissive rather than wrongly rejecting: `(scheme cxr)` is
+not partitioned, a modifier over base does not narrow it, and a name belonging to no
+library reaches the runtime rather than the check.
+
 ### One feature list, one owner
 
 `(kaappi paal expander)` exports **`paal-feature-list`**, and it is the single answer to

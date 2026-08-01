@@ -169,6 +169,66 @@
                     (pair? (cdr name))
                     (eq? (cadr name) 'paal)))))
 
+    ;; --- what each (scheme …) library exports -----------------------------
+    ;;
+    ;; `(import (scheme base))` used to hand a program `sin`, `ffi-open` and
+    ;; `spawn` as well, because every `(scheme …)` name resolved to an empty
+    ;; export list against one flat globals table.  A program could import too
+    ;; little and still run — and then fail on a conforming implementation.
+    ;;
+    ;; The table below names the *small* libraries exhaustively and lets
+    ;; `(scheme base)` be everything else.  That inversion is deliberate: base
+    ;; has some 200 names and enumerating it by hand would put a typo between a
+    ;; correct program and compiling, whereas a name missing from a small
+    ;; library is at worst over-permissive.  A name listed here is exported by
+    ;; that library and by no other, so `(scheme base)` does not cover it.
+    ;;
+    ;; Values only, not syntax.  `let`, `guard`, `define-record-type` and the
+    ;; rest are dispatched by keyword in paal-expand regardless of what was
+    ;; imported, so `(import (scheme base))` does not gate them.  Restricting
+    ;; syntax is a separate axis and is not attempted here.
+    (define %paal-scheme-lib-exports
+      '(((scheme inexact) acos asin atan cos exp finite? infinite? log nan?
+                          sin sqrt tan)
+        ((scheme complex) angle imag-part magnitude make-polar make-rectangular
+                          real-part)
+        ((scheme char)    char-alphabetic? char-ci<=? char-ci<? char-ci=?
+                          char-ci>=? char-ci>? char-downcase char-foldcase
+                          char-lower-case? char-numeric? char-upcase
+                          char-upper-case? char-whitespace? digit-value
+                          string-ci<=? string-ci<? string-ci=? string-ci>=?
+                          string-ci>? string-downcase string-foldcase
+                          string-upcase)
+        ((scheme file)    call-with-input-file call-with-output-file delete-file
+                          file-exists? open-binary-input-file
+                          open-binary-output-file open-input-file
+                          open-output-file with-input-from-file
+                          with-output-to-file)
+        ((scheme lazy)    force make-promise promise?)
+        ((scheme load)    load)
+        ((scheme process-context) command-line emergency-exit exit
+                          get-environment-variable get-environment-variables)
+        ((scheme read)    read)
+        ((scheme repl)    interaction-environment)
+        ((scheme time)    current-jiffy current-second jiffies-per-second)
+        ((scheme write)   display write write-shared write-simple)
+        ((scheme eval)    environment eval)
+        ((scheme r5rs)    exact->inexact inexact->exact)
+        ((kaappi ffi)     ffi-open ffi-fn ffi-close ffi-callback
+                          ffi-callback-release ffi-callback? ffi-bytevector-ptr)
+        ((kaappi fibers)  spawn yield fiber-join fiber? make-channel
+                          channel-send channel-receive channel? channel-close!
+                          channel-closed? channel-timeout-exception?
+                          processor-count)))
+
+    ;; Every name any small library claims — the complement of `(scheme base)`.
+    (define (scheme-lib-claimed-names)
+      (append-map cdr %paal-scheme-lib-exports))
+
+    (define (scheme-lib-exports name)
+      (let ((hit (assoc name %paal-scheme-lib-exports)))
+        (and hit (cdr hit))))
+
     ;; A library name component may be a number — (srfi 1), (srfi 133) — so
     ;; symbol->string alone is not enough.
     (define (name-part->string p)
@@ -239,19 +299,25 @@
     (define (resolve-import spec)
       (cond
         ((not (pair? spec)) (error "paal: malformed import spec" spec))
+        ;; The "does the library export this" check is skipped over a library
+        ;; that grants everything — `(scheme base)` has no enumerable export
+        ;; list here, so validating `(only (scheme base) car)` against one
+        ;; would reject a legal program.
         ((eq? (car spec) 'only)
          (let ((base (resolve-import (cadr spec))) (names (cddr spec)))
-           (for-each (lambda (n)
-                       (unless (assq n base)
-                         (error "paal: `only` names a binding the library does not export" n)))
-                     names)
+           (unless (grants-everything? (cadr spec))
+             (for-each (lambda (n)
+                         (unless (assq n base)
+                           (error "paal: `only` names a binding the library does not export" n)))
+                       names))
            (filter (lambda (p) (memq (car p) names)) base)))
         ((eq? (car spec) 'except)
          (let ((base (resolve-import (cadr spec))) (names (cddr spec)))
-           (for-each (lambda (n)
-                       (unless (assq n base)
-                         (error "paal: `except` names a binding the library does not export" n)))
-                     names)
+           (unless (grants-everything? (cadr spec))
+             (for-each (lambda (n)
+                         (unless (assq n base)
+                           (error "paal: `except` names a binding the library does not export" n)))
+                       names))
            (filter (lambda (p) (not (memq (car p) names))) base)))
         ((eq? (car spec) 'prefix)
          (let ((base (resolve-import (cadr spec)))
@@ -273,7 +339,14 @@
 
     (define (library-exports name)
       (cond
-        ((builtin-library? name) '())
+        ;; A builtin's names are already in the globals table, so its aliases
+        ;; are identities — `(sin . sin)`.  They exist so `only`/`except` can
+        ;; validate against a real export list and `prefix`/`rename` can
+        ;; transform one; `expand-one-import` drops identities rather than
+        ;; emitting `(define sin sin)` for every name in the library.
+        ((builtin-library? name)
+         (let ((exports (scheme-lib-exports name)))
+           (if exports (map (lambda (n) (cons n n)) exports) '())))
         ((assoc name %paal-libraries) => cdr)
         ((member name %paal-loading)
          (error "paal: circular import" (reverse (cons name %paal-loading))))
@@ -359,7 +432,8 @@
                       (else (error "paal: malformed export spec" (car specs)))))))))
 
     (define (install-library! name decls)
-      (let* ((imports  (append-map cdr (decls-of decls 'import)))
+      (let* ((%scope    (import-scope-save))
+             (imports  (append-map cdr (decls-of decls 'import)))
              ;; The library's own imports first: they may define macros its
              ;; body uses, and expansion is where a macro takes effect.
              (prologue (map expand-one-import imports))
@@ -371,14 +445,34 @@
              (macros-before %paal-macros)
              ;; Expand to core forms.  Renaming afterwards only has to know
              ;; about `lambda`, since every other binder is gone by then.
-             (core     (paal-expand-all (append included bodies)))
-             (defined  (top-level-defined core))
+             ;; expand-nested, not paal-expand-all: this runs *inside* the
+             ;; expansion of the program that imported this library, and
+             ;; paal-expand-all resets the import-scope state — so an
+             ;; `(import (scheme base) (srfi 1))` lost its own base grant the
+             ;; moment (srfi 1)'s body was expanded, and `+` became unbound.
+             (core     (expand-nested (append included bodies)))
+             (%restored (import-scope-restore! %scope))
+             ;; The prologue is renamed along with the body.  It used to be
+             ;; spliced in untouched, so a library's *imports* landed in its
+             ;; importer under their own names: `(import (m greet))` handed you
+             ;; `cube`, which `(m greet)` does not export, because `(m greet)`
+             ;; imports `(m math)`. Imports were effectively transitive.
+             ;;
+             ;; Flattened first — expand-one-import returns a `begin` per spec,
+             ;; and top-level-defined does not see through one.
+             (flat-pro (append-map (lambda (p)
+                                     (if (and (pair? p) (eq? (car p) 'begin))
+                                         (cdr p)
+                                         (list p)))
+                                   prologue))
+             (all-core (append flat-pro core))
+             (defined  (top-level-defined all-core))
              (tag      (library-name->tag name))
              (renames  (map (lambda (n)
                               (cons n (string->symbol
                                         (string-append tag (symbol->string n)))))
                             defined))
-             (renamed  (map (lambda (f) (rename-core f renames)) core)))
+             (renamed  (map (lambda (f) (rename-core f renames)) all-core)))
         ;; Rewrite this library's macro templates so they name the renamed
         ;; bindings, and mangle the macros it did not export so they stop
         ;; being visible to the importer.  Both directions of the same
@@ -420,8 +514,7 @@
                     exports)))
           (set! %paal-libraries (cons (cons name export-map) %paal-libraries))
           (set! %paal-pending
-                (append %paal-pending
-                        (list (cons name (append prologue renamed)))))
+                (append %paal-pending (list (cons name renamed))))
           export-map)))
 
     ;; Rewrite this library's macro templates so they name the renamed
@@ -536,6 +629,14 @@
     ;; table entry instead, pointing at the same transformer.
     (define (expand-one-import spec)
       (let ((aliases (resolve-import spec)))
+        ;; Record what this spec grants before emitting anything, so the
+        ;; post-expansion scope check knows what the program is entitled to.
+        ;; A builtin library grants its export list; a user library grants the
+        ;; visible half of its alias list, which is what `only`/`prefix`/
+        ;; `rename` have already transformed.
+        (import-scope-note! spec (map car aliases))
+        (import-scope-note-aliases!
+          (map car (filter (lambda (p) (not (eq? (car p) (cdr p)))) aliases)))
         (cons 'begin
               (filter-map
                 (lambda (p)
@@ -545,6 +646,10 @@
                        (unless (eq? (car p) (cdr p))
                          (paal-macro-set! (car p) transformer))
                        #f)
+                      ;; An identity alias is a builtin's own name, already in
+                      ;; the globals table -- `(define sin sin)` would be a
+                      ;; self-reference emitted once per name in the library.
+                      ((eq? (car p) (cdr p)) #f)
                       (else (list 'define (car p) (cdr p))))))
                 aliases))))
 
@@ -569,10 +674,12 @@
         out))
 
     (define (expand-import form)
-      (let ((aliases (map expand-one-import (cdr form))))
+      (let* ((aliases (map expand-one-import (cdr form)))
+             (bodies  (drain-pending!)))
+        (import-scope-note-library! bodies)
         ;; Library bodies must precede the aliases that name into them, and
         ;; both must precede the importing program.
-        (cons 'begin (append (drain-pending!) aliases))))
+        (cons 'begin (append bodies aliases))))
 
     ;; ---------------------------------------------------------------
     ;; syntax-rules implementation
@@ -1191,8 +1298,10 @@
             ;; loading this way into one shared globals table.
             ((define-library)
              (let* ((decls    (cddr form))
+                    (%scope   (import-scope-save))
                     (imports  (append-map cdr (decls-of decls 'import)))
                     (prologue (map expand-one-import imports))
+                    (%restored (import-scope-restore! %scope))
                     (bodies   (append-map cdr (decls-of decls 'begin))))
                (paal-expand
                  (cons 'begin (append (drain-pending!) prologue bodies)))))
@@ -1226,14 +1335,172 @@
              (string=? (substring s 0 6) "%gref%")
              (string->symbol (substring s 6 (string-length s))))))
 
-    (define (paal-expand-all forms)
+    ;; Expand a form list without touching the import-scope state.  Library
+    ;; bodies go through this: they are expanded while the importing program is
+    ;; mid-expansion, and must neither reset its state nor be checked against
+    ;; its imports.
+    ;; The state is saved and restored, not merely left alone: a library body
+    ;; contains its *own* `(import …)` forms, and those would otherwise grant
+    ;; the importing program whatever the library imported.  `(srfi 1)` imports
+    ;; `(scheme base)`, so `(import (srfi 1))` alone was silently granting base
+    ;; — the same leak the library prologue has, arriving by a different route.
+    (define (expand-nested forms)
       (let splice ((fs forms))
         (if (null? fs)
             '()
-            (let ((expanded (paal-expand (car fs))))
-              (if (and (pair? expanded) (eq? (car expanded) 'begin))
-                  (splice (append (cdr expanded) (cdr fs)))
-                  (cons expanded (splice (cdr fs))))))))
+            (let ((e (paal-expand (car fs))))
+              (if (and (pair? e) (eq? (car e) 'begin))
+                  (splice (append (cdr e) (cdr fs)))
+                  (cons e (splice (cdr fs))))))))
+
+    ;; A library is expanded while the importing program is mid-expansion, and
+    ;; both its import *prologue* and its *body* run through expand-one-import
+    ;; and paal-expand — so both would otherwise grant the importing program
+    ;; whatever the library imported.  `(srfi 1)` imports `(scheme base)`, so
+    ;; `(import (srfi 1))` alone silently granted base: `sin` was correctly
+    ;; rejected while `car` sailed through, which is precisely the shape of an
+    ;; unearned base grant.  Same leak as the library prologue, by another
+    ;; route.  Save around the whole of it, restore after.
+    (define (import-scope-save)
+      (list %import-seen? %import-base? %import-allowed %import-alias-defs))
+
+    (define (import-scope-restore! saved)
+      (set! %import-seen?      (car saved))
+      (set! %import-base?      (cadr saved))
+      (set! %import-allowed    (caddr saved))
+      (set! %import-alias-defs (cadddr saved))
+      #t)
+
+    (define (paal-expand-all forms)
+      (import-scope-reset!)
+      (let ((expanded (expand-nested forms)))
+        (check-import-scope! expanded)
+        expanded))
+
+    ;; --- import scope checking --------------------------------------------
+    ;;
+    ;; What makes `(import (scheme base))` mean anything.  Emitting aliases
+    ;; cannot do it: the globals table already holds every primitive under its
+    ;; public name, so `(define sin sin)` restricts nothing and `get-global sin`
+    ;; finds it regardless.  The restriction has to be a *check* — after
+    ;; expansion, every free global reference must be one the program is
+    ;; entitled to.
+    ;;
+    ;; Only programs with a top-level `import` are checked.  That is the escape
+    ;; hatch, and it is load-bearing rather than a convenience: every one of
+    ;; paal's own tests is a bare script, as are `paal eval`, the REPL, the
+    ;; globals blob and each `.pbc` the pipeline loads.  R7RS requires an
+    ;; import; a program that supplies one is asking to be held to it.
+    ;;
+    ;; `%import-seen?` and `%import-allowed` are expander module state, which is
+    ;; safe here where `%paal-lib-paths` would not be: expansion and this check
+    ;; happen inside one copy of the expander. The two-copies hazard is between
+    ;; the pipeline and the globals table, which this never crosses.
+
+    (define %import-seen?   #f)   ; did the program have a top-level import
+    (define %import-base?   #f)   ; …and did it include (scheme base)
+    (define %import-allowed '())  ; names granted by the imports it did have
+    (define %import-lib-defs '()) ; names defined by spliced library bodies
+    (define %import-alias-defs '()) ; names defined by emitted import aliases
+
+    (define (import-scope-reset!)
+      (set! %import-seen? #f)
+      (set! %import-base? #f)
+      (set! %import-allowed '())
+      (set! %import-lib-defs '())
+      (set! %import-alias-defs '()))
+
+    ;; A library's body is spliced in ahead of the program that imported it,
+    ;; and it is governed by its *own* imports — not the importer's.  Checking
+    ;; it against the importer's is how the first attempt at this rejected
+    ;; (chibi test) for using `reverse`.  So the names its body defines are
+    ;; recorded, and the forms defining them are skipped.
+    (define (import-scope-note-library! forms)
+      (set! %import-lib-defs (append (top-level-defined forms) %import-lib-defs)))
+
+    ;; Called by expand-import for each spec, before the aliases are emitted.
+    ;; `(scheme r5rs)` counts as base: it exports the whole R5RS language, and
+    ;; paal's entry for it names only `exact->inexact` / `inexact->exact`
+    ;; because those are the two R7RS *renamed*, not because they are all of
+    ;; it.  Treating the export list as exhaustive would reject a program that
+    ;; imports r5rs alone and uses `car`.
+    ;; Seen through the modifiers, so `(only (scheme base) car)` is still
+    ;; recognized as resting on a grants-everything library.  The consequence
+    ;; is that a modifier over base does not narrow anything — over-permissive,
+    ;; never wrongly rejecting, and written down in docs/architecture.md.
+    (define (grants-everything? spec)
+      (cond
+        ((not (pair? spec)) #f)
+        ((memq (car spec) '(only except prefix rename))
+         (grants-everything? (cadr spec)))
+        (else (or (equal? spec '(scheme base)) (equal? spec '(scheme r5rs))))))
+
+    ;; `(prefix (scheme inexact) m:)` emits `(define m:sin sin)`, whose
+    ;; right-hand side names the *internal* binding — which the program was not
+    ;; granted, and must not be, or the prefix would restrict nothing.  So the
+    ;; alias forms themselves are exempt from the check, exactly as library
+    ;; bodies are: both are expander output rather than program text.
+    (define (import-scope-note-aliases! names)
+      (set! %import-alias-defs (append names %import-alias-defs)))
+
+    (define (import-scope-note! spec names)
+      (set! %import-seen? #t)
+      (when (grants-everything? spec) (set! %import-base? #t))
+      (set! %import-allowed (append names %import-allowed)))
+
+    ;; A name a program may reference: one it defined, one an import granted,
+    ;; or — if it imported (scheme base) — anything no small library claims.
+    ;; `%`-prefixed names are always allowed: they are paal's own plumbing
+    ;; (%paal-vm-raise, %paal-winds, the %gref% hygiene marker) and appear in
+    ;; expander output rather than in the program.
+    (define (import-allows? name defined)
+      (or (memq name defined)
+          (memq name %import-allowed)
+          (internal-name? name)
+          (and %import-base?
+               (not (memq name (scheme-lib-claimed-names))))))
+
+    (define (internal-name? name)
+      (let ((s (symbol->string name)))
+        (and (> (string-length s) 0) (char=? (string-ref s 0) #\%))))
+
+    (define (library-body-form? form)
+      (and (pair? form) (eq? (car form) 'define)
+           (pair? (cdr form)) (symbol? (cadr form))
+           (or (memq (cadr form) %import-lib-defs)
+               (memq (cadr form) %import-alias-defs))
+           #t))
+
+    (define (check-import-scope! forms)
+      (when %import-seen?
+        (let ((defined (append (top-level-defined forms) %import-lib-defs)))
+          (for-each (lambda (form)
+                      (unless (library-body-form? form)
+                        (check-refs! form '() defined)))
+                    forms))))
+
+    ;; Walk core forms collecting free references.  By this point the program is
+    ;; quote/if/begin/lambda/set!/define plus application, so `bound` only ever
+    ;; grows at a lambda.
+    (define (check-refs! form bound defined)
+      (cond
+        ((symbol? form)
+         (unless (or (memq form bound) (import-allows? form defined))
+           (error (string-append
+                    "paal: unbound variable `" (symbol->string form)
+                    "` — no imported library exports it")
+                  form)))
+        ((not (pair? form)) #t)
+        ((eq? (car form) 'quote) #t)
+        ((eq? (car form) 'lambda)
+         (for-each (lambda (b) (check-refs! b (append (formal-names (cadr form)) bound) defined))
+                   (cddr form)))
+        ((eq? (car form) 'define)
+         (check-refs! (caddr form) bound defined))
+        ((eq? (car form) 'set!)
+         (check-refs! (caddr form) bound defined))
+        (else
+         (for-each (lambda (sub) (check-refs! sub bound defined)) form))))
 
     ;; ---------------------------------------------------------------
     ;; let

@@ -3,7 +3,7 @@
 Goal: make `paal` a correct R7RS-small Scheme implementation that runs the
 same programs as `kaappi`, with the same CLI conventions.
 
-Current: bootstrap stage 6 complete (self-hosting). **649 tests pass** (was 194 before Phase 1–2).
+Current: bootstrap stage 6 complete (self-hosting). **666 tests pass** (was 194 before Phase 1–2).
 
 Phases 1–6 are done. Two of their entries rest on host bugs still open upstream —
 kaappi/kaappi#2010 and kaappi/kaappi#1920 / kaappi/kaappi#2043 — but paal has no
@@ -893,16 +893,75 @@ no value representation and no cross-copy protocol — so they can land in any o
       are read by HOST kaappi's `read`, which already honours both.
 
 Deferred with reasons: R7RS §4.3's keyword-shadowing torture cases (variables
-named `let`, `if`) need an environment threaded through every `expand-*`; the
-`(scheme ...)` libraries are a fiction — `(import (scheme base))` hands you `sin`
-and `spawn` too — which needs the whole globals table partitioned and is its own
-phase; and the §6.2 complex-literal failures are a host bug, reported to
+named `let`, `if`) need an environment threaded through every `expand-*`; and the §6.2 complex-literal failures are a host bug, reported to
 kaappi/kaappi#1911. kaappi's `read` accepts `-3/2-i`, `1/2+1/2i` and
 `3.0+inf.0i` while its `string->number` returns `#f` for all three, and the two
 disagree on exactness even for `1+2i` — `read` gives the exact value R7RS 6.2.5
 requires, `string->number` gives `1.0+2.0i`. paal's reader defers to
 `string->number` for atoms, so those literals come back as *symbols* and fail
 later as unbound variables rather than failing to parse.
+
+---
+
+## Phase 8 — Import scope
+
+- [x] **`(import (scheme base))` was a no-op** — every `(scheme …)` name
+      resolved to an empty export list against one flat globals table, so it
+      also handed a program `sin`, `spawn` and `ffi-open`. A program could
+      under-import and still run here while failing on a conforming
+      implementation, which is the worst way to be wrong: silently portable-
+      looking.
+
+      **Emitting aliases cannot fix it**, which is where the original sketch
+      for this went. The table already holds every primitive under its public
+      name, so `(define sin sin)` restricts nothing and `get-global sin` finds
+      it regardless. Making aliases bite would mean a mangled-only table, which
+      breaks the globals blob and every `.pbc` the pipeline loads, since both
+      resolve public names. The restriction has to be a **check**: after
+      expansion, every free global reference must be one the program is
+      entitled to.
+
+      Only programs with a top-level `import` are checked. That escape hatch is
+      load-bearing rather than a convenience — every test in `tests/test-paal.scm`
+      is a bare script, as are `paal eval`, the REPL, the globals blob and each
+      cached pipeline library. R7RS requires an import; a program that supplies
+      one is asking to be held to it.
+
+      The libraries are partitioned by naming the **small** ones exhaustively
+      and letting `(scheme base)` be everything else. That inversion is the
+      point: base has some 200 names, and a typo while enumerating it would sit
+      between a correct program and compiling, whereas a name missing from a
+      small library is only over-permissive. `(scheme r5rs)` counts as base —
+      it exports the whole R5RS language, and paal's entry lists only the two
+      names R7RS renamed.
+
+      Three leaks turned up while wiring it, all the same shape — expander
+      state escaping the thing it belongs to:
+
+      - a spliced **library body** was checked against its *importer's* imports,
+        so `(chibi test)` was rejected for using `reverse`;
+      - a library's **own imports** granted to its importer, so `(import (srfi 1))`
+        alone silently granted base — `sin` correctly rejected while `car`
+        sailed through, which is exactly what an unearned base grant looks like;
+      - the emitted **alias forms** were checked, and `(define m:sin sin)` names
+        the internal binding that `prefix` exists to hide.
+
+      Known limits, all over-permissive rather than wrongly rejecting:
+      `(scheme cxr)` is not partitioned, so base grants `caddr`; a modifier over
+      base does not narrow it, so `(only (scheme base) car)` still grants base;
+      and because base is "everything else", a name belonging to no library at
+      all reaches the runtime rather than the check.
+- [x] **A library's import prologue leaked into its importer** — imports were
+      effectively transitive. `install-library!` renamed the library's *body*
+      and spliced its prologue in untouched, so `(import (m greet))` handed you
+      `cube`: `(m greet)` imports `(m math)`, and `(m math)`'s aliases arrived
+      under their own names. The prologue is flattened and renamed with the
+      body now, so a library's imports are private to it.
+
+      This changes observable behaviour, and the fixtures relied on it: the
+      module-system and SRFI tests were programs importing a library and *not*
+      `(scheme base)`, which is not conforming R7RS. Their two helpers now
+      prepend it.
 
 ---
 

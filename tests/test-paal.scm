@@ -2461,7 +2461,18 @@
 ;; Fixture libraries live in tests/libs/ so they are ordinary committed files
 ;; rather than something the suite has to create — R7RS has no mkdir.
 
-(define (module-run src) (pkaappi-run-bc-string src))
+;; Prepended rather than folded into each source's own import: R7RS allows a
+;; program to begin with several import declarations, and keeping them separate
+;; leaves each test's `(import (m math))` reading as the thing under test.
+;; Needed since the library partition landed — these bodies use `list` and
+;; `guard`, which `(m math)` does not export and no longer comes for free.
+(define (module-run src)
+  (pkaappi-run-bc-string (string-append "(import (scheme base))" src)))
+
+;; Does this program compile at all?  The import scope check runs at expansion
+;; time, so `pkaappi-compile` is enough — nothing needs to run.
+(define (compiles? src)
+  (guard (e (#t #f)) (pkaappi-compile src) #t))
 
 (paal-lib-path-add! "tests/libs")
 
@@ -2490,6 +2501,64 @@
       (let ((r (pkaappi-run-bc-string "(include \"paal-include-tmp.scm\") total")))
         (delete-file p)
         r))))
+
+;; ---------------------------------------------------------------
+;; Import scope: what a library actually grants
+;; ---------------------------------------------------------------
+;;
+;; `(import (scheme base))` used to be a no-op — every `(scheme …)` name
+;; resolved to an empty export list against one flat globals table, so it also
+;; handed you `sin`, `spawn` and `ffi-open`.  A program could under-import and
+;; still run here while failing on a conforming implementation.
+;;
+;; Emitting aliases cannot fix that: the table already holds every primitive
+;; under its public name, so `(define sin sin)` restricts nothing.  The
+;; restriction is a *check* at expansion time — every free global reference
+;; must be one the program is entitled to.
+;;
+;; Only programs with a top-level `import` are checked.  That escape hatch is
+;; load-bearing: every other test in this file is a bare script, as are `paal
+;; eval`, the REPL, the globals blob and each .pbc the pipeline loads.
+
+(test-group "import scope"
+  (test-assert "base grants base"        (compiles? "(import (scheme base)) (car '(1))"))
+  (test-assert "base does not grant sin" (not (compiles? "(import (scheme base)) (sin 0)")))
+  (test-assert "importing inexact grants it"
+    (compiles? "(import (scheme base) (scheme inexact)) (sin 0)"))
+  (test-assert "base does not grant char-ci=?"
+    (not (compiles? "(import (scheme base)) (char-ci=? #\\a #\\a)")))
+  (test-assert "base does not grant display"
+    (not (compiles? "(import (scheme base)) (display 1)")))
+  (test-assert "base does not grant the fiber primitives"
+    (not (compiles? "(import (scheme base)) (spawn 1)")))
+  ;; A bare script — no import — is unaffected, which is what keeps the rest of
+  ;; this file, the REPL and `paal eval` working.
+  (test-assert "a program with no import is not checked"
+    (compiles? "(sin 0)"))
+  ;; (scheme r5rs) exports the whole R5RS language; paal's entry lists only the
+  ;; two names R7RS renamed, so treating that list as exhaustive would reject a
+  ;; program importing r5rs alone and using `car`.
+  (test-assert "r5rs grants the language, not just the two renames"
+    (compiles? "(import (scheme r5rs)) (car '(1))"))
+  ;; The modifiers compose over a builtin the same way they do over a user
+  ;; library, because a builtin now resolves to an identity alias list.
+  (test-assert "only"   (compiles? "(import (scheme base) (only (scheme inexact) sin)) (sin 0)"))
+  (test-assert "only excludes"
+    (not (compiles? "(import (scheme base) (only (scheme inexact) sin)) (cos 0)")))
+  (test-assert "except" (compiles? "(import (scheme base) (except (scheme inexact) sin)) (cos 0)"))
+  (test-assert "except excludes"
+    (not (compiles? "(import (scheme base) (except (scheme inexact) sin)) (sin 0)")))
+  (test-assert "prefix" (compiles? "(import (scheme base) (prefix (scheme inexact) m:)) (m:sin 0)"))
+  (test-assert "prefix hides the unprefixed name"
+    (not (compiles? "(import (scheme base) (prefix (scheme inexact) m:)) (sin 0)")))
+  (test-assert "rename" (compiles? "(import (scheme base) (rename (scheme inexact) (sin sine))) (sine 0)"))
+  ;; A library's own imports are its own.  (srfi 1) imports (scheme base), and
+  ;; that used to leak: `sin` was correctly rejected while `car` sailed through
+  ;; — the signature of an unearned base grant.
+  (test-assert "a library's imports do not leak to its importer"
+    (not (compiles? "(import (srfi 1)) (car '(1))")))
+  (test-assert "but its exports do"
+    (compiles? "(import (scheme base) (srfi 1)) (fold + 0 '(1 2 3))")))
 
 (test-group "module system"
   (test-equal "a library's exports are visible, its internals are not"
@@ -2597,9 +2666,13 @@
 ;; importing both would otherwise bind one identifier two ways, which R7RS 5.2
 ;; makes an error and kaappi enforces.
 
+;; `(scheme base)` is imported alongside because these bodies use `list`,
+;; `equal?` and friends, and since the library partition landed an import list
+;; is held to: a program that imports only (srfi 1) does not get `car`.  That
+;; is the R7RS reading, and these fixtures were relying on the old flat table.
 (define (srfi-run n src)
   (pkaappi-run-bc-string
-    (string-append "(import (srfi " (number->string n) "))" src)))
+    (string-append "(import (scheme base) (srfi " (number->string n) "))" src)))
 
 (test-group "srfi 1: lists"
   (test-equal "iota with start and step"
@@ -2655,9 +2728,13 @@
                         (string-trim-both \"  x \"))"))
   (test-equal "index accepts a char or a predicate"
     '(2 3 #f)
-    (srfi-run 13 "(list (string-index \"hello\" #\\l)
-                        (string-index-right \"hello\" #\\l)
-                        (string-index \"hello\" char-numeric?))"))
+    ;; char-numeric? is (scheme char), not (scheme base) -- so this body needs
+    ;; it imported.  Before the library partition it came for free.
+    (pkaappi-run-bc-string
+      "(import (scheme base) (scheme char) (srfi 13))
+       (list (string-index \"hello\" #\\l)
+             (string-index-right \"hello\" #\\l)
+             (string-index \"hello\" char-numeric?))"))
   (test-equal "contains returns an index or #f"
     '(4 #f)
     (srfi-run 13 "(list (string-contains \"hello world\" \"o w\")
@@ -3009,7 +3086,7 @@
   (test-equal "counts passes, failures, skips and expected failures"
     '(5 3 1 1)
     (pkaappi-run-bc-string
-      "(import (srfi 64))
+      "(import (scheme base) (srfi 64))
        (test-begin \"demo\")
        (test-equal \"a\" 4 (+ 2 2))
        (test-equal \"b\" 5 (+ 2 2))
@@ -3028,14 +3105,14 @@
   (test-equal "a raising test fails that test and the run continues"
     '(1 1)
     (pkaappi-run-bc-string
-      "(import (srfi 64))
+      "(import (scheme base) (srfi 64))
        (test-equal \"raises\" 1 (car '()))
        (test-equal \"after\" 2 2)
        (list (test-runner-pass-count) (test-runner-fail-count))"))
   (test-equal "groups nest"
     2
     (pkaappi-run-bc-string
-      "(import (srfi 64))
+      "(import (scheme base) (srfi 64))
        (test-group \"outer\" (test-group \"inner\" (test-assert \"x\" #t))
                             (test-assert \"y\" #t))
        (test-runner-pass-count)")))
