@@ -12,12 +12,22 @@ outstanding. What each entry says about *why* is the point of keeping them; seve
 correct an earlier premise that turned out to be false, and those are worth more
 than the checkbox.
 
-**Phase 7 is open.** This file was written from the inside: it tracked what paal's
-authors knew was missing. Running kaappi's R7RS suite against paal — which had never
-been done — found a class of defect that kind of list cannot contain, because nobody
-suspected it. `(values 1)` returned a tagged pair. `(procedure? f)` was `#f` for every
-procedure paal defines. `(map + '(1 2) '(3 4) '(5 6))` answered `(4 6)`. None of those
-raise; they return a plausible wrong value. See Phase 7 below.
+**Phase 7 is done too, and is the one worth reading.** Everything above it was written
+from the inside: it tracked what paal's authors knew was missing. Running kaappi's R7RS
+suite against paal — which had never been done — found a class of defect that kind of
+list cannot contain, because nobody suspected it. `(values 1)` returned a tagged pair.
+`(procedure? f)` was `#f` for every procedure paal defines. `(map + '(1 2) '(3 4) '(5 6))`
+answered `(4 6)`. `(environment …)` destroyed the caller's macro table. None of those
+raise; they return a plausible wrong value.
+
+The suite went from **974 passing / 131 failing to 1174 / 24**, and now gates `make test`
+as a ratchet, so those numbers cannot move in either direction without someone deciding
+they should.
+
+Three R7RS gaps remain, recorded here rather than as checkboxes because each is a
+decision rather than an oversight — see the end of Phase 7 for the reasons: §4.3's
+keyword-shadowing cases, the `(scheme …)` libraries being one flat table, and the §6.2
+complex literals, which are a host bug.
 
 ---
 
@@ -886,8 +896,13 @@ Deferred with reasons: R7RS §4.3's keyword-shadowing torture cases (variables
 named `let`, `if`) need an environment threaded through every `expand-*`; the
 `(scheme ...)` libraries are a fiction — `(import (scheme base))` hands you `sin`
 and `spawn` too — which needs the whole globals table partitioned and is its own
-phase; and the §6.2 complex-literal failures are a host bug, since kaappi's `read`
-accepts `-3/2-i` but its `string->number` does not.
+phase; and the §6.2 complex-literal failures are a host bug, reported to
+kaappi/kaappi#1911. kaappi's `read` accepts `-3/2-i`, `1/2+1/2i` and
+`3.0+inf.0i` while its `string->number` returns `#f` for all three, and the two
+disagree on exactness even for `1+2i` — `read` gives the exact value R7RS 6.2.5
+requires, `string->number` gives `1.0+2.0i`. paal's reader defers to
+`string->number` for atoms, so those literals come back as *symbols* and fail
+later as unbound variables rather than failing to parse.
 
 ---
 

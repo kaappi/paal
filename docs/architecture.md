@@ -602,6 +602,53 @@ installs by paal-compiling it (`map`, `for-each`, `apply`, `filter`, `vector-map
 `string-map`, `values`/`call-with-values`, and the promise system) failed under
 `pkaappi-self-run-file` with `not a callable`. That was kaappi/paal#1.
 
+### What the representation leaks, and what is done about it
+
+Tagging with plain vectors means the representation is visible to the program running on
+top of it. Three consequences, each settled differently.
+
+**`procedure?` is corrected; `vector?` is deliberately not.** A closure is a 3-vector, so
+the HOST `procedure?` said `#f` for every procedure a paal program defines — every
+predicate dispatch on procedures was broken. `pkaappi-make-globals` now overrides
+`procedure?` to recognize the `%paal-closure` tag, which is safe because `do-call!` and
+`paal-call-value` both test `closure?` *before* `procedure?`.
+
+`(vector? f)` still answers `#t`, and must. `vector?` is load-bearing for `closure?`
+(`frame.sld`), `bytecode-function?` (`bytecode.sld`), `promise?`, `paal-vm-escape?` and
+the wind-frame dispatch — and under self-hosting the paal-compiled `frame.sld` resolves
+`vector?` out of the *user program's* globals table. Override it there and `closure?`
+returns `#f` for every closure, so nothing is callable at all. This is the sharpest case
+where the two-copies problem makes the obvious fix catastrophic. The leak is asserted in
+the suite so the trade-off is recorded rather than rediscovered.
+
+**`write` abbreviates procedures, one level deep.** Printing a closure raw means printing
+its entire bytecode function — pages of nested vectors. `write` and `display` recognize
+the two tags and print `#<procedure name>` / `#<code name>`. Deliberately shallow:
+`(write (list f))` still shows the vector. Going deeper means a full R7RS writer in paal
+source — cycle detection, datum labels, string and character escaping — a second
+implementation to keep in step with kaappi's. The debugger's `%debug-write` makes the
+same call for the same reason.
+
+### `call/cc` is unbound on the bytecode path
+
+`paal-initial-env` binds the HOST `call/cc`, which works on the tree-walking path — a
+paal closure there *is* a HOST procedure — and cannot work on the bytecode path, where
+the host is handed a tagged vector it cannot enter. `pkaappi-make-globals` therefore
+drops both spellings from the table it builds (`%paal-host-only-names`).
+
+Absent is the honest answer and strictly better than what was there: `(procedure? call/cc)`
+answered `#t` while calling it type-errored, so feature-detecting code took the wrong
+branch and failed deep inside instead of taking its fallback. It now takes the fallback.
+
+An escape-only replacement in paal source was written and reverted. It raises a tagged
+escape and claims its own tag in a `guard`, which is sound in isolation — but
+`%paal-guard-catch` has to intercept escapes *before* the clauses run, or any intervening
+`(guard (e (#t …)) …)` swallows them, which is a subtler wrong answer than the type error
+it replaced. Once it intercepts, it also intercepts the escape belonging to `call/cc`'s
+*own* guard, which it cannot recognize because a clauses procedure carries no identity.
+Making that work means teaching the VM about continuations — the re-entrant design that
+is out of scope. See `docs/TODO.md` Phase 7.
+
 ---
 
 ## The stepping debugger
@@ -706,3 +753,21 @@ High-level entry points that run the full pipeline:
 ```
 
 Individual stage exports are also re-exported for embedding or incremental use.
+
+### One feature list, one owner
+
+`(kaappi paal expander)` exports **`paal-feature-list`**, and it is the single answer to
+"what is this implementation". `paal-initial-env` binds `features` to it, and
+`cond-expand` tests against the same list.
+
+They used to be different lists: `features` answered with the *host's*, which does not
+contain `paal`, while `cond-expand` answered from the expander's — so a program asking
+what it was running on and a `cond-expand` asking the same question disagreed. Under
+self-hosting the user's `(features)` resolves through the HOST expander and `cond-expand`
+through the loaded one, but both are built from this one definition, so they agree.
+
+The list claims only what holds: `paal kaappi r7rs exact-closed exact-complex ieee-float
+posix scheme`. The middle four are inherited from kaappi's runtime, which advertises
+exactly those; `full-unicode` and `ratios` are *not* in kaappi's list, so paal does not
+claim them either. `scheme` is a paal extension rather than an R7RS feature identifier,
+kept because paal's own `cond-expand`s use it.
