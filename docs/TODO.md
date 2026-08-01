@@ -324,6 +324,7 @@ no `cache/` and no `lib/` present:
 | `paal p.scm` | works — the HOST pipeline is compiled in, so no cache is needed |
 | `paal eval '(* 6 7)'` | works |
 | `paal version` | works |
+| `paal` (no args) | works — REPL over the HOST pipeline |
 | `(import (srfi 1))` | fails — the SRFI `.sld` files are on disk, not in the binary |
 | `paal check f.scm` | **runs the program** — kaappi/kaappi#2010 |
 | `paal fmt --check f.scm` | same |
@@ -359,7 +360,14 @@ no `cache/` and no `lib/` present:
 - [ ] **Bundle pipeline `.pbc` files** — not needed for correctness now that
       the HOST fallback is compiled in, but the self-hosted path is the faster
       one and is unavailable without `cache/`.
-- [ ] **Standalone REPL** — readline or plain line input without kaappi's REPL
+- [x] **Standalone REPL** — a bundled binary run outside the repo has neither
+      the cache nor paal's sources, and `pkaappi-self-repl` errored out with
+      `repl requires cache`, leaving the standalone binary with no REPL at
+      all. It now falls back to a REPL over the HOST pipeline, which is
+      compiled into the binary regardless — not the self-hosted one, but a
+      working REPL. Definitions accumulate in one globals table, and each
+      input is guarded so a raise ends that expression rather than the
+      session.
 - [ ] **Distribution strategy** — single static binary vs binary + lib directory
 
 ---

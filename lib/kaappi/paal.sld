@@ -827,5 +827,31 @@
          (let ((g (pkaappi-make-globals)))
            (for-each (lambda (p) (pkaappi-load-file p g)) %paal-lib-files)
            (%run-repl g)))
-        (else
-         (display "error: repl requires cache (make pbc-pipeline) or paal sources\n"))))))
+        ;; Neither the cache nor paal's sources are on disk -- which is the
+        ;; normal case for a bundled binary run outside the repo.  The HOST
+        ;; pipeline is compiled into the binary regardless, so a REPL is still
+        ;; possible; it just is not the self-hosted one.  Erroring here left
+        ;; the standalone binary with no REPL at all.
+        (else (%run-host-repl))))
+
+    ;; A REPL over the HOST pipeline.  Definitions accumulate in one globals
+    ;; table, so `(define x 1)` is visible to the next expression, and each
+    ;; input is guarded so a raise ends that expression rather than the
+    ;; session.
+    (define (%run-host-repl)
+      (let ((g (pkaappi-make-globals)))
+        (let loop ()
+          (display "paal> ")
+          (flush-output-port (current-output-port))
+          (let ((form (paal-read (current-input-port))))
+            (if (eof-object? form)
+                (newline)
+                (begin
+                  (guard (e (#t (display "error: ")
+                                (%display-condition e (current-output-port))
+                                (newline)))
+                    (let ((result (paal-run-bc (pkaappi-compile-forms (list form)) g)))
+                      (unless (eq? result (if #f #f))
+                        (write result)
+                        (newline))))
+                  (loop)))))))))
