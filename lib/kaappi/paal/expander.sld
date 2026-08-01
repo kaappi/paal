@@ -1071,17 +1071,61 @@
     ;; let
     ;; ---------------------------------------------------------------
 
+    ;; ---------------------------------------------------------------
+    ;; Syntax checking for binding forms
+    ;; ---------------------------------------------------------------
+    ;;
+    ;; The expander destructures with car/cadr and used to let the host's type
+    ;; error escape, so a malformed form was reported as whichever accessor
+    ;; happened to fail first — `(let ((a)) a)` came out as "type error in
+    ;; 'cadr': expected pair, got ()", which says nothing about the binding.
+    ;; These name the form and show it.
+
+    (define (syntax-error* msg form)
+      (error (string-append "paal: " msg) form))
+
+    ;; ((name init) ...) — each binding a two-element list with a symbol name.
+    (define (check-bindings! bindings form what)
+      (unless (list? bindings)
+        (syntax-error* (string-append what ": bindings must be a list") form))
+      (for-each
+        (lambda (b)
+          (cond
+            ((not (pair? b))
+             (syntax-error* (string-append what ": binding must be (name init)") form))
+            ((not (symbol? (car b)))
+             (syntax-error* (string-append what ": binding name must be a symbol") form))
+            ((or (not (pair? (cdr b))) (not (null? (cddr b))))
+             (syntax-error*
+               (string-append what ": binding needs exactly one init expression")
+               form))))
+        bindings))
+
+    (define (check-body! body form what)
+      (when (null? body)
+        (syntax-error* (string-append what ": body must have at least one form")
+                       form)))
+
+    (define (check-shape! form what min-len)
+      (unless (and (list? form) (>= (length form) min-len))
+        (syntax-error* (string-append what ": malformed") form)))
+
     (define (expand-let form)
+      (check-shape! form "let" 3)
       (if (symbol? (cadr form))
           (let* ((name     (cadr form))
                  (bindings (caddr form))
                  (body     (cdddr form))
+                 (ignore1  (check-bindings! bindings form "named let"))
+                 (ignore2  (check-body! body form "named let"))
                  (params   (map car bindings))
                  (inits    (map cadr bindings)))
             `(letrec ((,name (lambda ,params ,@body)))
                (,name ,@inits)))
           (let* ((bindings (cadr form))
                  (body     (cddr form))
+                 (ignore1  (check-bindings! bindings form "let"))
+                 (ignore2  (check-body! body form "let"))
                  (params   (map car bindings))
                  (inits    (map cadr bindings)))
             `((lambda ,params ,@body) ,@inits))))
@@ -1091,8 +1135,11 @@
     ;; ---------------------------------------------------------------
 
     (define (expand-let* form)
+      (check-shape! form "let*" 3)
       (let ((bindings (cadr form))
             (body     (cddr form)))
+        (check-bindings! bindings form "let*")
+        (check-body! body form "let*")
         (if (null? bindings)
             `(begin ,@body)
             `(let (,(car bindings))
@@ -1103,8 +1150,11 @@
     ;; ---------------------------------------------------------------
 
     (define (expand-letrec form)
+      (check-shape! form "letrec" 3)
       (let* ((bindings (cadr form))
              (body     (cddr form))
+             (ignore1  (check-bindings! bindings form "letrec"))
+             (ignore2  (check-body! body form "letrec"))
              (names    (map car bindings))
              (inits    (map cadr bindings)))
         `(let ,(map (lambda (n) `(,n #f)) names)

@@ -2421,4 +2421,43 @@
     'errs
     (pkaappi-run-bc-string "(guard (e (#t 'errs)) (make-rectangular 1 2))")))
 
+;; ---------------------------------------------------------------
+;; Expander diagnostics
+;; ---------------------------------------------------------------
+;;
+;; The expander destructures with car/cadr, and used to let the host's type
+;; error escape — a malformed form surfaced as whichever accessor happened to
+;; fail first.  `(let ((a)) a)` reported "type error in 'cadr'", which says
+;; nothing about the binding.  These check shape first and name the form.
+
+(define (expand-error src)
+  (guard (e (#t (error-object-message e))) (pkaappi-run-bc-string src)))
+
+(test-group "expander diagnostics"
+  (test-equal "a binding with no init names the form"
+    "paal: let: binding needs exactly one init expression"
+    (expand-error "(let ((a)) a)"))
+  (test-equal "a non-symbol binding name"
+    "paal: let: binding name must be a symbol"
+    (expand-error "(let ((1 2)) 3)"))
+  (test-equal "a binding with two inits"
+    "paal: let: binding needs exactly one init expression"
+    (expand-error "(let ((a 1 2)) a)"))
+  (test-equal "an empty body"
+    "paal: let: malformed"
+    (expand-error "(let ((a 1)))"))
+  (test-equal "let* is checked too"
+    "paal: let*: binding needs exactly one init expression"
+    (expand-error "(let* ((a)) a)"))
+  (test-equal "letrec is checked too"
+    "paal: letrec: binding needs exactly one init expression"
+    (expand-error "(letrec ((a)) a)"))
+  ;; Named let takes its bindings one position later, so it needs its own check.
+  (test-equal "named let is checked at its own position"
+    "paal: named let: binding needs exactly one init expression"
+    (expand-error "(let loop ((a)) a)"))
+  (test-equal "a well-formed let still works"
+    1
+    (pkaappi-run-bc-string "(let ((a 1)) a)")))
+
 (test-exit)

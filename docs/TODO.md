@@ -3,7 +3,7 @@
 Goal: make `paal` a correct R7RS-small Scheme implementation that runs the
 same programs as `kaappi`, with the same CLI conventions.
 
-Current: Stage 6 complete (self-hosting). **508 tests pass** (was 194 before Phase 1–2).
+Current: Stage 6 complete (self-hosting). **516 tests pass** (was 194 before Phase 1–2).
 
 ---
 
@@ -407,14 +407,14 @@ Issues that span stages rather than belonging to one phase.
       name, and by then a transformer is a closure over its rules rather than
       data one can walk. The current trade leaks a name that can collide;
       the alternative silently breaks working library code.
-- [ ] **Expander diagnostics name internal procedures, not the user's mistake** —
-      `paal check` on `(let ((a)) a)` reports `type error in 'cadr': expected
-      pair, got ()`, which says nothing about the malformed binding. The
-      expander destructures forms with `car`/`cadr` and lets the host's type
-      error escape, so most syntax errors surface as whichever accessor
-      happened to fail first. Fixing it means shape-checking each derived form
-      before destructuring it and raising a message that names the form and the
-      file. Cosmetic until `check` is used in CI, which is what it is for.
+- [x] **Expander diagnostics name the form, not an internal accessor** — the
+      expander destructures with `car`/`cadr` and used to let the host's type
+      error escape, so `(let ((a)) a)` reported `type error in 'cadr'`. The
+      binding forms now check shape first and report e.g. `paal: let: binding
+      needs exactly one init expression`, showing the offending form. Named
+      `let` takes its bindings one position later and is checked separately.
+      The remaining derived forms (`cond`, `case`, `do`, `define-record-type`)
+      still destructure unchecked.
 
 - [ ] **`.pbc` files can become unreadable depending on byte offsets**
       (kaappi/kaappi#1920) — kaappi's `read` on a *file port* mis-handles a dotted
