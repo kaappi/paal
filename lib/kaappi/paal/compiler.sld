@@ -1,6 +1,6 @@
 ;;; (kaappi paal compiler) — Analyzer: expanded forms → IR
 ;;;
-;;; Stage 3 of the Paal compilation pipeline.
+;;; Pipeline stage 3.
 ;;; Converts expanded S-expressions into IR nodes.
 
 (define-library (kaappi paal compiler)

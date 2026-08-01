@@ -486,7 +486,7 @@
            (eq? 'define-library (caar forms))))))
 
 ;; ----------------------------------------------------------------
-;; Self-load integration (Stage 6 gate)
+;; Self-load integration (bootstrap stage 6 gate)
 ;; ----------------------------------------------------------------
 
 (test-group "self-load: ir + compiler"
@@ -583,7 +583,7 @@
       (pair? (pkaappi-run-string-in g "(paal-expand '(if #t 1 2))")))))
 
 ;; ---------------------------------------------------------------
-;; Stage 6 milestone: full self-load
+;; Bootstrap stage 6 milestone: full self-load
 ;; ---------------------------------------------------------------
 
 (test-group "stage-6 milestone: full self-load"
@@ -618,7 +618,7 @@
                       (paal-expand-all '((define (add x y) (+ x y)) (add 3 4))))))"))))
 
 ;; ---------------------------------------------------------------
-;; Stage 6 complete: self-execute
+;; Bootstrap stage 6 complete: self-execute
 ;; ---------------------------------------------------------------
 
 (test-group "stage-6 complete: self-execute"

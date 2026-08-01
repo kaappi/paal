@@ -21,8 +21,8 @@ Source text
           ▼
 ┌─────────────────────┐
 │  Expander           │  (kaappi paal expander)
-│  paal-expand-all    │
-└─────────┬───────────┘
+│  paal-expand-all    │  ← (kaappi paal embedded) supplies the source of
+└─────────┬───────────┘    bundled libraries, ahead of the library path
           │  core-form S-expressions
           │  (quote if begin lambda set! define + calls)
           ▼
@@ -30,32 +30,67 @@ Source text
 │  Compiler/Analyzer  │  (kaappi paal compiler)
 │  paal-analyze-all   │
 └─────────┬───────────┘
-          │  IR node tree
-          ▼
-┌─────────────────────┐
-│  VM                 │  (kaappi paal vm)
-│  paal-eval-program  │
-└─────────┬───────────┘
-          │
-          ▼
-       result value
+          │  IR node tree — node types from (kaappi paal ir)
+          ├─────────────────────────────┐
+          ▼                             ▼
+┌─────────────────────┐       ┌─────────────────────┐
+│  Tree-walking VM    │       │  Emitter            │  (kaappi paal emitter)
+│  paal-eval-program  │       │  paal-emit-program  │
+└─────────┬───────────┘       └─────────┬───────────┘
+          │  (kaappi paal vm)           │  bytecode-function
+          │  bootstrap / reference      │  (kaappi paal bytecode)
+          │                             │◄───────► .pbc file
+          │                             │          (kaappi paal serializer)
+          │                             ▼
+          │                   ┌─────────────────────┐
+          │                   │  Bytecode VM        │  (kaappi paal vm-bc)
+          │                   │  paal-run-bc        │  (kaappi paal frame)
+          │                   └─────────┬───────────┘
+          │                             │
+          └──────────────┬──────────────┘
+                         ▼
+                   result value
 ```
+
+The pipeline forks at the IR: both backends consume the same node tree, and both must
+handle every node type. The CLI's default file path takes the right-hand branch — the
+tree-walking VM is kept as the simpler reference implementation, not as the production
+one. For the same fork described from the IR's side, see `docs/ir.md` § Where the IR
+sits.
 
 Each stage is a separate `define-library` importable independently:
 
-| Library | File | Stage |
-|---------|------|-------|
-| `(kaappi paal reader)` | `lib/kaappi/paal/reader.sld` | 1 |
-| `(kaappi paal expander)` | `lib/kaappi/paal/expander.sld` | 2 |
-| `(kaappi paal compiler)` | `lib/kaappi/paal/compiler.sld` | 3 |
-| `(kaappi paal vm)` | `lib/kaappi/paal/vm.sld` | 4 |
-| `(kaappi paal ir)` | `lib/kaappi/paal/ir.sld` | (shared) |
-| `(kaappi paal formatter)` | `lib/kaappi/paal/formatter.sld` | `fmt` |
+| Library | File | Role |
+|---------|------|------|
+| `(kaappi paal reader)` | `lib/kaappi/paal/reader.sld` | Pipeline stage 1 — text → S-expressions |
+| `(kaappi paal expander)` | `lib/kaappi/paal/expander.sld` | Pipeline stage 2 — macro expansion → core forms |
+| `(kaappi paal compiler)` | `lib/kaappi/paal/compiler.sld` | Pipeline stage 3 — core forms → IR |
+| `(kaappi paal vm)` | `lib/kaappi/paal/vm.sld` | Pipeline stage 4 — tree-walking IR interpreter |
+| `(kaappi paal emitter)` | `lib/kaappi/paal/emitter.sld` | IR → bytecode (bytecode path) |
+| `(kaappi paal vm-bc)` | `lib/kaappi/paal/vm-bc.sld` | bytecode dispatch loop (bytecode path) |
+| `(kaappi paal ir)` | `lib/kaappi/paal/ir.sld` | shared — IR node constructors and accessors |
+| `(kaappi paal bytecode)` | `lib/kaappi/paal/bytecode.sld` | shared — `<bytecode-function>` and the ISA |
+| `(kaappi paal frame)` | `lib/kaappi/paal/frame.sld` | shared — closures and call frames for the bytecode VM |
+| `(kaappi paal serializer)` | `lib/kaappi/paal/serializer.sld` | `.pbc` read/write |
+| `(kaappi paal formatter)` | `lib/kaappi/paal/formatter.sld` | `fmt` subcommand |
+| `(kaappi paal embedded)` | `lib/kaappi/paal/embedded.sld` | bundled library source (outside the pipeline) |
 | `(kaappi paal)` | `lib/kaappi/paal.sld` | public API |
+
+Only the numbered pipeline stages have a walkthrough section below; the emitter and bytecode
+VM are documented by topic instead (call convention, exceptions, the wind stack, the
+debugger), since most of what is interesting about them cuts across the whole path.
+
+**Numbering.** A *pipeline stage* is a position in the diagram above; the term is used
+only in this document and in the header comment of the matching `.sld`. Three other
+schemes number other things and none of them line up: `docs/bootstrapping.md` has
+*bootstrap stages* (roadmap milestones — "bootstrap stage 6 complete") and *tiers*
+(rungs of the bootstrap chain), and `docs/TODO.md` has *phases* (batches of feature
+work). These used to be spelled "Stage *N*" indiscriminately, so a bare "Stage 3" in
+git history or an old issue may mean any of them — check which document it came from.
 
 ---
 
-## Stage 1 — Reader
+## Pipeline Stage 1 — Reader
 
 **Input:** source text (string or port)  
 **Output:** list of S-expressions
@@ -81,7 +116,7 @@ Key exports: `paal-read-string`, `paal-read-file`, `paal-read-all`, `paal-read`
 
 ---
 
-## Stage 2 — Expander
+## Pipeline Stage 2 — Expander
 
 **Input:** list of S-expressions (possibly containing derived forms)  
 **Output:** list of S-expressions in core form only
@@ -165,7 +200,9 @@ Without it, a template introducing `(let ((tmp a)) …)` shadows a user's `tmp`:
 That is the capture half. The other half — referential transparency — is handled by
 marking a template's *free* identifiers `%gref%<name>`, which the emitter and the
 tree-walking VM both resolve straight to the top level, past any binding the use site
-introduced:
+introduced (the marker survives into the IR as an ordinary symbol in a `ref`, `set!`
+or `define` name field; for what each backend then does with it, see `docs/ir.md` §
+Marked names):
 
 ```scheme
 (define (helper x) (* x 10))
@@ -214,13 +251,15 @@ special form when it appears as a literal symbol inside a template, even inside
 
 ---
 
-## Stage 3 — Compiler (Analyzer)
+## Pipeline Stage 3 — Compiler (Analyzer)
 
 **Input:** list of core S-expressions  
-**Output:** list of IR nodes (see `docs/ir.md`)
+**Output:** list of IR nodes — the eight tags are in `docs/ir.md` § Node Types
 
 A recursive descent analyzer that converts each core form to a typed IR node. No
-optimization passes at this stage; analysis is purely structural.
+optimization passes at this stage; analysis is purely structural — and there are none
+downstream either, which is a sizing decision rather than an omission: see
+`docs/ir.md` § Source locations, types, and optimization are not in the IR.
 
 Special cases in the analyzer:
 
@@ -229,18 +268,27 @@ Special cases in the analyzer:
   `rest?` is set to `#t` for symbol and improper-list forms.
 - **`(define (name params…) body…)`** shorthand — desugared to
   `ir:define name (ir:lambda params body rest?)`. The `rest?` flag is derived from
-  `(not (list? params))`, matching the improper-list handling above.
+  `(not (list? params))`, matching the improper-list handling above. In the normal
+  pipeline the analyzer never sees this spelling — the expander has already rewritten
+  it — so the branch is a fallback for callers that analyze unexpanded forms. See
+  `docs/ir.md` § `(define name val)`.
 - **`(if test then)`** — missing `else` arm defaults to `ir:const #f`.
 
 ---
 
-## Stage 4 — VM (Bootstrap)
+## Pipeline Stage 4 — VM (Bootstrap)
 
 **Input:** list of IR nodes  
 **Output:** result value of the last expression
 
-A tree-walking interpreter with proper tail calls via a tagged-thunk trampoline.
-See `docs/ir.md` for the node types it handles.
+A tree-walking interpreter with proper tail calls via a tagged-thunk trampoline. It
+handles all eight node types (`docs/ir.md` § Node Types).
+
+This is one of the IR's two consumers, not the only one: `(kaappi paal emitter)`
+compiles the same node tree to bytecode, and the CLI's default file path goes through
+*it* rather than through this stage. The tree-walking VM stays as the simpler
+reference implementation, so a disagreement between the two is evidence of an emitter
+bug. See `docs/ir.md` § Where the IR sits.
 
 ### Tail call optimization
 

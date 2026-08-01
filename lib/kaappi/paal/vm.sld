@@ -1,6 +1,6 @@
 ;;; (kaappi paal vm) — Bootstrap VM: tree-walking interpreter over IR
 ;;;
-;;; Stage 4 of the Paal compilation pipeline.
+;;; Pipeline stage 4.
 ;;; Evaluates IR nodes against an environment.
 ;;;
 ;;; Environment entries are mutable vector boxes (cons name #(val)) so

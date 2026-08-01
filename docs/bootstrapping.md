@@ -1,7 +1,14 @@
 # Paal — Bootstrapping Roadmap
 
 Paal is designed to be self-hosting: `paal` will eventually compile its own source.
-This document describes the stages of that process and the design decisions behind each.
+This document describes that process and the design decisions behind each step.
+
+**Vocabulary.** Two different things get numbered here, so they get different words.
+A **tier** is a rung on the capability ladder below — what paal can do without help.
+A **bootstrap stage** is a unit of work in the roadmap, and is what "bootstrap stage 6
+complete" means elsewhere in the repo. They do not line up, and never did. A third
+scheme, `docs/architecture.md`'s **pipeline stage**, is a position in the compiler
+pipeline; a fourth, `docs/TODO.md`'s **phase**, is a batch of feature work.
 
 ## The Bootstrap Problem
 
@@ -9,25 +16,30 @@ A self-hosting compiler needs to be built with itself, but it can't compile itse
 before it exists. The standard solution is a bootstrap chain:
 
 ```
-Stage 0: kaappi (host interpreter, Zig)
+Tier 0: kaappi (host interpreter, Zig)
     │  runs paal source as interpreted Scheme
     ▼
-Stage 1: paal tree-walking VM (current)
+Tier 1: paal tree-walking VM
     │  compiles paal source to IR + evaluates
     ▼
-Stage 2: paal bytecode compiler
+Tier 2: paal bytecode compiler
     │  compiles paal source to paal bytecode
     ▼
-Stage 3: paal bytecode VM
+Tier 3: paal bytecode VM
     │  runs paal bytecode natively
     ▼
-Stage 4: paal can compile paal
+Tier 4: paal can compile paal
     │  self-hosting achieved
     ▼
-Stage 5: paal binary (no host dependency)
+Tier 5: paal binary (no host dependency)
 ```
 
-## Current Status: Stage 6 complete — 649 tests pass
+Tiers 0–4 are reached. Tier 5 is reached at run time — `make binary` produces a
+`paal` that needs no kaappi installed — though building it still wants the kaappi
+source checkout and zig. Status is tracked in one place only, the section below;
+this ladder deliberately carries no per-rung markers, because when it did they drifted.
+
+## Current Status: Bootstrap Stage 6 complete — 649 tests pass
 
 Paal can load all 8 of its own library files through its bytecode pipeline and
 compile and execute arbitrary Scheme through its own loaded pipeline with no HOST
@@ -44,7 +56,7 @@ pipeline involvement in the compute path:
 ; → 120
 ```
 
-### Stage 6 — What was done
+### Bootstrap Stage 6 — What was done
 
 | Item | Status |
 |------|--------|
@@ -74,9 +86,9 @@ paal eval "(define-syntax swap! (syntax-rules () ((_ a b) (let ((t a)) (set! a b
            (define x 1) (define y 2) (swap! x y) (list x y)"   ; → (2 1)
 ```
 
-## Remaining Stages
+## Bootstrap Stages
 
-### Stage 2 — Tail Call Optimization ✓ complete
+### Bootstrap Stage 2 — Tail Call Optimization ✓ complete
 
 **Why first:** Scheme mandates proper tail calls. Any tail-recursive program (including
 paal's own compiler passes) will stack-overflow on the tree-walking VM without TCO.
@@ -93,7 +105,7 @@ Tail positions: last expression of `ir:begin`, both arms of `ir:if`, lambda body
 **Test gate:** `(define (loop n) (if (= n 0) 'done (loop (- n 1)))) (loop 1000000)`
 must complete without stack overflow.
 
-### Stage 3 — Bytecode Compiler ✓ complete
+### Bootstrap Stage 3 — Bytecode Compiler ✓ complete
 
 **Files to create:**
 - `lib/kaappi/paal/bytecode.sld` — ISA definitions (instruction tags + operand shapes)
@@ -143,7 +155,7 @@ The dispatch loop's `while` is the implicit trampoline.
 `(list 'load-const dst idx)` etc. A later phase migrates to bytevector encoding
 for performance and eventual self-compilation.
 
-### Stage 4 — Bytecode VM Dispatch ✓ complete
+### Bootstrap Stage 4 — Bytecode VM Dispatch ✓ complete
 
 **File to create:** `lib/kaappi/paal/vm-bc.sld`
 
@@ -169,12 +181,12 @@ Scheme `vector`). The loop processes one instruction per iteration:
 function) and `pkaappi-run-bc` (run bytecode). The tree-walking VM stays as a fallback
 during the transition. The same 79 tests run against both VMs to verify equivalence.
 
-### Stage 5 — Self-Hosted Reader ✓ complete
+### Bootstrap Stage 5 — Self-Hosted Reader ✓ complete
 
 **File to rewrite:** `lib/kaappi/paal/reader.sld`
 
 Replace the host `read` wrapper with a character-level reader written in Kaappi Scheme.
-TCO (Stage 2) is a prerequisite — the recursive descent parser needs proper tail calls
+TCO (bootstrap stage 2) is a prerequisite — the recursive descent parser needs proper tail calls
 to handle deep nesting without stack overflow.
 
 **Token types for initial implementation** (sufficient to read paal's own source):
@@ -200,9 +212,9 @@ SRFI 207 raw strings — add incrementally as needed.
 **Test gate:** `pkaappi-run-file` on paal's own `.sld` source files must parse and
 return correct results with the new reader.
 
-### Stage 6 — Self-Compilation
+### Bootstrap Stage 6 — Self-Compilation
 
-Once stages 2–5 are complete, paal can compile its own source:
+Once bootstrap stages 2–5 are complete, paal can compile its own source:
 
 ```sh
 paal compile lib/kaappi/paal/compiler.sld -o compiler.pbc
