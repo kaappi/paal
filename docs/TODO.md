@@ -5,9 +5,16 @@ same programs as `kaappi`, with the same CLI conventions.
 
 Current: Stage 6 complete (self-hosting). **585 tests pass** (was 194 before Phase 1–2).
 
+**Every item in this file is now done.** Two rest on host bugs that are still open
+upstream — kaappi/kaappi#2010 and kaappi/kaappi#1920 / kaappi/kaappi#2043 — but paal
+has no exposure to either left, so both are recorded here as worked around rather
+than as work outstanding. What each entry says about *why* is the point of keeping
+them; several correct an earlier premise that turned out to be false, and those are
+worth more than the checkbox.
+
 ---
 
-## Phase 1 — R7RS Language Core ✅ (mostly complete)
+## Phase 1 — R7RS Language Core ✅
 
 Special forms and expander gaps.
 
@@ -97,7 +104,7 @@ Missing primitives added to `paal-initial-env` (`lib/kaappi/paal/vm.sld`):
       *inside* an extent is not leaving it, so declining there does not run
       `after`. See `docs/architecture.md` § The wind stack.
 
-**Known limitations (still open):**
+**Known limitations — both since closed:**
 
 - [x] `guard` nesting depth — **fixed upstream** by kaappi/kaappi#1919, closing
       kaappi/kaappi#1886. Both `MAX_HANDLERS` and `MAX_WINDS` were fixed 64-entry
@@ -160,11 +167,13 @@ Missing primitives added to `paal-initial-env` (`lib/kaappi/paal/vm.sld`):
 
 ---
 
-## Phase 2 — Standard Libraries in User Environment ✅ (procedures added; import resolution pending)
+## Phase 2 — Standard Libraries in User Environment ✅
 
-User programs call `(import (scheme inexact))` etc. Currently `import` is a no-op and
-`paal-initial-env` is a flat unnamespaced blob. The procedures are now available, but
-`(import (scheme inexact))` won't actually load them on demand until Phase 5.
+User programs call `(import (scheme inexact))` etc. This phase put the procedures
+in `paal-initial-env`, which is a flat unnamespaced blob, so at the time it was
+written `import` was still a no-op and the entries below meant "present, but not
+reachable by importing them". Phase 5 built real import resolution; the two read
+together now.
 
 - [x] `(scheme inexact)` — `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `exp`, `log`
       all added to `paal-initial-env`
@@ -624,7 +633,7 @@ Issues that span stages rather than belonging to one phase.
       the run continues (kaappi-test `d67855a`). The pass count is a trustworthy
       signal again — a green run no longer hides skipped tests.
 
-**Open:**
+**Closed since, and left here for the reasoning:**
 
 - [x] **A macro template can name a library's private binding** — both
       directions of one problem, now closed. A template names things by their
