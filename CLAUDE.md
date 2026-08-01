@@ -49,17 +49,36 @@ list. See `docs/architecture.md` § The stepping debugger.
 
 ## Architecture
 
-Each compilation stage is a separate `define-library` under `lib/kaappi/paal/`:
+Each compilation stage is a separate `define-library`. The pipeline **forks at the
+IR** — one node tree, two backends, both of which must handle every node type:
+
+```
+reader → expander → compiler ─┬─→ vm                (tree-walking; bootstrap/reference)
+                      IR      └─→ emitter → vm-bc   (bytecode; the CLI default path)
+```
 
 | Library | File | Role |
 |---------|------|------|
 | `(kaappi paal reader)` | `lib/kaappi/paal/reader.sld` | Text → list of S-expressions |
-| `(kaappi paal expander)` | `lib/kaappi/paal/expander.sld` | Macro expansion (stub → full) |
-| `(kaappi paal compiler)` | `lib/kaappi/paal/compiler.sld` | S-expr → IR |
+| `(kaappi paal expander)` | `lib/kaappi/paal/expander.sld` | Macro expansion — `syntax-rules`, hygiene, derived forms |
+| `(kaappi paal compiler)` | `lib/kaappi/paal/compiler.sld` | Core forms → IR |
+| `(kaappi paal ir)` | `lib/kaappi/paal/ir.sld` | IR node constructors/accessors (8 node types) |
 | `(kaappi paal vm)` | `lib/kaappi/paal/vm.sld` | IR eval (tree-walking bootstrap) |
+| `(kaappi paal emitter)` | `lib/kaappi/paal/emitter.sld` | IR → bytecode |
+| `(kaappi paal vm-bc)` | `lib/kaappi/paal/vm-bc.sld` | Bytecode dispatch loop |
 | `(kaappi paal)` | `lib/kaappi/paal.sld` | Public API |
 
-Entry point for the CLI: `src/main.scm` (produces `paal` binary eventually).
+Support libraries, also under `lib/kaappi/paal/`: `bytecode.sld`
+(`<bytecode-function>` and the ISA), `frame.sld` (closures and call frames),
+`serializer.sld` (`.pbc` read/write), `formatter.sld` (`fmt`), `embedded.sld`
+(source of bundled libraries, for a binary with no filesystem). Full table and
+diagram: `docs/architecture.md` § Compilation Pipeline.
+
+The tree-walking VM is the reference implementation, not the production one: the
+bytecode VM is tested against it for equivalence, so a disagreement isolates the bug
+to the emitter. Don't "fix" a divergence by changing the tree-walker first.
+
+Entry point for the CLI: `src/main.scm`. `make binary` bundles it into `paal`.
 
 ## Binary naming
 
