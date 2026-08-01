@@ -234,6 +234,12 @@
              (number? . ,number?) (integer? . ,integer?) (real? . ,real?)
              (rational? . ,rational?) (complex? . ,complex?)
              (procedure? . ,procedure?)
+             ;; The HOST predicate, kept reachable under its own name because
+             ;; the bytecode path overrides `procedure?` with one that also
+             ;; recognizes paal closures -- see pkaappi-make-globals.  On the
+             ;; tree-walking path, where a closure *is* a HOST procedure, the
+             ;; two answer the same thing.
+             (%paal-host-procedure? . ,procedure?)
 
              ;; I/O
              (display . ,display) (newline . ,newline) (write . ,write)

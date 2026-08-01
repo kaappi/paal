@@ -557,48 +557,132 @@
                            (if (< y x)
                                (loop y)
                                (values x (- n (* x x)))))))))
+             ; A paal closure is a tagged vector, so the HOST procedure? says
+             ; #f for every procedure a paal program defines -- and vector?
+             ; says #t.  Every predicate dispatch on procedures was wrong.
+             ;
+             ; The tag is the interned symbol from frame.sld, so it is eq?
+             ; across both live copies.  Safe to override because do-call! and
+             ; paal-call-value both test closure? *before* procedure?, so a
+             ; closure never reaches the procedure? arm of either.
+             ;
+             ; vector? is deliberately NOT given the same treatment.  It is
+             ; load-bearing for closure?, bytecode-function?, promise?,
+             ; paal-vm-escape? and the wind-frame dispatch, and under
+             ; self-hosting the paal-compiled frame.sld resolves it out of the
+             ; *user program's* table -- so overriding it there makes closure?
+             ; return #f for every closure, and every call reports that its
+             ; callee is not callable.  The leak is documented in
+             ; docs/architecture.md.
+             ;
+             ; NB this blob is a Scheme string literal: a double quote anywhere
+             ; in it, comments included, ends the string and silently wrecks the
+             ; rest of the library.
+             (define (procedure? x)
+               (if (%paal-host-procedure? x)
+                   #t
+                   (if (vector? x)
+                       (if (= (vector-length x) 3)
+                           (eq? (vector-ref x 0) '%paal-closure)
+                           #f)
+                       #f)))
+             ; map/for-each take any number of lists and stop at the shortest,
+             ; per R7RS.  They used to accept two and silently ignore the rest,
+             ; so (map + '(1 2) '(3 4) '(5 6)) answered (4 6).
+             ;
+             ; The one-list arm stays inlined rather than delegating to the
+             ; n-ary path: map is on paal's own hot path when self-hosting --
+             ; the expander and emitter call it constantly -- and that case must
+             ; not pay an apply.  apply here is the VM marker, spread by
+             ; do-call! with no arity ceiling, which is what it exists for.
+             (define (%paal-any-null? ls)
+               (if (null? ls) #f (if (null? (car ls)) #t (%paal-any-null? (cdr ls)))))
+             (define (%paal-cars ls)
+               (if (null? ls) '() (cons (car (car ls)) (%paal-cars (cdr ls)))))
+             (define (%paal-cdrs ls)
+               (if (null? ls) '() (cons (cdr (car ls)) (%paal-cdrs (cdr ls)))))
              (define (map f lst . rest)
-               (if (null? lst)
+               (if (null? rest)
+                   (if (null? lst) '() (cons (f (car lst)) (map f (cdr lst))))
+                   (%paal-map-n f (cons lst rest))))
+             (define (%paal-map-n f ls)
+               (if (%paal-any-null? ls)
                    '()
-                   (if (null? rest)
-                       (cons (f (car lst)) (map f (cdr lst)))
-                       (cons (f (car lst) (car (car rest)))
-                             (map f (cdr lst) (cdr (car rest)))))))
+                   (cons (apply f (%paal-cars ls)) (%paal-map-n f (%paal-cdrs ls)))))
              (define (for-each f lst . rest)
-               (if (null? lst)
+               (if (null? rest)
+                   (if (null? lst)
+                       (if #f #f)
+                       (begin (f (car lst)) (for-each f (cdr lst))))
+                   (%paal-for-each-n f (cons lst rest))))
+             (define (%paal-for-each-n f ls)
+               (if (%paal-any-null? ls)
                    (if #f #f)
-                   (begin
-                     (if (null? rest)
-                         (f (car lst))
-                         (f (car lst) (car (car rest))))
-                     (if (null? rest)
-                         (for-each f (cdr lst))
-                         (for-each f (cdr lst) (cdr (car rest)))))))
+                   (begin (apply f (%paal-cars ls))
+                          (%paal-for-each-n f (%paal-cdrs ls)))))
              (define (filter pred lst)
                (if (null? lst)
                    '()
                    (if (pred (car lst))
                        (cons (car lst) (filter pred (cdr lst)))
                        (filter pred (cdr lst)))))
-             (define (vector-map f v)
-               (let* ((n (vector-length v))
-                      (result (make-vector n)))
-                 (let loop ((i 0))
-                   (if (= i n)
-                       result
-                       (begin
-                         (vector-set! result i (f (vector-ref v i)))
-                         (loop (+ i 1)))))))
-             (define (vector-for-each f v)
-               (let ((n (vector-length v)))
-                 (let loop ((i 0))
-                   (if (< i n)
-                       (begin (f (vector-ref v i)) (loop (+ i 1)))
-                       (if #f #f)))))
-             (define (string-map f s)
-               (list->string (map f (string->list s))))
-             (define (string-for-each f s)
-               (for-each f (string->list s)))")
+             ; Same story as map: these took one sequence and dropped the rest,
+             ; so (vector-map + #(1 2 3) #(4 5 6)) answered #(1 2 3).  R7RS
+             ; stops at the shortest sequence.
+             (define (%paal-min-length vs)
+               (if (null? (cdr vs))
+                   (vector-length (car vs))
+                   (let ((n (vector-length (car vs)))
+                         (m (%paal-min-length (cdr vs))))
+                     (if (< n m) n m))))
+             (define (%paal-nths vs i)
+               (if (null? vs) '() (cons (vector-ref (car vs) i) (%paal-nths (cdr vs) i))))
+             (define (vector-map f v . rest)
+               (if (null? rest)
+                   (let* ((n (vector-length v))
+                          (result (make-vector n)))
+                     (let loop ((i 0))
+                       (if (= i n)
+                           result
+                           (begin
+                             (vector-set! result i (f (vector-ref v i)))
+                             (loop (+ i 1))))))
+                   (let* ((vs (cons v rest))
+                          (n (%paal-min-length vs))
+                          (result (make-vector n)))
+                     (let loop ((i 0))
+                       (if (= i n)
+                           result
+                           (begin
+                             (vector-set! result i (apply f (%paal-nths vs i)))
+                             (loop (+ i 1))))))))
+             (define (vector-for-each f v . rest)
+               (if (null? rest)
+                   (let ((n (vector-length v)))
+                     (let loop ((i 0))
+                       (if (< i n)
+                           (begin (f (vector-ref v i)) (loop (+ i 1)))
+                           (if #f #f))))
+                   (let* ((vs (cons v rest))
+                          (n (%paal-min-length vs)))
+                     (let loop ((i 0))
+                       (if (< i n)
+                           (begin (apply f (%paal-nths vs i)) (loop (+ i 1)))
+                           (if #f #f))))))
+             ; The string forms go through map, so they became n-ary with it;
+             ; the one-string path still avoids apply.
+             (define (%paal-string-lists ss)
+               (if (null? ss) '() (cons (string->list (car ss))
+                                        (%paal-string-lists (cdr ss)))))
+             (define (string-map f s . rest)
+               (if (null? rest)
+                   (list->string (map f (string->list s)))
+                   (list->string
+                     (%paal-map-n f (%paal-string-lists (cons s rest))))))
+             (define (string-for-each f s . rest)
+               (if (null? rest)
+                   (for-each f (string->list s))
+                   (%paal-for-each-n f (%paal-string-lists (cons s rest)))))")
           g)
 
         ; Install paal-native parameter objects (overriding the HOST make-parameter

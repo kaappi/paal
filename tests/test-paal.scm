@@ -1398,7 +1398,24 @@
     (pkaappi-run-bc-string
       "(define acc '())
        (vector-for-each (lambda (x) (set! acc (cons x acc))) #(3 2 1))
-       (reverse acc)")))
+       (reverse acc)"))
+  ;; These took one vector and silently dropped the rest, so
+  ;; (vector-map + #(1 2 3) #(4 5 6)) answered #(1 2 3) -- a wrong answer with
+  ;; no error, which is why nothing caught it.  R7RS stops at the shortest.
+  ;; Bytecode path only: vector-map is a paal-source blob entry, and the
+  ;; tree-walking path has never had it at all.
+  (test-equal "vector-map over several vectors"
+    #(5 7 9)
+    (pkaappi-run-bc-string "(vector-map + #(1 2 3) #(4 5 6))"))
+  (test-equal "vector-map stops at the shortest"
+    #(5 7)
+    (pkaappi-run-bc-string "(vector-map + #(1 2 3) #(4 5))"))
+  (test-equal "vector-for-each over several vectors"
+    10
+    (pkaappi-run-bc-string
+      "(define a 0)
+       (vector-for-each (lambda (x y) (set! a (+ a x y))) #(1 2) #(3 4))
+       a")))
 
 (test-group "string-map / string-for-each"
   (test-equal "string-map upcase"
@@ -1409,7 +1426,83 @@
     (pkaappi-run-bc-string
       "(define acc '())
        (string-for-each (lambda (c) (set! acc (cons c acc))) \"cba\")
-       (reverse acc)")))
+       (reverse acc)"))
+  ;; Returns the *second* string's character, so a result of "cd" proves both
+  ;; that the second string is consumed and that the result stops at the
+  ;; shorter of the two.
+  (test-equal "string-map over several strings"
+    "cd"
+    (pkaappi-run-bc-string "(string-map (lambda (a b) b) \"abz\" \"cd\")"))
+  (test-equal "string-for-each over several strings"
+    '((#\b #\d) (#\a #\c))
+    (pkaappi-run-bc-string
+      "(define acc '())
+       (string-for-each (lambda (x y) (set! acc (cons (list x y) acc))) \"ab\" \"cd\")
+       acc")))
+
+;; ---------------------------------------------------------------
+;; procedure? and n-ary map / for-each
+;; ---------------------------------------------------------------
+;;
+;; Both were wrong only on the bytecode path, and both are asserted on the
+;; tree-walking path too -- not because it was broken, but because pinning the
+;; two together is what stops them drifting apart again.  There the closures
+;; *are* HOST procedures and `map` is HOST `map`, so it was always right.
+
+(test-group "procedure?"
+  ;; A paal closure is a tagged vector, so the HOST procedure? said #f for
+  ;; every procedure a paal program defines -- and vector? said #t.
+  (test-equal "a paal-defined procedure is a procedure"
+    '(#t #t #t #f #f)
+    (pkaappi-run-bc-string
+      "(define (f x) x)
+       (list (procedure? f) (procedure? (lambda () 1)) (procedure? car)
+             (procedure? 5) (procedure? '(a)))"))
+  (test-equal "same on the tree-walking path"
+    '(#t #t #t #f #f)
+    (pkaappi-run-string
+      "(define (f x) x)
+       (list (procedure? f) (procedure? (lambda () 1)) (procedure? car)
+             (procedure? 5) (procedure? '(a)))"))
+  ;; vector? still says #t for a closure.  That is a representation leak and it
+  ;; stays: vector? is load-bearing for closure?, bytecode-function?, promise?
+  ;; and the wind-frame dispatch, and under self-hosting the paal-compiled
+  ;; frame.sld resolves it out of the user program's table -- overriding it
+  ;; there makes closure? return #f for every closure.  Asserted so the
+  ;; trade-off is recorded rather than rediscovered.
+  (test-equal "vector? still sees the closure representation"
+    #t
+    (pkaappi-run-bc-string "(define (f) 1) (vector? f)")))
+
+(test-group "n-ary map / for-each"
+  ;; Capped at two lists, extras silently dropped:
+  ;; (map + '(1 2) '(3 4) '(5 6)) answered (4 6).
+  (test-equal "map over three lists"
+    '(9 12)
+    (pkaappi-run-bc-string "(map + '(1 2) '(3 4) '(5 6))"))
+  (test-equal "map over four lists"
+    '(16 20)
+    (pkaappi-run-bc-string "(map + '(1 2) '(3 4) '(5 6) '(7 8))"))
+  (test-equal "map stops at the shortest list"
+    '((1 a) (2 b))
+    (pkaappi-run-bc-string "(map list '(1 2 3) '(a b))"))
+  (test-equal "map over three lists — tree-walking path"
+    '(9 12)
+    (pkaappi-run-string "(map + '(1 2) '(3 4) '(5 6))"))
+  (test-equal "for-each over three lists"
+    '(12 9)
+    (pkaappi-run-bc-string
+      "(define acc '())
+       (for-each (lambda (x y z) (set! acc (cons (+ x y z) acc))) '(1 2) '(3 4) '(5 6))
+       acc"))
+  ;; The one-list arm is kept inlined rather than delegating, so it pays no
+  ;; apply -- map is on paal's own hot path when self-hosting.
+  (test-equal "the one-list case still works"
+    '(2 4 6)
+    (pkaappi-run-bc-string "(map (lambda (x) (* x 2)) '(1 2 3))"))
+  (test-equal "the two-list case still works"
+    '(4 6)
+    (pkaappi-run-bc-string "(map + '(1 2) '(3 4))")))
 
 (test-group "values / call-with-values / apply"
   ;; R7RS 6.10: a call to `values` with one argument is equivalent to the

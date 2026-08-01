@@ -3,7 +3,7 @@
 Goal: make `paal` a correct R7RS-small Scheme implementation that runs the
 same programs as `kaappi`, with the same CLI conventions.
 
-Current: Stage 6 complete (self-hosting). **585 tests pass** (was 194 before Phase 1–2).
+Current: Stage 6 complete (self-hosting). **606 tests pass** (was 194 before Phase 1–2).
 
 Phases 1–6 are done. Two of their entries rest on host bugs still open upstream —
 kaappi/kaappi#2010 and kaappi/kaappi#1920 / kaappi/kaappi#2043 — but paal has no
@@ -754,13 +754,35 @@ no value representation and no cross-copy protocol — so they can land in any o
       because the reader's numeric round trip runs through it. `(values)` still
       tags — `(pair? '())` is `#f` — so zero values stays an MVR and
       `call-with-values` still applies the consumer to nothing.
-- [ ] **`procedure?` is `#f` for every paal-defined procedure** — and
-      `(vector? f)` is `#t`. First-order wrong answer; every predicate dispatch
-      on procedures is broken on the bytecode path. Fix `procedure?` in the
-      blob; **do not touch `vector?`**, which is load-bearing for `closure?`,
-      `bytecode-function?`, `promise?` and the wind-frame dispatch.
-- [ ] **`map`/`for-each` cap at 2 lists, `vector-map`/`vector-for-each`/
-      `string-map`/`string-for-each` at 1 sequence** — extras silently dropped.
+- [x] **`procedure?` was `#f` for every paal-defined procedure** — and
+      `(vector? f)` is `#t`. First-order wrong answer: every predicate dispatch
+      on procedures was broken on the bytecode path. Fixed in the blob, keyed on
+      the interned `%paal-closure` tag, which is `eq?` across both live copies.
+      Safe because `do-call!` and `paal-call-value` both test `closure?` before
+      `procedure?`, so a closure never reaches the `procedure?` arm.
+
+      **`vector?` deliberately still says `#t` for a closure.** It is
+      load-bearing for `closure?`, `bytecode-function?`, `promise?`,
+      `paal-vm-escape?` and the wind-frame dispatch, and under self-hosting the
+      paal-compiled `frame.sld` resolves it out of the *user program's* table —
+      so overriding it there makes `closure?` return `#f` for every closure and
+      every call report its callee is not callable. The leak is asserted in the
+      suite so the trade-off is recorded rather than rediscovered.
+- [x] **`map`/`for-each` capped at 2 lists, `vector-map`/`vector-for-each`/
+      `string-map`/`string-for-each` at 1 sequence** — extras silently dropped,
+      so `(map + '(1 2) '(3 4) '(5 6))` answered `(4 6)` and
+      `(vector-map + #(1 2 3) #(4 5 6))` answered `#(1 2 3)`. All six are n-ary
+      now and stop at the shortest sequence, per R7RS.
+
+      The one-sequence arm of each stays inlined rather than delegating to the
+      n-ary path: `map` is on paal's own hot path when self-hosting — the
+      expander and emitter call it constantly — and that case must not pay an
+      `apply`. Together with `procedure?`, §6.10 went from 26/8 to 29/5.
+
+      Worth knowing for anyone editing the blob: it is a Scheme **string
+      literal**, so a double quote anywhere inside it, comments included, ends
+      the string and silently wrecks the rest of the library. That is what a
+      `"not callable"` in a comment did while writing this.
 - [ ] **`case` with `=>` passes the `memv` result, not the key.**
 - [ ] **`expand-body` does not splice a leading `begin`** — so a `cond-expand`
       or `include` producing definitions inside a body fails with

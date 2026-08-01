@@ -20,7 +20,7 @@
         ("6.7 Strings" 130 0)
         ("6.8 Vectors" 43 0)
         ("6.9 Bytevectors" 39 0)
-        ("6.10 Control Features" 26 8)
+        ("6.10 Control Features" 29 5)
         ("6.11 Exceptions" 21 3)
         ("6.12 Environments and evaluation" 3 1)
         ("Read syntax" 93 0)

@@ -27,7 +27,7 @@ Stage 4: paal can compile paal
 Stage 5: paal binary (no host dependency)
 ```
 
-## Current Status: Stage 6 complete — 585 tests pass
+## Current Status: Stage 6 complete — 606 tests pass
 
 Paal can load all 8 of its own library files through its bytecode pipeline and
 compile and execute arbitrary Scheme through its own loaded pipeline with no HOST
