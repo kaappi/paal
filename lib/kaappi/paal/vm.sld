@@ -17,7 +17,8 @@
 ;;; replaced by a bytecode emitter + register-based VM.
 
 (define-library (kaappi paal vm)
-  (import (scheme base) (scheme read) (kaappi paal ir) (kaappi paal expander)
+  (import (scheme base) (scheme read) (scheme complex)
+          (kaappi paal ir) (kaappi paal expander)
           (kaappi ffi) (kaappi fibers))
   (export paal-eval paal-eval-program paal-initial-env)
   (begin
@@ -444,29 +445,16 @@
              ;; R5RS specifies is already here under an unchanged name.
              (exact->inexact . ,inexact) (inexact->exact . ,exact)
 
-             ;; (scheme complex) — real numbers only.  Paal has no complex
-             ;; type, so these are the restrictions of the R7RS procedures to
-             ;; the real line: every number is its own real part with a zero
-             ;; imaginary part.  make-rectangular and make-polar are exact
-             ;; where the result is real and an error otherwise, rather than
-             ;; silently dropping the imaginary component.
-             (real-part . ,(lambda (z) z))
-             (imag-part . ,(lambda (z) 0))
-             (magnitude . ,abs)
-             (angle . ,(lambda (z) (if (negative? z) (* 4 (atan 1)) 0)))
-             (make-rectangular
-               . ,(lambda (re im)
-                    (if (zero? im)
-                        re
-                        (error "make-rectangular: paal has no complex numbers"
-                               re im))))
-             (make-polar
-               . ,(lambda (mag ang)
-                    (let ((im (* mag (sin ang))))
-                      (if (zero? im)
-                          (* mag (cos ang))
-                          (error "make-polar: paal has no complex numbers"
-                                 mag ang)))))
+             ;; (scheme complex) — kaappi's, not a restriction to the reals.
+             ;; These were stubbed here on the assumption that paal would need
+             ;; its own complex type; it does not, because paal runs on
+             ;; kaappi's runtime and kaappi has the full tower.  (sqrt -1) is
+             ;; +i, and 2+3i literals read, because paal's reader defers to
+             ;; string->number.
+             (real-part . ,real-part) (imag-part . ,imag-part)
+             (magnitude . ,magnitude) (angle . ,angle)
+             (make-rectangular . ,make-rectangular)
+             (make-polar . ,make-polar)
 
              ;; --- (kaappi ffi) and (kaappi fibers) ---
              ;;

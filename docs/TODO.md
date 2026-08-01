@@ -3,7 +3,7 @@
 Goal: make `paal` a correct R7RS-small Scheme implementation that runs the
 same programs as `kaappi`, with the same CLI conventions.
 
-Current: Stage 6 complete (self-hosting). **563 tests pass** (was 194 before Phase 1–2).
+Current: Stage 6 complete (self-hosting). **562 tests pass** (was 194 before Phase 1–2).
 
 ---
 
@@ -181,12 +181,13 @@ User programs call `(import (scheme inexact))` etc. Currently `import` is a no-o
       `open-binary-input-file`, `open-binary-output-file`,
       `file-exists?`, `delete-file` added
 - [x] `(scheme write)` completeness — `write-shared`, `write-simple` added
-- [x] `(scheme complex)` — the R7RS procedures restricted to the real line:
-      every number is its own real part with a zero imaginary part.
-      `make-rectangular`/`make-polar` error on a non-zero imaginary component
-      rather than silently dropping it. Paal has no complex type — that is
-      Phase 8's bignum/rational/complex item — but portable code calls these
-      unconditionally, so having them is what matters.
+- [x] `(scheme complex)` — kaappi's, bound directly. This was first
+      implemented here as the R7RS procedures restricted to the real line, on
+      the assumption that paal would need its own complex type. It does not:
+      paal runs on kaappi's runtime, which carries the full numeric tower.
+      `(make-rectangular 1 2)` is `1+2i`, `(sqrt -1)` is `+i`, `(* 2+3i 2)`
+      works, and `1+2i` literals read because paal's reader defers to
+      `string->number`.
 - [x] `(scheme r5rs)` — `exact->inexact` and `inexact->exact`, the only two
       names R7RS renamed. Everything else R5RS specifies is already present
       under an unchanged name.
@@ -432,9 +433,8 @@ inferred:
       30))` the exact 61-digit one, `(+ 1/3 1/6)` gives `1/2`, and
       `numerator`/`exact`/`exact->inexact` behave across both.
 
-      Complex is the only part missing, and it is covered by the
-      `(scheme complex)` entry in Phase 2 — the R7RS procedures restricted to
-      the real line, erroring rather than silently dropping an imaginary part.
+      Complex works too, for the same reason — see the `(scheme complex)`
+      entry in Phase 2. The whole numeric tower came free with the runtime.
 
 ---
 

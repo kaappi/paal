@@ -2422,17 +2422,14 @@
   (test-equal "exact->inexact and inexact->exact"
     '(1.0 2)
     (pkaappi-run-bc-string "(list (exact->inexact 1) (inexact->exact 2.0))"))
-  ;; Paal has no complex type, so these are the R7RS procedures restricted to
-  ;; the real line: every number is its own real part, with a zero imaginary
-  ;; part.  Useful because portable code calls them unconditionally.
-  (test-equal "complex accessors on reals"
-    '(5 0 3 2)
+  ;; Not a restriction to the reals: paal runs on kaappi's runtime, which has
+  ;; the full numeric tower, so complex works outright.  1+2i literals read
+  ;; because paal's reader defers to string->number.
+  (test-equal "complex arithmetic"
+    '(1+2i 1.0 2.0 5.0 +i 4.0+6.0i)
     (pkaappi-run-bc-string
-      "(list (real-part 5) (imag-part 5) (magnitude -3) (make-rectangular 2 0))"))
-  ;; Erroring beats silently dropping the imaginary part.
-  (test-equal "make-rectangular refuses a non-zero imaginary part"
-    'errs
-    (pkaappi-run-bc-string "(guard (e (#t 'errs)) (make-rectangular 1 2))")))
+      "(list (make-rectangular 1 2) (real-part 1+2i) (imag-part 1+2i)
+             (magnitude (make-rectangular 3 4)) (sqrt -1) (* 2+3i 2))")))
 
 ;; ---------------------------------------------------------------
 ;; Expander diagnostics
