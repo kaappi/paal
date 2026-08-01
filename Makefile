@@ -37,6 +37,11 @@ binary: src/main.scm
 	cd $(KAAPPI_SRC) && zig build -Dbundle=$(CURDIR)/paal.sbc
 	cp $(KAAPPI_SRC)/zig-out/bin/kaappi paal
 	rm -f paal.sbc
+	# Leave the kaappi checkout as we found it.  -Dbundle overwrites
+	# zig-out/bin/kaappi in place, so without this the kaappi repo is left
+	# holding a paal binary that still answers --version as kaappi -- it only
+	# gives itself away when you run it with no arguments and get paal's REPL.
+	cd $(KAAPPI_SRC) && zig build
 	@echo "Built: paal"
 
 # Smoke-test the built binary.
