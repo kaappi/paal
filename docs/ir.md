@@ -4,6 +4,12 @@ The IR is defined in `lib/kaappi/paal/ir.sld` as the `(kaappi paal ir)` library.
 It is the narrow waist of the pipeline: the analyzer is the only thing that builds
 IR nodes, and every backend consumes them.
 
+**See also:** [KEP-0008](https://github.com/kaappi/keps/blob/main/keps/0008-shared-ir-contract.md)
+documents the core-form set, optimization set, and shadowing-safety
+invariant this IR shares with kaappi's and chaaya's independent IRs
+(paal deliberately implements none of the optimization contract — see
+the KEP for why).
+
 ## Where the IR sits
 
 ```
