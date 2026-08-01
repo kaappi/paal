@@ -413,7 +413,19 @@ inferred:
       closures *are* HOST procedures. Making them work under bytecode needs the
       VM-marker treatment `guard` and `apply` got: recognise the callee in
       `do-call!` and re-enter the dispatch loop for the callback.
-- [ ] **Native backend** — LLVM or alternative native code generation
+- [x] **Native backend** — **resolved as already decided, not built.** This
+      entry contradicted the "Not planned" section below, which records LLVM
+      native code generation as deliberately out of scope because paal targets
+      its own bytecode VM. The same capability cannot be both a TODO and a
+      declared non-goal; the non-goal is the considered position and this
+      entry was a leftover.
+
+      Worth noting that a bundled `paal` *is* kaappi, so kaappi's own
+      `compile <file>` (native, via LLVM) is already in the binary. Exposing
+      it would mean paal delegating to kaappi's pipeline rather than its own,
+      which is a different thing from paal having a native backend and is not
+      obviously wanted. If it ever is, it belongs in the CLI section as a
+      delegation, not here as code generation.
 - [x] **GC** — nothing to do, for the same reason the self-contained primitive
       environment turned out to be nothing to do: `make binary` bundles paal
       into kaappi's runtime, so paal's binary already has kaappi's
