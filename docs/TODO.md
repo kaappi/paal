@@ -3,7 +3,7 @@
 Goal: make `paal` a correct R7RS-small Scheme implementation that runs the
 same programs as `kaappi`, with the same CLI conventions.
 
-Current: Stage 6 complete (self-hosting). **606 tests pass** (was 194 before Phase 1–2).
+Current: Stage 6 complete (self-hosting). **620 tests pass** (was 194 before Phase 1–2).
 
 Phases 1–6 are done. Two of their entries rest on host bugs still open upstream —
 kaappi/kaappi#2010 and kaappi/kaappi#1920 / kaappi/kaappi#2043 — but paal has no
@@ -783,13 +783,42 @@ no value representation and no cross-copy protocol — so they can land in any o
       literal**, so a double quote anywhere inside it, comments included, ends
       the string and silently wrecks the rest of the library. That is what a
       `"not callable"` in a comment did while writing this.
-- [ ] **`case` with `=>` passes the `memv` result, not the key.**
-- [ ] **`expand-body` does not splice a leading `begin`** — so a `cond-expand`
-      or `include` producing definitions inside a body fails with
-      `ir:define in expression position`. (Empty-binding `let*`/`let-values`/
-      `let*-values` are fine; an earlier draft of this entry said otherwise.)
-- [ ] **`syntax-rules` mixed-depth ellipsis** — `find-ellipsis-vars` discards
-      the tail after an ellipsis, so `((b ... a) ...)` cannot bind `a`.
+- [x] **`case` with `=>` passed the `memv` result, not the key** — R7RS 4.2.1
+      says the receiver gets the key. `expand-case` spliced the clause into a
+      `cond`, and `cond`'s own `=>` passes the value its *test* produced, which
+      here is `(memv k '(3))`. So `(case 3 ((3) => (lambda (x) (* x 2))))`
+      multiplied the list `(3)`. The `=>` clauses are rewritten in
+      `expand-case` now rather than routed through `cond`'s.
+- [x] **`expand-body` did not splice a leading `begin`** — R7RS 5.3.2 puts
+      definitions inside one at the head of a body. `cond-expand`, `include`
+      and `include-ci` all expand to a `begin`, so all three failed with
+      `ir:define in expression position`. They are expanded one step and
+      spliced now, because `expand-body` walks *unexpanded* forms — at that
+      point a `cond-expand` is still a `cond-expand`. §4.2 went 71/2 → 73/0.
+      (Empty-binding `let*`/`let-values`/`let*-values` are fine; an earlier
+      draft of this entry said otherwise.)
+
+      **A macro producing a definition in a body is still not supported**,
+      though R7RS 5.3.2 allows it. Expanding a macro use one step here was
+      tried and reverted: it made `(let () (def x 2) x)` work, scored
+      identically on the suite, and made the neighbouring shape *worse* — a
+      template that introduces the name gets it marked `%gref%`, since paal
+      treats a template's free identifiers as top-level references and does not
+      recognize `define` in a template as a binding position, so the name
+      became a `letrec*` binding the emitter still resolved as a global and the
+      compile error became a runtime `set! on unbound variable`. Making both
+      shapes work needs the hygiene model changed, not `expand-body`. Recorded
+      as an expected error in the suite so it is not mistaken for working.
+- [x] **`syntax-rules` mixed-depth ellipsis** — `find-ellipsis-vars` returned
+      only the sub-template's variables and discarded the tail, so a variable
+      appearing *after* the ellipsis in the same list was never bound per
+      iteration: `((b ... a) ...)` reported "ellipsis variable used outside
+      ellipsis template a". The tail belongs to the same iteration, so its
+      variables are collected too, with the run of ellipses dropped first since
+      that is depth rather than content. Checked against kaappi's answers on
+      seven template shapes, and a variable used below its depth is still
+      rejected — widening the search must not turn a depth mistake into a
+      silent wrong answer.
 - [ ] **Six bytevector-port procedures unbound**, and
       `scheme-report-environment`/`null-environment`.
 - [ ] **`(features)` answers with kaappi's list**, which does not contain

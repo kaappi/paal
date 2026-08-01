@@ -693,8 +693,15 @@
          (let ((b (assq tmpl env)))
            (if (and b (ellipsis? (cdr b))) (list tmpl) '())))
         ((pair? tmpl)
+         ;; `(sub ... rest)` used to return only sub's variables and drop the
+         ;; tail, so a variable appearing *after* the ellipsis was never bound
+         ;; per iteration: `((b ... a) ...)` reported "ellipsis variable used
+         ;; outside ellipsis template a".  The tail belongs to the same
+         ;; iteration as `sub`, so its variables count too — with the ellipses
+         ;; themselves dropped first, since a run of them is depth, not content.
          (if (and (pair? (cdr tmpl)) (eq? (cadr tmpl) '...))
-             (find-ellipsis-vars (car tmpl) env)
+             (append (find-ellipsis-vars (car tmpl) env)
+                     (find-ellipsis-vars (drop-ellipses (cdr tmpl)) env))
              (append (find-ellipsis-vars (car tmpl) env)
                      (find-ellipsis-vars (cdr tmpl) env))))
         (else '())))
@@ -1388,11 +1395,23 @@
             (clauses (cddr form))
             (k       (fresh-name "__paal_ck")))
         `(let ((,k ,key))
-           (cond ,@(map (lambda (clause)
-                          (if (eq? (car clause) 'else)
-                              clause
-                              `((memv ,k ',(car clause)) ,@(cdr clause))))
-                        clauses)))))
+           (cond ,@(map (lambda (clause) (case-clause k clause)) clauses)))))
+
+    ;; `case` with `=>` hands the receiver **the key**, not the test value.
+    ;; Splicing (cdr clause) into a cond clause got this wrong: cond's own `=>`
+    ;; passes the value its test produced, which here is the (memv k ...) result
+    ;; — so (case 3 ((3) => (lambda (x) (* x 2)))) multiplied the list (3).
+    ;; R7RS 4.2.1 is explicit that it is the key.  So the `=>` clauses are
+    ;; rewritten here rather than routed through cond's.
+    (define (case-clause k clause)
+      (cond
+        ((and (eq? (car clause) 'else)
+              (pair? (cdr clause)) (eq? (cadr clause) '=>))
+         `(else (,(caddr clause) ,k)))
+        ((eq? (car clause) 'else) clause)
+        ((and (pair? (cdr clause)) (eq? (cadr clause) '=>))
+         `((memv ,k ',(car clause)) (,(caddr clause) ,k)))
+        (else `((memv ,k ',(car clause)) ,@(cdr clause)))))
 
     ;; ---------------------------------------------------------------
     ;; quasiquote
@@ -1613,6 +1632,39 @@
           (list (caadr d) (cons 'lambda (cons (cdadr d) (cddr d))))
           (list (cadr d) (if (null? (cddr d)) #f (caddr d)))))
 
+    ;; R7RS 5.3.2: definitions may appear inside a `begin` at the head of a
+    ;; body, and the `begin` splices into it.  `cond-expand`, `include` and
+    ;; `include-ci` all expand to one, so without this
+    ;; `(cond-expand (paal (define x 2) x))` inside a body failed at emission
+    ;; with `ir:define in expression position` — the definition had been left
+    ;; sitting in expression position by a `begin` nobody spliced.
+    ;;
+    ;; Returns the forms to splice in, or #f if this is not a splicing form.
+    ;; The three derived forms are expanded one step here because expand-body
+    ;; walks *unexpanded* forms: at this point a cond-expand is still a
+    ;; cond-expand, not yet the `begin` it becomes.
+    ;; A *macro use* at the head of a body is deliberately not expanded here,
+    ;; though R7RS 5.3.2 allows a macro to produce a definition.  Expanding one
+    ;; step made `(let () (def x 2) x)` work, but it cannot make the general
+    ;; case work and it made the neighbouring case worse: a template that
+    ;; *introduces* a definition name gets that name marked `%gref%` — paal
+    ;; treats a template's free identifiers as top-level references, and does
+    ;; not recognize `define` in a template as a binding position — so the name
+    ;; became a letrec* binding that the emitter still resolved as a global, and
+    ;; the compile error turned into a runtime `set! on unbound variable`.
+    ;;
+    ;; It also bought nothing measurable: the R7RS suite scores identically with
+    ;; and without it.  Making both shapes work needs the hygiene model changed,
+    ;; not this function.
+    (define (body-splice form)
+      (and (pair? form)
+           (case (car form)
+             ((begin)       (cdr form))
+             ((cond-expand) (cdr (expand-cond-expand form)))
+             ((include)     (cdr (expand-include (cdr form) #f)))
+             ((include-ci)  (cdr (expand-include (cdr form) #t)))
+             (else          #f))))
+
     (define (expand-body forms)
       (let loop ((rest forms) (defs '()))
         (cond
@@ -1635,6 +1687,10 @@
                                  (list wrapped))))))))
           ((and (pair? (car rest)) (eq? (caar rest) 'define))
            (loop (cdr rest) (cons (car rest) defs)))
+          ;; Splice and re-examine, so definitions inside reach the `define`
+          ;; arm above and a nested begin unwraps too.
+          ((body-splice (car rest))
+           => (lambda (spliced) (loop (append spliced (cdr rest)) defs)))
           (else
            (if (null? defs)
                (map paal-expand rest)

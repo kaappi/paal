@@ -8,7 +8,7 @@
     ;; (section-name passing failing) per test-end, in suite order.
     (define expected-sections
       '(("4.1 Primitive expression types" 27 0)
-        ("4.2 Derived expression types" 71 2)
+        ("4.2 Derived expression types" 73 0)
         ("4.3 Macros" 12 8)
         ("5 Program structure" 14 0)
         ("6.1 Equivalence Predicates" 25 0)

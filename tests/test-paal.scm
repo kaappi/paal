@@ -142,7 +142,67 @@
   (test-equal "else"         'c (pkaappi-run-string
     "(case 9 ((1) 'a) ((2) 'b) (else 'c))"))
   (test-equal "multi-datum"  'yes (pkaappi-run-string
-    "(case 3 ((1 2 3) 'yes) (else 'no))")))
+    "(case 3 ((1 2 3) 'yes) (else 'no))"))
+  ;; R7RS 4.2.1: `=>` in a case clause receives **the key**.  Splicing the
+  ;; clause into a `cond` handed the receiver cond's test value instead, which
+  ;; here is the (memv k ...) result -- so this multiplied the list (3) and
+  ;; raised a type error rather than answering 6.  Expander fix, so both
+  ;; pipelines change together and both are asserted.
+  (test-equal "=> receives the key" 6 (pkaappi-run-string
+    "(case 3 ((3) => (lambda (x) (* x 2))))"))
+  (test-equal "=> receives the key — bytecode" 6 (pkaappi-run-bc-string
+    "(case 3 ((3) => (lambda (x) (* x 2))))"))
+  (test-equal "else =>" 10 (pkaappi-run-string
+    "(case 9 ((1) 'a) (else => (lambda (x) (+ x 1))))"))
+  (test-equal "=> picks the matching clause" '(got 7) (pkaappi-run-string
+    "(case 7 ((1 2) 'low) ((7 8) => (lambda (k) (list 'got k))))"))
+  (test-equal "an untaken => clause falls through" 'other (pkaappi-run-string
+    "(case 5 ((1) => (lambda (x) x)) (else 'other))")))
+
+;; ---------------------------------------------------------------
+;; Bodies that begin with a splicing form
+;; ---------------------------------------------------------------
+;;
+;; R7RS 5.3.2: definitions may appear inside a `begin` at the head of a body,
+;; and may be produced by a macro use there.  expand-body only recognised
+;; `define` and `define-values` literally, so anything wrapping a definition
+;; reached the emitter still in expression position and failed to compile.
+;; cond-expand, include and include-ci all expand to a `begin`, so all three
+;; were affected.
+
+(test-group "definitions inside a body's head form"
+  (test-equal "a begin splices into the body"
+    3
+    (pkaappi-run-bc-string "(let () (begin (define x 1) (define y 2)) (+ x y))"))
+  (test-equal "a begin splices — tree-walking"
+    3
+    (pkaappi-run-string "(let () (begin (define x 1) (define y 2)) (+ x y))"))
+  (test-equal "cond-expand in a lambda body"
+    2
+    (pkaappi-run-bc-string "(define (g) (cond-expand (paal (define x 2) x))) (g)"))
+  (test-equal "cond-expand in a let body"
+    3
+    (pkaappi-run-bc-string
+      "(let () (cond-expand (paal (define a 1) (define b 2))) (+ a b))"))
+  ;; A *macro* producing a definition in a body is still not supported —
+  ;; R7RS 5.3.2 allows it, paal does not. Expanding the macro one step here
+  ;; makes `(def x 2)` work but leaves the shape where the template introduces
+  ;; the name broken, and worse than before: paal marks a template's free
+  ;; identifiers `%gref%` and does not treat `define` in a template as a
+  ;; binding position, so the name becomes a letrec* binding the emitter still
+  ;; resolves as a global. Asserted as an error so the gap is recorded rather
+  ;; than mistaken for working.
+  (test-equal "a macro producing a definition is not supported"
+    'not-supported
+    (guard (e (#t 'not-supported))
+      (pkaappi-run-bc-string
+        "(define-syntax def (syntax-rules () ((_ n v) (define n v))))
+         (let () (def x 2) x)")))
+  ;; An ordinary macro at the head of a body still expands as an expression.
+  (test-equal "a macro producing an expression is unaffected"
+    10
+    (pkaappi-run-bc-string
+      "(define-syntax m (syntax-rules () ((_ x) (* x 2)))) (let () (m 5))")))
 
 (test-group "quasiquote"
   (test-equal "plain"    '(a b c) (pkaappi-run-string "`(a b c)"))
@@ -982,6 +1042,29 @@
     (pkaappi-run-bc-string
       "(define-syntax m (syntax-rules () ((_ (a ...) ...) '((a ...) ...))))
        (m (1 2) (3 4))"))
+  ;; A variable after the ellipsis in the same list belongs to the same
+  ;; iteration.  find-ellipsis-vars returned only the sub-template's variables
+  ;; and discarded the tail, so `a` was never bound per iteration and this
+  ;; reported "ellipsis variable used outside ellipsis template a".
+  ;; Every answer below was checked against kaappi's.
+  (test-equal "a variable after the ellipsis in the same list"
+    '((2 3 1) (5 6 4))
+    (pkaappi-run-bc-string
+      "(define-syntax m (syntax-rules () ((_ (a b ...) ...) '((b ... a) ...))))
+       (m (1 2 3) (4 5 6))"))
+  (test-equal "the same, with ragged sub-lists"
+    '((1) (5 4))
+    (pkaappi-run-bc-string
+      "(define-syntax m (syntax-rules () ((_ (a b ...) ...) '((b ... a) ...))))
+       (m (1) (4 5))"))
+  ;; A variable used at the wrong depth is still an error -- widening the
+  ;; search must not turn a depth mistake into a silent wrong answer.
+  (test-equal "a variable used below its depth is still rejected"
+    'rejected
+    (guard (e (#t 'rejected))
+      (pkaappi-run-bc-string
+        "(define-syntax m (syntax-rules () ((_ (a b ...) ...) '(b ...))))
+         (m (1 2 3))")))
   (test-equal "nested ellipsis with a variable at the outer level"
     '((a (1 2)) (b (3)))
     (pkaappi-run-bc-string
