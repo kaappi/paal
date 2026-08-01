@@ -636,6 +636,7 @@
           ((paal-cache-complete?)
            (let ((g (pkaappi-make-globals)))
              (pkaappi-load-cached-pipeline g)
+             (%propagate-lib-paths! g)
              (pkaappi-run-string-in g
                (string-append
                  "(paal-run-bc"
@@ -647,6 +648,7 @@
           ((file-exists? "lib/kaappi/paal/ir.sld")
            (let ((g (pkaappi-make-globals)))
              (for-each (lambda (p) (pkaappi-load-file p g)) %paal-lib-files)
+             (%propagate-lib-paths! g)
              (pkaappi-run-string-in g
                (string-append
                  "(paal-run-bc"
@@ -685,6 +687,7 @@
          (let ((g (pkaappi-make-globals)))
            (for-each (lambda (p) (pkaappi-load-file p g)) %paal-lib-files)
            (pkaappi-load-file "lib/kaappi/paal/serializer.sld" g)
+           (%propagate-lib-paths! g)
            (pkaappi-run-string-in g
              (string-append
                "(paal-write-bc-file"
@@ -700,6 +703,17 @@
     ;; %paal-lib-paths, so --lib-path has to be replayed into it.  Without this
     ;; the self-hosted path searched "." alone and every import silently
     ;; resolved to nothing.
+    ;; The loaded pipeline is a second copy of the expander with its own
+    ;; %paal-lib-paths, so --lib-path has to be replayed into it.  Without this
+    ;; a self-hosted import searched the default path alone: bundled SRFIs
+    ;; resolved, because "lib" is a default, and every user library did not.
+    (define (%propagate-lib-paths! g)
+      (for-each
+        (lambda (dir)
+          (pkaappi-run-string-in g
+            (string-append "(paal-lib-path-add! \"" dir "\")")))
+        (paal-lib-paths-list)))
+
     ; --- Self-hosted REPL ---
 
     ; Internal: run a REPL loop inside an already-loaded globals g.

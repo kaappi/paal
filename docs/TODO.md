@@ -232,8 +232,9 @@ Gaps in `lib/kaappi/paal/reader.sld`:
       to `("file.scm" "arg1" "arg2")` inside user programs via HOST lambda in globals
 - [x] **`--lib-path <dir>`** — repeatable, consumed before the subcommand.
       Directories are searched in the order given, after the default `.`.
-      Works on the HOST pipeline (`pkaappi-run-bc-string` and friends). **Not
-      yet on the self-hosted path** — see the entry below.
+      Works on both pipelines. The self-hosted path loads a second copy of
+      the expander with its own `%paal-lib-paths`, so the paths are replayed
+      into it after the pipeline is loaded.
 - [x] **`check` subcommand** — `paal check <file>...` reads, expands, analyzes and
       *emits*, then throws the bytecode away. Emitting rather than stopping at
       the IR is the point: register allocation and upvalue resolution happen
@@ -393,20 +394,6 @@ Issues that span stages rather than belonging to one phase.
 
 **Open:**
 
-- [ ] **`--lib-path` does not reach the self-hosted path** — `paal file.scm`
-      loads a second copy of the expander from `cache/*.pbc`, and that copy has
-      its own `%paal-lib-paths`, still just `("."`). `--lib-path` is applied to
-      the HOST copy only, so a self-hosted `import` searches `.` alone, finds
-      nothing, and silently resolves to no aliases. Replaying the paths into
-      the loaded pipeline is the obvious fix and was attempted:
-      `(paal-lib-path-add! "dir")` run through `pkaappi-run-string-in` reports
-      `not a procedure`, so the name is not reachable in a loaded pipeline's
-      globals the way the other pipeline entry points are. Needs diagnosing
-      before it can be re-landed; the attempt is reverted, so the self-hosted
-      path behaves exactly as it did before the module system existed. The same
-      per-copy module state has bitten `%paal-macros`, `<closure>` and
-      `paal-vm-raise-escape!` before — see `docs/architecture.md` § Values that
-      cross the HOST boundary.
 - [ ] **A library not found on the path is a silent no-op** — resolving
       `(foo bar)` to nothing rather than erroring is what `import` did before
       there was a library system, and paal's own stages depend on it:
