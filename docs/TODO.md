@@ -3,7 +3,7 @@
 Goal: make `paal` a correct R7RS-small Scheme implementation that runs the
 same programs as `kaappi`, with the same CLI conventions.
 
-Current: Stage 6 complete (self-hosting). **467 tests pass** (was 194 before Phase 1–2).
+Current: Stage 6 complete (self-hosting). **498 tests pass** (was 194 before Phase 1–2).
 
 ---
 
@@ -281,17 +281,30 @@ Remove the `kaappi` host dependency.
 
 ## Phase 7 — SRFI Ecosystem
 
-No SRFI support exists. Priority order (most-needed first):
+Bundled under `lib/srfi/`, reachable because `lib` is on the default search
+path. Each is portable R7RS, so the same file runs on kaappi unchanged. None
+redefines a name `(scheme base)` already binds compatibly — importing both
+would otherwise bind one identifier two ways, which R7RS 5.2 makes an error.
 
-- [ ] SRFI 1 — list library (`fold`, `filter`, `any`, `every`, `iota`, etc.)
-- [ ] SRFI 13 — string library (`string-contains`, `string-trim`, `string-split`, etc.)
-- [ ] SRFI 9 — `define-record-type` (already a core form; just needs the import wrapper)
-- [ ] SRFI 23 — `error` (already present; just needs the import path)
+- [x] SRFI 1 — list library. Folds (incl. multi-list), filter/remove/partition,
+      find/any/every returning the predicate's value, take/drop and the
+      right-hand variants, delete-duplicates, lset operations, and the
+      proper/circular/dotted predicates via a two-pointer walk.
+- [x] SRFI 13 — string library. take/drop, pad, trim, prefix/suffix, index
+      (char *or* predicate), contains, join/split/tokenize, fold, filter.
+- [x] SRFI 9 — import path for the core `define-record-type`.
+- [x] SRFI 23 — import path for `error`.
 - [ ] SRFI 64 — test framework (needed to eventually replace `(kaappi test)` dependency)
-- [ ] SRFI 39 — parameter objects (depends on `parameterize` from Phase 1)
-- [ ] SRFI 28 / SRFI 48 — basic / intermediate `format`
-- [ ] SRFI 69 — hash tables
-- [ ] SRFI 133 — vector library
+- [x] SRFI 39 — import path for `make-parameter`/`parameterize`. SRFI 39 also
+      permits `(p v)` to set a parameter, which R7RS dropped and paal does not
+      support.
+- [x] SRFI 28 / SRFI 48 — `format`. 48 adds radix, character and recursive
+      directives, and accepts a leading port or `#f`/`#t`.
+- [x] SRFI 69 — hash tables. Separate chaining, doubling past a 0.75 load
+      factor. The table is an interned-symbol-tagged vector, not a record, so
+      it survives the HOST/self-hosted boundary.
+- [x] SRFI 133 — vector library. fold/reduce, index/skip/any/every, binary
+      search, reverse, concatenate, tabulate, partition.
 
 ---
 

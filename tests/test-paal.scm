@@ -2198,4 +2198,162 @@
     7
     (module-run "(import (scheme base)) (+ 3 4)")))
 
+;; ---------------------------------------------------------------
+;; SRFI libraries
+;; ---------------------------------------------------------------
+;;
+;; Bundled under lib/srfi/, reachable because "lib" is on the default search
+;; path.  Each is portable R7RS, so the same file runs on kaappi unchanged.
+;;
+;; None of them redefine a name (scheme base) already binds compatibly —
+;; importing both would otherwise bind one identifier two ways, which R7RS 5.2
+;; makes an error and kaappi enforces.
+
+(define (srfi-run n src)
+  (pkaappi-run-bc-string
+    (string-append "(import (srfi " (number->string n) "))" src)))
+
+(test-group "srfi 1: lists"
+  (test-equal "iota with start and step"
+    '((0 1 2 3 4) (1 2 3) (0 2 4))
+    (srfi-run 1 "(list (iota 5) (iota 3 1) (iota 3 0 2))"))
+  (test-equal "fold and fold-right differ in association"
+    '(10 (3 2 1) (1 2 3))
+    (srfi-run 1 "(list (fold + 0 '(1 2 3 4)) (fold cons '() '(1 2 3))
+                       (fold-right cons '() '(1 2 3)))"))
+  (test-equal "fold over two lists"
+    '(22 11)
+    (srfi-run 1 "(fold (lambda (a b acc) (cons (+ a b) acc)) '() '(1 2) '(10 20))"))
+  (test-equal "filter, remove, partition"
+    '((1 3 5) (2 4) ((1 3) (2 4)))
+    (srfi-run 1 "(list (filter odd? '(1 2 3 4 5)) (remove odd? '(1 2 3 4 5))
+                       (call-with-values (lambda () (partition odd? '(1 2 3 4))) list))"))
+  ;; SRFI 1 `any` returns the predicate's value, not just #t.
+  (test-equal "any and every return the last value"
+    '(30 #t #f)
+    (srfi-run 1 "(list (any (lambda (x) (and (odd? x) (* x 10))) '(2 3))
+                       (every odd? '(1 3)) (every odd? '(1 2)))"))
+  (test-equal "take, drop and the right-hand variants"
+    '((1 2) (3 4) (3 4) (1 2))
+    (srfi-run 1 "(list (take '(1 2 3 4) 2) (drop '(1 2 3 4) 2)
+                       (take-right '(1 2 3 4) 2) (drop-right '(1 2 3 4) 2))"))
+  (test-equal "delete-duplicates keeps first occurrences"
+    '(1 2 3)
+    (srfi-run 1 "(delete-duplicates '(1 2 1 3 2))"))
+  ;; The two-pointer walk is what keeps this from hanging.
+  (test-equal "circular-list? terminates on a circular list"
+    '(#t #f #t)
+    (srfi-run 1 "(list (circular-list? '#0=(1 2 . #0#))
+                       (circular-list? '(1 2)) (dotted-list? '(1 . 2)))"))
+  (test-equal "lset operations"
+    '((1 2 3) (1 2 3) (2 3) (1 3))
+    (srfi-run 1 "(list (lset-adjoin eqv? '(1 2) 2 3) (lset-union eqv? '(1 2) '(2 3))
+                       (lset-intersection eqv? '(1 2 3) '(2 3 4))
+                       (lset-difference eqv? '(1 2 3) '(2)))")))
+
+(test-group "srfi 13: strings"
+  (test-equal "take and drop from both ends"
+    '("he" "llo" "lo" "hel")
+    (srfi-run 13 "(list (string-take \"hello\" 2) (string-drop \"hello\" 2)
+                        (string-take-right \"hello\" 2) (string-drop-right \"hello\" 2))"))
+  ;; Longer than the pad width keeps the rightmost characters, per SRFI 13.
+  (test-equal "pad truncates from the left when too long"
+    '("  7" "700" "cd")
+    (srfi-run 13 "(list (string-pad \"7\" 3) (string-pad-right \"7\" 3 #\\0)
+                        (string-pad \"abcd\" 2))"))
+  (test-equal "trim variants"
+    '("x " "  x" "x")
+    (srfi-run 13 "(list (string-trim \"  x \") (string-trim-right \"  x \")
+                        (string-trim-both \"  x \"))"))
+  (test-equal "index accepts a char or a predicate"
+    '(2 3 #f)
+    (srfi-run 13 "(list (string-index \"hello\" #\\l)
+                        (string-index-right \"hello\" #\\l)
+                        (string-index \"hello\" char-numeric?))"))
+  (test-equal "contains returns an index or #f"
+    '(4 #f)
+    (srfi-run 13 "(list (string-contains \"hello world\" \"o w\")
+                        (string-contains \"abc\" \"z\"))"))
+  ;; split keeps empty fields so it inverts join; tokenize drops them.
+  (test-equal "join, split and tokenize"
+    '("a,b,c" ("a" "b" "" "c") ("a" "b"))
+    (srfi-run 13 "(list (string-join '(\"a\" \"b\" \"c\") \",\")
+                        (string-split \"a,b,,c\" #\\,)
+                        (string-tokenize \"  a  b \"))")))
+
+(test-group "srfi 69: hash tables"
+  (test-equal "set, ref and defaults"
+    '(1 none 2 #t)
+    (srfi-run 69 "(define h (make-hash-table))
+                  (hash-table-set! h 'a 1) (hash-table-set! h 'b 2)
+                  (list (hash-table-ref h 'a) (hash-table-ref/default h 'z 'none)
+                        (hash-table-size h) (hash-table-exists? h 'b))"))
+  (test-equal "delete adjusts the count"
+    '(0 #f)
+    (srfi-run 69 "(define h (make-hash-table)) (hash-table-set! h 'a 1)
+                  (hash-table-delete! h 'a)
+                  (list (hash-table-size h) (hash-table-exists? h 'a))"))
+  ;; Past the 0.75 load factor the bucket vector doubles and everything
+  ;; rehashes; 200 entries in a 16-bucket table exercises that several times.
+  (test-equal "growing rehashes without losing entries"
+    '(200 22500)
+    (srfi-run 69 "(define h (make-hash-table))
+                  (let loop ((i 0)) (when (< i 200) (hash-table-set! h i (* i i)) (loop (+ i 1))))
+                  (list (hash-table-size h) (hash-table-ref h 150))"))
+  (test-equal "string keys hash by content, not identity"
+    42
+    (srfi-run 69 "(define h (make-hash-table)) (hash-table-set! h \"key\" 42)
+                  (hash-table-ref h (string-append \"k\" \"ey\"))"))
+  (test-equal "update with a default"
+    2
+    (srfi-run 69 "(define h (make-hash-table))
+                  (hash-table-update!/default h 'k (lambda (v) (+ v 1)) 0)
+                  (hash-table-update!/default h 'k (lambda (v) (+ v 1)) 0)
+                  (hash-table-ref h 'k)"))
+  (test-equal "alist->hash-table lets earlier entries win"
+    '(1 2)
+    (srfi-run 69 "(define h (alist->hash-table '((a . 1) (a . 9) (b . 2))))
+                  (list (hash-table-ref h 'a) (hash-table-ref h 'b))")))
+
+(test-group "srfi 133: vectors"
+  (test-equal "empty, count and index"
+    '(#t 2 2)
+    (srfi-run 133 "(list (vector-empty? #()) (vector-count odd? #(1 2 3))
+                         (vector-index even? #(1 3 4)))"))
+  (test-equal "fold and reduce"
+    '(6 10)
+    (srfi-run 133 "(list (vector-fold (lambda (a x) (+ a x)) 0 #(1 2 3))
+                         (vector-reduce + 0 #(1 2 3 4)))"))
+  (test-equal "reverse, copy and concatenate"
+    '(#(3 2 1) #(3 2 1) #(1 2 3))
+    (srfi-run 133 "(list (vector-reverse-copy #(1 2 3)) (vector-reverse! (vector 1 2 3))
+                         (vector-concatenate (list #(1) #(2 3))))"))
+  (test-equal "binary search"
+    '(2 #f)
+    (srfi-run 133 "(list (vector-binary-search #(1 3 5 7) 5 (lambda (a b) (- a b)))
+                         (vector-binary-search #(1 3 5 7) 4 (lambda (a b) (- a b))))")))
+
+(test-group "srfi 28 / 48: format"
+  (test-equal "srfi 28 directives"
+    "x and \"y\"~\n"
+    (srfi-run 28 "(format \"~a and ~s~~~%\" 'x \"y\")"))
+  (test-equal "srfi 48 adds radix and character directives"
+    '("255 ff 101 10" "z")
+    (srfi-run 48 "(list (format \"~d ~x ~b ~o\" 255 255 5 8) (format \"~c\" #\\z))"))
+  (test-equal "srfi 48 accepts a leading #f"
+    "1"
+    (srfi-run 48 "(format #f \"~a\" 1)")))
+
+;; These three are import paths for things paal already provides.
+(test-group "srfi 9 / 23 / 39: already-present forms"
+  (test-equal "srfi 9 define-record-type"
+    7
+    (srfi-run 9 "(define-record-type <p> (mk a) p? (a get-a)) (get-a (mk 7))"))
+  (test-equal "srfi 23 error"
+    "boom"
+    (srfi-run 23 "(guard (e (#t (error-object-message e))) (error \"boom\" 1))"))
+  (test-equal "srfi 39 parameterize"
+    2
+    (srfi-run 39 "(define p (make-parameter 1)) (parameterize ((p 2)) (p))")))
+
 (test-exit)

@@ -99,7 +99,11 @@
     ;; and matches where the binary is going anyway — a bundled `paal` carries
     ;; its libraries with it.
 
-    (define %paal-lib-paths '("."))
+    ;; "lib" is on the default path because paal's bundled SRFIs live in
+    ;; lib/srfi/.  It resolves when paal runs from its own tree; an installed
+    ;; binary will need the directory passed with --lib-path until Phase 6
+    ;; bundles them in.
+    (define %paal-lib-paths '("." "lib"))
     (define %paal-libraries '())      ; name -> alist of public-name -> internal
     (define %paal-loading   '())      ; names being loaded, for cycle detection
     (define %paal-pending   '())      ; library forms not yet handed to a program
@@ -121,10 +125,30 @@
       (set! %paal-pending '())
       (set! %paal-emitted '()))
 
-    ;; `(scheme base)` and friends have no file: their bindings are already in
-    ;; paal-initial-env, so importing one is a no-op that yields no aliases.
+    ;; Libraries that resolve to nothing because their bindings are already in
+    ;; the globals table:
+    ;;
+    ;;   (scheme ...)      — paal-initial-env provides them.
+    ;;   (kaappi paal ...) — paal's own pipeline stages.  pkaappi-load-file
+    ;;                       loads every one into a single shared table by
+    ;;                       design, so importing one must not pull a second,
+    ;;                       renamed copy in beside it.  They do have files
+    ;;                       under lib/, which is on the default search path
+    ;;                       for the bundled SRFIs, so this cannot be left to
+    ;;                       the not-found fallback.
     (define (builtin-library? name)
-      (and (pair? name) (eq? (car name) 'scheme)))
+      (and (pair? name)
+           (or (eq? (car name) 'scheme)
+               (and (eq? (car name) 'kaappi)
+                    (pair? (cdr name))
+                    (eq? (cadr name) 'paal)))))
+
+    ;; A library name component may be a number — (srfi 1), (srfi 133) — so
+    ;; symbol->string alone is not enough.
+    (define (name-part->string p)
+      (cond ((symbol? p) (symbol->string p))
+            ((number? p) (number->string p))
+            (else (error "paal: bad library name component" p))))
 
     (define (library-name->path name)
       (let loop ((parts name) (acc ""))
@@ -132,8 +156,8 @@
             (string-append acc ".sld")
             (loop (cdr parts)
                   (if (string=? acc "")
-                      (symbol->string (car parts))
-                      (string-append acc "/" (symbol->string (car parts))))))))
+                      (name-part->string (car parts))
+                      (string-append acc "/" (name-part->string (car parts))))))))
 
     (define (find-library-file name)
       (let ((rel (library-name->path name)))
@@ -149,15 +173,19 @@
         (if (null? parts)
             acc
             (loop (cdr parts)
-                  (string-append acc (symbol->string (car parts)) "%")))))
+                  (string-append acc (name-part->string (car parts)) "%")))))
 
+    ;; open-input-file rather than call-with-input-file: the latter is a HOST
+    ;; procedure, and under self-hosting the thunk handed to it is a paal
+    ;; closure, which HOST code cannot enter — it failed with "not a
+    ;; procedure".  The same trap applies anywhere a paal lambda is passed to
+    ;; a host higher-order procedure.
     (define (read-forms-from path)
-      (call-with-input-file path
-        (lambda (port)
-          (let loop ((form (read port)) (acc '()))
-            (if (eof-object? form)
-                (reverse acc)
-                (loop (read port) (cons form acc)))))))
+      (let ((port (open-input-file path)))
+        (let loop ((form (read port)) (acc '()))
+          (if (eof-object? form)
+              (begin (close-input-port port) (reverse acc))
+              (loop (read port) (cons form acc))))))
 
     ;; --- import specs ---------------------------------------------------
     ;;
@@ -1337,17 +1365,11 @@
     ;; Read and splice all forms from each named file.
     ;; include-ci folds case (not yet implemented: treated same as include).
 
+    ;; Reads through read-forms-from for the reason given there: passing a
+    ;; paal closure to HOST call-with-input-file cannot work under
+    ;; self-hosting.
     (define (expand-include paths case-fold?)
-      (cons 'begin
-        (apply append
-          (map (lambda (path)
-                 (call-with-input-file path
-                   (lambda (port)
-                     (let loop ((form (read port)) (acc '()))
-                       (if (eof-object? form)
-                           (reverse acc)
-                           (loop (read port) (cons form acc)))))))
-               paths))))
+      (cons 'begin (apply append (map read-forms-from paths))))
 
     ;; ---------------------------------------------------------------
     ;; cond-expand
