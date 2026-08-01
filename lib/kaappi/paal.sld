@@ -1030,7 +1030,7 @@
                         "(and (pair? %repl-last-input)
                               (memq (car %repl-last-input)
                                     '(define define-values define-record-type
-                                      define-library import)))")))
+                                      define-library define-syntax import)))")))
                 (unless is-def
                   (write result)
                   (newline))))
@@ -1059,6 +1059,18 @@
     ;; table, so `(define x 1)` is visible to the next expression, and each
     ;; input is guarded so a raise ends that expression rather than the
     ;; session.
+    ;; Whether a REPL should echo the result.  A definition's value in paal is
+    ;; the thing defined, not the unspecified value, so a REPL that suppresses
+    ;; only the unspecified value answers `9` to `(define q 9)`.  Both REPLs
+    ;; decide from the form; this is the same list %run-repl tests inside its
+    ;; own globals, which is where the fallback had drifted from it.
+    (define (%definition-form? form)
+      (and (pair? form)
+           (memq (car form)
+                 '(define define-values define-record-type define-library
+                   define-syntax import))
+           #t))
+
     (define (%run-host-repl)
       (let ((g (pkaappi-make-globals)))
         (let loop ()
@@ -1072,7 +1084,8 @@
                                 (%display-condition e (current-output-port))
                                 (newline)))
                     (let ((result (paal-run-bc (pkaappi-compile-forms (list form)) g)))
-                      (unless (eq? result (if #f #f))
+                      (unless (or (%definition-form? form)
+                                  (eq? result (if #f #f)))
                         (write result)
                         (newline))))
                   (loop)))))))))

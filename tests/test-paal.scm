@@ -691,6 +691,28 @@
         result))))
 
 ;; ---------------------------------------------------------------
+;; REPL
+;; ---------------------------------------------------------------
+;;
+;; A definition's value in paal is the thing defined, not the unspecified value,
+;; so a REPL that suppresses only the unspecified value answers `9` to
+;; `(define q 9)`.  Paal has three REPL routes — cached pipeline, .sld pipeline,
+;; and a HOST fallback for a binary that has neither — and all three now decide
+;; from the *form*.  Which one this exercises depends on whether cache/ is built;
+;; the fallback is only reachable outside a checkout, so it is verified against
+;; the binary rather than here.
+
+(test-group "repl"
+  (test-equal "echoes expressions but not definitions"
+    "paal> paal> 81\npaal> "
+    (let ((out (open-output-string)))
+      (parameterize ((current-input-port
+                       (open-input-string "(define q 9)\n(* q q)\n"))
+                     (current-output-port out))
+        (pkaappi-self-repl))
+      (get-output-string out))))
+
+;; ---------------------------------------------------------------
 ;; Self-hosted run subcommand
 ;; ---------------------------------------------------------------
 
