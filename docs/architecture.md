@@ -513,7 +513,8 @@ values, so winding in again reuses them rather than converting a second time.
 Both pipelines implement this: the tree-walking VM as HOST procedures over a
 module-level `%paal-winds`, the bytecode VM as paal source compiled into globals.
 
-**Divergence from kaappi.** kaappi v0.22.0 answers `2` where R7RS requires `1`:
+**A host bug this exposed**, fixed upstream by kaappi/kaappi#1991. kaappi
+v0.22.0 answered `2` where R7RS requires `1`:
 
 ```scheme
 (define p (make-parameter 1))
@@ -523,16 +524,16 @@ module-level `%paal-winds`, the bytecode VM as paal source compiled into globals
       (raise 'boom))))
 ```
 
-A guard that declines leaves the *declining* guard's dynamic environment in place, so
-the next guard out runs its clauses in the wrong one. Paal answers `1` here and in
-every variation tested. This is the one place paal is deliberately not
-bug-compatible with its host.
+A guard that declined left the *declining* guard's dynamic environment in place, so
+the next guard out ran its clauses in the wrong one. Paal answered `1` here from the
+start, which is what surfaced it.
 
-Filed as kaappi/kaappi#1988. It comes from `compileGuard` evaluating the `cond` and
-then escaping with its *value*, where R7RS escapes first and evaluates the clauses in
-the guard's continuation — so the extents between are still installed while the
-clauses run. The same ordering shows up in `dynamic-wind`, whose `after` thunk runs
-after the outer clauses rather than before them.
+The cause was `compileGuard` evaluating the `cond` and then escaping with its
+*value*, where R7RS escapes first and evaluates the clauses in the guard's
+continuation — so the extents between were still installed while the clauses ran. The
+same ordering showed up in `dynamic-wind`, whose `after` thunk ran after the outer
+clauses rather than before them. Both are fixed; paal and kaappi now agree on every
+case in the repro.
 
 ---
 

@@ -1791,8 +1791,8 @@
                       (parameterize ((p 2))
                         (parameterize ((p 3)) (raise-continuable 'sym))))))"))
   ;; A guard that declines must leave the environment as it found it, so the
-  ;; next guard out still sees its own.  kaappi v0.22.0 answers 2 here; R7RS
-  ;; says the outer guard's clauses run in the outer guard's environment.
+  ;; next guard out still sees its own.  kaappi v0.22.0 answered 2 here; fixed
+  ;; upstream by kaappi/kaappi#1991 after paal surfaced it.
   (test-equal "a declining guard does not disturb the guard outside it"
     '(1 1)
     (both-pipelines
@@ -1921,7 +1921,7 @@
        (reverse log)"))
   ;; A guard *inside* the extent is not leaving it, so declining to handle
   ;; must not run the after thunk; only the outer guard's escape does.
-  ;; kaappi answers (before outer-clause after) here — see kaappi/kaappi#1988.
+  ;; kaappi answered (before outer-clause after) until kaappi/kaappi#1991.
   (test-equal "a declining guard inside the extent does not close it early"
     '((before after outer-clause) (before after outer-clause))
     (both-pipelines

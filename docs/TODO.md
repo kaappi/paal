@@ -132,8 +132,9 @@ Missing primitives added to `paal-initial-env` (`lib/kaappi/paal/vm.sld`):
       re-raise now belongs to the machinery. See `docs/architecture.md` §
       The wind stack.
 
-      **Paal is now more correct than its host here.** kaappi v0.22.0 answers
-      `2` where R7RS requires `1`:
+      This exposed a host bug, now **fixed upstream** by kaappi/kaappi#1991,
+      closing kaappi/kaappi#1988. kaappi v0.22.0 answered `2` where R7RS
+      requires `1`:
 
       ```scheme
       (define p (make-parameter 1))
@@ -141,11 +142,14 @@ Missing primitives added to `paal-initial-env` (`lib/kaappi/paal/vm.sld`):
         (parameterize ((p 2))
           (guard (e ((number? e) 'no-match)) (raise 'boom))))
       ```
-      A guard that *declines* leaves its own dynamic environment in place, so the
-      next guard out evaluates its clauses in the wrong one. Filed as
-      kaappi/kaappi#1988; also visible through `dynamic-wind`, whose `after`
-      thunk runs after the outer clauses instead of before them. Reproduces on
-      `main` @ ea2e2e49 as well as v0.22.0.
+      A guard that *declines* left its own dynamic environment in place, so the
+      next guard out evaluated its clauses in the wrong one — also visible
+      through `dynamic-wind`, whose `after` thunk ran after the outer clauses
+      instead of before them. Both symptoms come from `compileGuard`
+      evaluating the `cond` and escaping with its *value*, where R7RS escapes
+      first and evaluates the clauses in the guard's continuation. Verified
+      against a build of kaappi `main` @ 321da93a: all nine cases in the repro
+      now agree with paal.
 
       Still not R7RS, and unchanged by this work: an unmatched `raise-continuable`
       is not resumable — the clauses run after the host stack has unwound, so
@@ -394,14 +398,6 @@ Issues that span stages rather than belonging to one phase.
 
 **Open:**
 
-- [ ] **A library not found on the path is a silent no-op** — resolving
-      `(foo bar)` to nothing rather than erroring is what `import` did before
-      there was a library system, and paal's own stages depend on it:
-      `pkaappi-load-file` deliberately loads every pipeline `.sld` into one
-      shared globals table, and each of them imports `(kaappi paal ir)`, a name
-      that is never on the search path. The cost is that a mistyped library
-      name does nothing instead of saying so. Making it an error needs the
-      pipeline's own loading to stop going through `import`.
 - [ ] **A library's private macros leak to its importer** — private *values*
       are renamed, and the renaming is what hides them; macros are not.
       Dropping unexported macros after loading was tried first and breaks an

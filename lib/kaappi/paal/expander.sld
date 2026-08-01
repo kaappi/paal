@@ -235,22 +235,17 @@
          (error "paal: circular import" (reverse (cons name %paal-loading))))
         (else (load-library! name))))
 
-    ;; A name with no file on the path resolves to no aliases rather than an
-    ;; error, which is what `import` did before there was a library system.
-    ;; Paal's own stages depend on that: pkaappi-load-file deliberately loads
-    ;; every pipeline .sld into one shared globals table, and each of them
-    ;; imports (kaappi paal ir) — a name that is never on the search path,
-    ;; because the table already holds what it would provide.
-    ;;
-    ;; The cost is that a mistyped library name does nothing instead of saying
-    ;; so.  Making it an error needs the pipeline's own loading to stop going
-    ;; through `import`; see docs/TODO.md.
+    ;; A name with no file anywhere on the path is an error.  This was a
+    ;; silent no-op while paal's own stages relied on it -- each imports
+    ;; (kaappi paal ir), which is never on the search path -- but those names
+    ;; are recognised by builtin-library? now, so nothing legitimate reaches
+    ;; here.  The error names the searched path, since "not found" is almost
+    ;; always a --lib-path that was not passed.
     (define (load-library! name)
       (let ((path (find-library-file name)))
         (if (not path)
-            (begin
-              (set! %paal-libraries (cons (cons name '()) %paal-libraries))
-              '())
+            (error "paal: library not found"
+                   (list name (library-name->path name) %paal-lib-paths))
             (begin
               (set! %paal-loading (cons name %paal-loading))
               (let ((result (load-library-from name path)))
