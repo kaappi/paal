@@ -381,7 +381,22 @@ inferred:
       working REPL. Definitions accumulate in one globals table, and each
       input is guarded so a raise ends that expression rather than the
       session.
-- [ ] **Distribution strategy** — single static binary vs binary + lib directory
+- [x] **Distribution strategy** — **a single binary, no lib directory.** The
+      choice is settled by what a bundled `paal` now does rather than by
+      preference: run from an unrelated directory with no `cache/` and no
+      `lib/`, it runs programs, evaluates expressions, resolves the bundled
+      SRFIs, and gives a REPL. Nothing it needs is on disk.
+
+      The binary is 3.3 MB, against 388 KB for `lib/` and 300 KB for
+      `cache/`. Shipping those alongside would trade a 20% size saving for a
+      binary whose behaviour depends on its working directory — which is
+      exactly the failure the embedded-library lookup was written to avoid,
+      and the failure mode is silent (a stale `lib/` on the path shadowing
+      what the binary was built with).
+
+      What remains for a release is packaging, not design: the binary is the
+      artifact. Bundling `cache/*.pbc` (below) would make it faster, not more
+      self-contained.
 
 ---
 
