@@ -287,6 +287,20 @@ not carry. That is the deferred case behind §4.3 tests 117/149/153 and the SRFI
 adaptation; it is recorded in TODO.md, and nothing should attempt it without that
 design.
 
+**Transformer specs (SRFI 147):** the transformer-spec position of
+`define-syntax`, `let-syntax` and `letrec-syntax` accepts, beyond a literal
+`(syntax-rules …)`: a macro use that expands — through any number of steps,
+fuel-bounded — into a spec; a bare keyword, aliasing an existing
+`syntax-rules` macro (resolved to its recorded spec so the alias renames like
+any other; aliasing a builtin special form is out, matching kaappi's own
+reduction); and `(begin <define-syntax>… <spec>)`, private helper macros
+before the final spec. `resolve-transformer-spec` runs in the definition
+environment before `make-transformer`, and the *resolved* spec is what gets
+stored beside the transformer — so `rename-macro-templates!` always sees
+`syntax-rules`. SRFI 148's `em-syntax-rules` exercises all three alternatives
+at once, and is the reason the fuel is generous: its aux transformers step
+once per template token.
+
 **Local macro scope:** `letrec-syntax` installs all its bindings before expanding
 anything, so its transformers may refer to each other and to themselves. `let-syntax`
 gives its keywords the body as their region, not the bindings (R7RS 4.3.1): each
