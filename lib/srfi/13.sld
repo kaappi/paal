@@ -20,10 +20,13 @@
     string-trim string-trim-right string-trim-both
     string-prefix? string-suffix?
     string-index string-index-right string-rindex
+    string-skip string-skip-right
     string-contains string-count
     string-join string-split string-tokenize
     string-reverse string-concatenate
     string-fold string-fold-right
+    string-unfold string-unfold-right
+    string-tabulate string-titlecase
     string-delete string-filter string-replace)
   (begin
 
@@ -116,6 +119,16 @@
                 ((match (string-ref s i)) i)
                 (else (loop (- i 1)))))))
 
+    ;; index of the first (last) char that does NOT satisfy the criterion —
+    ;; the searches string-trim conceptually runs.
+    (define (string-skip s pred . rest)
+      (let ((match (%char-match pred)))
+        (apply string-index s (lambda (c) (not (match c))) rest)))
+
+    (define (string-skip-right s pred . rest)
+      (let ((match (%char-match pred)))
+        (apply string-index-right s (lambda (c) (not (match c))) rest)))
+
     (define (string-rindex s pred . rest)
       (apply string-index-right s pred rest))
 
@@ -201,4 +214,46 @@
     ;; (string-replace s1 s2 start end) — s1 with [start,end) replaced by s2.
     (define (string-replace s1 s2 start end)
       (string-append (substring s1 0 start) s2
-                     (substring s1 end (string-length s1))))))
+                     (substring s1 end (string-length s1))))
+
+    ;; (string-unfold p f g seed [base [make-final]]) — the list unfold with
+    ;; the result accumulated as characters onto `base`, and make-final
+    ;; applied to the final seed for a suffix.
+    (define (string-unfold p f g seed . rest)
+      (let ((base       (if (pair? rest) (car rest) ""))
+            (make-final (if (and (pair? rest) (pair? (cdr rest)))
+                            (cadr rest)
+                            (lambda (seed) ""))))
+        (let loop ((seed seed) (acc '()))
+          (if (p seed)
+              (string-append base (list->string (reverse acc)) (make-final seed))
+              (loop (g seed) (cons (f seed) acc))))))
+
+    (define (string-unfold-right p f g seed . rest)
+      (let ((base       (if (pair? rest) (car rest) ""))
+            (make-final (if (and (pair? rest) (pair? (cdr rest)))
+                            (cadr rest)
+                            (lambda (seed) ""))))
+        (let loop ((seed seed) (acc '()))
+          (if (p seed)
+              (string-append (make-final seed) (list->string acc) base)
+              (loop (g seed) (cons (f seed) acc))))))
+
+    (define (string-tabulate proc len)
+      (let loop ((i (- len 1)) (acc '()))
+        (if (< i 0)
+            (list->string acc)
+            (loop (- i 1) (cons (proc i) acc)))))
+
+    ;; Upcase each character that follows a non-alphabetic one, downcase the
+    ;; rest — the word model SRFI 13 specifies for casing, with alphabetic
+    ;; runs as words.
+    (define (string-titlecase s)
+      (let loop ((cs (string->list s)) (in-word? #f) (acc '()))
+        (if (null? cs)
+            (list->string (reverse acc))
+            (let ((c (car cs)))
+              (if (char-alphabetic? c)
+                  (loop (cdr cs) #t
+                        (cons (if in-word? (char-downcase c) (char-upcase c)) acc))
+                  (loop (cdr cs) #f (cons c acc)))))))))

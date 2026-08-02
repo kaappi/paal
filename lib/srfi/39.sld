@@ -1,10 +1,12 @@
 ;;; SRFI 39 — Parameter objects
 ;;;
-;;; make-parameter and parameterize are already provided: the former by the
-;;; paal-native cell-based implementation in globals, the latter by the
-;;; expander.  SRFI 39 permits (p v) to set a parameter, which R7RS dropped
-;;; and paal does not support -- paal's parameter closure rejects any argument
-;;; other than its internal cell key.  Everything else is present.
+;;; Both names are provided by the base environment: make-parameter by the
+;;; paal-native cell-based implementation in globals, parameterize by the
+;;; expander (syntax is not gated by imports).  This library re-exports the
+;;; value so `(import (srfi 39))` grants it, and records the one SRFI 39
+;;; behaviour beyond R7RS: `(p v)` sets the parameter's value through its
+;;; converter, which both of paal's make-parameter implementations honour.
 (define-library (srfi 39)
-  (export)
+  (import (scheme base))
+  (export make-parameter)
   (begin))

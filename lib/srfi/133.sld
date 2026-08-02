@@ -13,13 +13,17 @@
 (define-library (srfi 133)
   (import (scheme base))
   (export
-    vector-empty? vector= vector-count vector-index vector-skip
+    vector-empty? vector= vector-count vector-index vector-index-right
+    vector-skip vector-skip-right
     vector-fold vector-fold-right vector-reduce vector-reduce-right
-    vector-unfold vector-tabulate
+    vector-unfold vector-unfold-right vector-unfold! vector-unfold-right!
+    vector-tabulate vector-cumulate
     vector-binary-search vector-any vector-every
-    vector-swap! vector-reverse! vector-reverse-copy
-    vector-concatenate vector->list* vector-partition
-    vector-find vector-take vector-drop)
+    vector-swap! vector-reverse! vector-reverse-copy vector-reverse-copy!
+    vector-map!
+    vector-concatenate vector-append-subvectors vector->list* vector-partition
+    vector-find vector-take vector-drop
+    reverse-vector->list reverse-list->vector)
   (begin
 
     (define (vector-empty? v) (= (vector-length v) 0))
@@ -55,6 +59,15 @@
 
     (define (vector-skip pred v)
       (vector-index (lambda (x) (not (pred x))) v))
+
+    (define (vector-index-right pred v)
+      (let loop ((i (- (vector-length v) 1)))
+        (cond ((< i 0) #f)
+              ((pred (vector-ref v i)) i)
+              (else (loop (- i 1))))))
+
+    (define (vector-skip-right pred v)
+      (vector-index-right (lambda (x) (not (pred x))) v))
 
     (define (vector-find pred v)
       (let ((i (vector-index pred v)))
@@ -109,6 +122,49 @@
               v
               (begin (vector-set! v i (proc i)) (loop (+ i 1)))))))
 
+    ;; The unfold family, in the file's single-seed shape.  f returns
+    ;; (values elt next-seed); the ! variants fill [start,end) of an
+    ;; existing vector, the -right ones fill highest index first.
+    (define (vector-unfold-right f len seed)
+      (let ((v (make-vector len)))
+        (let loop ((i (- len 1)) (seed seed))
+          (if (< i 0)
+              v
+              (call-with-values (lambda () (f i seed))
+                (lambda (elt next)
+                  (vector-set! v i elt)
+                  (loop (- i 1) next)))))))
+
+    (define (vector-unfold! f v start end seed)
+      (let loop ((i start) (seed seed))
+        (if (>= i end)
+            v
+            (call-with-values (lambda () (f i seed))
+              (lambda (elt next)
+                (vector-set! v i elt)
+                (loop (+ i 1) next))))))
+
+    (define (vector-unfold-right! f v start end seed)
+      (let loop ((i (- end 1)) (seed seed))
+        (if (< i start)
+            v
+            (call-with-values (lambda () (f i seed))
+              (lambda (elt next)
+                (vector-set! v i elt)
+                (loop (- i 1) next))))))
+
+    ;; (vector-cumulate f knil v) — v's running fold: element i of the result
+    ;; is the fold of v's first i+1 elements.
+    (define (vector-cumulate f knil v)
+      (let* ((len (vector-length v))
+             (out (make-vector len)))
+        (let loop ((i 0) (acc knil))
+          (if (= i len)
+              out
+              (let ((acc (f acc (vector-ref v i))))
+                (vector-set! out i acc)
+                (loop (+ i 1) acc))))))
+
     ;; cmp returns negative, zero or positive.
     (define (vector-binary-search v value cmp)
       (let loop ((lo 0) (hi (- (vector-length v) 1)))
@@ -151,6 +207,42 @@
               (begin (vector-set! out i (vector-ref v (- n 1 i)))
                      (loop (+ i 1)))))))
 
+    ;; (vector-reverse-copy! to at from [start [end]]) — from's [start,end)
+    ;; into to at `at`, reversed.  Reads before writes via an intermediate
+    ;; copy, so to and from may be the same vector with overlapping ranges.
+    (define (vector-reverse-copy! to at from . rest)
+      (let* ((start (if (pair? rest) (car rest) 0))
+             (end   (if (and (pair? rest) (pair? (cdr rest)))
+                        (cadr rest) (vector-length from)))
+             (n     (- end start))
+             (tmp   (make-vector n)))
+        (let read ((i 0))
+          (when (< i n)
+            (vector-set! tmp i (vector-ref from (+ start i)))
+            (read (+ i 1))))
+        (let write ((i 0))
+          (if (= i n)
+              to
+              (begin
+                (vector-set! to (+ at i) (vector-ref tmp (- n 1 i)))
+                (write (+ i 1)))))))
+
+    ;; (vector-map! f v ...) — like vector-map, writing into the first
+    ;; vector; over the shortest length when given several.
+    (define (vector-map! f v . rest)
+      (let ((len (let loop ((vs rest) (n (vector-length v)))
+                   (if (null? vs)
+                       n
+                       (loop (cdr vs) (min n (vector-length (car vs))))))))
+        (let loop ((i 0))
+          (if (= i len)
+              v
+              (begin
+                (vector-set! v i
+                  (apply f (vector-ref v i)
+                           (map (lambda (u) (vector-ref u i)) rest)))
+                (loop (+ i 1)))))))
+
     (define (vector-concatenate vs)
       (let* ((total (let loop ((l vs) (n 0))
                       (if (null? l) n (loop (cdr l) (+ n (vector-length (car l)))))))
@@ -190,4 +282,40 @@
               (if (pred (vector-ref v i))
                   (loop (+ i 1) at)
                   (begin (vector-set! out at (vector-ref v i))
-                         (loop (+ i 1) (+ at 1))))))))))
+                         (loop (+ i 1) (+ at 1))))))))
+
+    ;; (vector-append-subvectors v1 s1 e1 v2 s2 e2 ...) — the named ranges
+    ;; appended into one fresh vector.
+    (define (vector-append-subvectors . args)
+      (let* ((total (let loop ((a args) (n 0))
+                      (if (null? a)
+                          n
+                          (loop (cdddr a) (+ n (- (caddr a) (cadr a)))))))
+             (out   (make-vector total)))
+        (let loop ((a args) (at 0))
+          (if (null? a)
+              out
+              (let ((v (car a)) (start (cadr a)) (end (caddr a)))
+                (let copy ((i start) (at at))
+                  (if (= i end)
+                      (loop (cdddr a) at)
+                      (begin (vector-set! out at (vector-ref v i))
+                             (copy (+ i 1) (+ at 1))))))))))
+
+    (define (reverse-vector->list v . rest)
+      (let ((start (if (pair? rest) (car rest) 0))
+            (end   (if (and (pair? rest) (pair? (cdr rest)))
+                       (cadr rest) (vector-length v))))
+        (let loop ((i start) (acc '()))
+          (if (= i end)
+              acc
+              (loop (+ i 1) (cons (vector-ref v i) acc))))))
+
+    (define (reverse-list->vector lst)
+      (let* ((n   (length lst))
+             (out (make-vector n)))
+        (let loop ((l lst) (i (- n 1)))
+          (if (null? l)
+              out
+              (begin (vector-set! out i (car l))
+                     (loop (cdr l) (- i 1)))))))))

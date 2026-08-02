@@ -19,7 +19,9 @@
     hash-table-size hash-table-keys hash-table-values hash-table-walk
     hash-table-fold hash-table->alist alist->hash-table
     hash-table-update! hash-table-update!/default hash-table-copy
-    hash-table-clear! hash string-hash string-ci-hash hash-by-identity)
+    hash-table-clear! hash-table-merge!
+    hash-table-equivalence-function hash-table-hash-function
+    hash string-hash string-ci-hash hash-by-identity)
   (begin
 
     (define %ht-tag '%srfi69-hash-table)
@@ -194,4 +196,13 @@
 
     (define (hash-table-clear! t)
       (%set-buckets! t (make-vector %initial-buckets '()))
-      (%set-count! t 0))))
+      (%set-count! t 0))
+
+    ;; The two constructor arguments, read back off the representation.
+    (define (hash-table-equivalence-function t) (%equiv t))
+    (define (hash-table-hash-function t)        (%hashfn t))
+
+    ;; src's entries into dst, src winning on collision; returns dst.
+    (define (hash-table-merge! dst src)
+      (hash-table-walk src (lambda (k v) (hash-table-set! dst k v)))
+      dst)))

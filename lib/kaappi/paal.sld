@@ -796,6 +796,8 @@
           (pkaappi-compile
             "(define %paal-param-key (list 'paal-param-key))
              (define %paal-winds '())
+             ; (p v) sets the value through the converter -- the SRFI 39
+             ; convention R7RS dropped but kaappi keeps, so paal keeps it too.
              (define (make-parameter init . rest)
                (let* ((conv (if (null? rest) (lambda (x) x) (car rest)))
                       (cell (vector (conv init) conv)))
@@ -804,7 +806,7 @@
                        (vector-ref cell 0)
                        (if (eq? (car args) %paal-param-key)
                            cell
-                           (error \"parameter: unexpected argument\"))))))
+                           (vector-set! cell 0 (conv (car args))))))))
              (define (%paal-param-cells params)
                (if (null? params)
                    '()

@@ -15,24 +15,29 @@
   (import (scheme base))
   (export
     ;; constructors
-    xcons cons* make-list list-tabulate iota
+    xcons cons* make-list list-tabulate iota circular-list
     ;; predicates
     proper-list? circular-list? dotted-list? null-list? not-pair?
     list=
     ;; selectors
     first second third fourth fifth sixth seventh eighth ninth tenth
     car+cdr take drop take-right drop-right last last-pair
+    split-at
+    ;; miscellaneous
+    zip unzip1 unzip2 concatenate append-reverse length+
     ;; folds and friends
     fold fold-right reduce reduce-right append-map filter-map
     unfold unfold-right
+    pair-fold pair-fold-right pair-for-each map-in-order
     ;; filtering and searching
     filter remove partition find find-tail any every list-index
     take-while drop-while span break count
     delete delete-duplicates
     ;; association lists
-    alist-copy del-assq del-assv del-assoc
+    alist-copy alist-cons alist-delete del-assq del-assv del-assoc
     ;; sets over lists
-    lset-adjoin lset-union lset-intersection lset-difference)
+    lset-adjoin lset-union lset-intersection lset-difference
+    lset= lset-xor)
   (begin
 
     ;; --- constructors ------------------------------------------------
@@ -57,6 +62,13 @@
           (if (< i 0)
               acc
               (loop (- i 1) (cons (+ start (* i step)) acc))))))
+
+    ;; The one SRFI 1 constructor whose result is deliberately cyclic.  At
+    ;; least one element, or there is no pair to close the knot through.
+    (define (circular-list first . rest)
+      (let ((l (cons first rest)))
+        (set-cdr! (last-pair l) l)
+        l))
 
     ;; --- predicates --------------------------------------------------
 
@@ -143,6 +155,39 @@
 
     (define (last lst) (car (last-pair lst)))
 
+    ;; (values (take lst n) (drop lst n)) in one pass over the prefix.
+    (define (split-at lst n)
+      (let loop ((l lst) (k n) (acc '()))
+        (if (= k 0)
+            (values (reverse acc) l)
+            (loop (cdr l) (- k 1) (cons (car l) acc)))))
+
+    ;; --- miscellaneous -----------------------------------------------
+
+    (define (zip . lists) (apply map list lists))
+
+    (define (unzip1 lst) (map car lst))
+
+    (define (unzip2 lst)
+      (values (map car lst) (map cadr lst)))
+
+    (define (concatenate lists) (apply append lists))
+
+    (define (append-reverse rev tail)
+      (let loop ((l rev) (acc tail))
+        (if (null? l) acc (loop (cdr l) (cons (car l) acc)))))
+
+    ;; length, except a circular list answers #f and a dotted list its pair
+    ;; count is not needed — SRFI 1 leaves dotted lists to `length`'s error.
+    ;; Same two-pointer walk the predicates use.
+    (define (length+ lst)
+      (let loop ((slow lst) (fast lst) (n 0))
+        (cond ((null? fast) n)
+              ((not (pair? fast)) (error "length+: not a proper or circular list" lst))
+              ((null? (cdr fast)) (+ n 1))
+              ((eq? (cdr fast) slow) #f)
+              (else (loop (cdr slow) (cddr fast) (+ n 2))))))
+
     ;; --- folds -------------------------------------------------------
 
     (define (fold kons knil lst . rest)
@@ -198,6 +243,46 @@
     (define (unfold-right p f g seed)
       (let loop ((seed seed) (acc '()))
         (if (p seed) acc (loop (g seed) (cons (f seed) acc)))))
+
+    ;; The pair-walking folds see each successive pair, not each element.
+    ;; The cdr is taken before kons runs, so a kons that set-cdr!s the pair
+    ;; it was handed — SRFI 1's own destructive-reverse example — does not
+    ;; derail the walk.
+    (define (pair-fold kons knil lst)
+      (let loop ((l lst) (acc knil))
+        (if (pair? l)
+            (let ((tail (cdr l)))
+              (loop tail (kons l acc)))
+            acc)))
+
+    (define (pair-fold-right kons knil lst)
+      (let loop ((l lst))
+        (if (pair? l)
+            (kons l (loop (cdr l)))
+            knil)))
+
+    (define (pair-for-each proc lst)
+      (let loop ((l lst))
+        (when (pair? l)
+          (let ((tail (cdr l)))
+            (proc l)
+            (loop tail)))))
+
+    ;; map with the application order guaranteed left to right.  paal's map
+    ;; happens to walk that way, but the guarantee is this name's whole
+    ;; contract, so it gets its own loop rather than an alias.
+    (define (map-in-order f lst . rest)
+      (if (null? rest)
+          (let loop ((l lst) (acc '()))
+            (if (null? l)
+                (reverse acc)
+                (let ((v (f (car l))))
+                  (loop (cdr l) (cons v acc)))))
+          (let loop ((ls (cons lst rest)) (acc '()))
+            (if (let scan ((ls ls)) (and (pair? ls) (or (null? (car ls)) (scan (cdr ls)))))
+                (reverse acc)
+                (let ((v (apply f (map car ls))))
+                  (loop (map cdr ls) (cons v acc)))))))
 
     ;; --- filtering and searching -------------------------------------
 
@@ -299,6 +384,15 @@
     (define (alist-copy alist)
       (map (lambda (p) (cons (car p) (cdr p))) alist))
 
+    (define (alist-cons key datum alist)
+      (cons (cons key datum) alist))
+
+    ;; The optional comparison defaults to equal?, and the key is its first
+    ;; argument, per SRFI 1 — (= key entry-key).
+    (define (alist-delete key alist . rest)
+      (let ((same? (if (pair? rest) (car rest) equal?)))
+        (filter (lambda (p) (not (same? key (car p)))) alist)))
+
     (define (%del-as key alist same?)
       (filter (lambda (p) (not (same? key (car p)))) alist))
 
@@ -336,4 +430,32 @@
                   (cond ((null? ls) #t)
                         ((%member? e (car ls) elt=) #f)
                         (else (loop (cdr ls))))))
-              lst))))
+              lst))
+
+    ;; Set equality is mutual containment; chained across the arguments the
+    ;; way = chains across numbers.  No arguments or one argument is #t.
+    (define (lset= elt= . lists)
+      (let ((subset? (lambda (a b)
+                       (let loop ((l a))
+                         (cond ((null? l) #t)
+                               ((%member? (car l) b elt=) (loop (cdr l)))
+                               (else #f))))))
+        (let loop ((ls lists))
+          (cond ((null? ls) #t)
+                ((null? (cdr ls)) #t)
+                ((and (subset? (car ls) (cadr ls))
+                      (subset? (cadr ls) (car ls)))
+                 (loop (cdr ls)))
+                (else #f)))))
+
+    ;; Symmetric difference, folded pairwise across the arguments.
+    (define (lset-xor elt= . lists)
+      (let ((xor2 (lambda (a b)
+                    (append (filter (lambda (e) (not (%member? e b elt=))) a)
+                            (filter (lambda (e) (not (%member? e a elt=))) b)))))
+        (if (null? lists)
+            '()
+            (let loop ((acc (car lists)) (ls (cdr lists)))
+              (if (null? ls)
+                  acc
+                  (loop (xor2 acc (car ls)) (cdr ls)))))))))

@@ -207,7 +207,8 @@
           (cond
             ((null? args) (vector-ref cell 0))
             ((eq? (car args) %paal-param-key) cell)
-            (else (error "parameter: unexpected argument"))))))
+            ;; (p v) sets — the SRFI 39 convention make-parameter follows.
+            (else (vector-set! cell 0 (car args)))))))
 
     ;; The parameterize machinery, extracted from the alist for the same
     ;; reason: with-input-from-file / with-output-to-file rebind a port
@@ -548,6 +549,8 @@
              ;;
              ;; Converter and thunk may be paal lambdas, which return trampoline
              ;; thunks rather than values, so each call is forced.
+             ;; (p v) sets the value through the converter — the SRFI 39
+             ;; convention R7RS dropped but kaappi keeps, so paal keeps it too.
              (make-parameter
                . ,(lambda (init . rest)
                     (let* ((conv (if (null? rest) (lambda (x) x) (car rest)))
@@ -556,7 +559,7 @@
                         (cond
                           ((null? args) (vector-ref cell 0))
                           ((eq? (car args) %paal-param-key) cell)
-                          (else (error "parameter: unexpected argument")))))))
+                          (else (vector-set! cell 0 (trampoline (conv (car args))))))))))
              ;;
              ;; No cleanup guard around the thunk, deliberately.  Restoring on a
              ;; raise is now the enclosing guard's job: it winds out to its own

@@ -3491,7 +3491,40 @@
     '((1 2 3) (1 2 3) (2 3) (1 3))
     (srfi-run 1 "(list (lset-adjoin eqv? '(1 2) 2 3) (lset-union eqv? '(1 2) '(2 3))
                        (lset-intersection eqv? '(1 2 3) '(2 3 4))
-                       (lset-difference eqv? '(1 2 3) '(2)))")))
+                       (lset-difference eqv? '(1 2 3) '(2)))"))
+  (test-equal "lset= chains and lset-xor folds"
+    '(#t #f (a d))
+    (srfi-run 1 "(list (lset= eq? '(a b c) '(c b a) '(b a c))
+                       (lset= eq? '(a) '(a b))
+                       (lset-xor eq? '(a b c) '(b c d)))"))
+  (test-equal "zip, unzip and concatenate"
+    '(((1 a) (2 b)) (1 2) ((1 2) (a b)) (1 2 3))
+    (srfi-run 1 "(list (zip '(1 2) '(a b)) (unzip1 '((1 x) (2 y)))
+                       (call-with-values (lambda () (unzip2 '((1 a) (2 b)))) list)
+                       (concatenate '((1 2) (3) ())))"))
+  (test-equal "split-at and append-reverse"
+    '((1 2) (3 4) (1 2 3 4 5))
+    (srfi-run 1 "(append (call-with-values (lambda () (split-at '(1 2 3 4) 2)) list)
+                         (list (append-reverse '(3 2 1) '(4 5))))"))
+  ;; length+ is length that answers #f on a cycle instead of hanging.
+  (test-equal "length+ and circular-list"
+    '(3 #f #t)
+    (srfi-run 1 "(list (length+ '(1 2 3)) (length+ (circular-list 1 2))
+                       (circular-list? (circular-list 1 2 3)))"))
+  (test-equal "alist-cons and alist-delete"
+    '((2 . b))
+    (srfi-run 1 "(alist-delete 1 (alist-cons 1 'a (alist-cons 2 'b '())))"))
+  ;; The pair-walkers see successive pairs, not elements.
+  (test-equal "pair-fold, pair-fold-right and pair-for-each"
+    '((3 2 1) (3 2 1) (1 2))
+    (srfi-run 1 "(list (pair-fold (lambda (p acc) (cons (car p) acc)) '() '(1 2 3))
+                       (pair-fold-right (lambda (p acc) (cons (length p) acc)) '() '(a b c))
+                       (let ((out '()))
+                         (pair-for-each (lambda (p) (set! out (cons (length p) out))) '(x y))
+                         out))"))
+  (test-equal "map-in-order over two lists"
+    '(11 22)
+    (srfi-run 1 "(map-in-order + '(1 2 3) '(10 20))")))
 
 (test-group "srfi 13: strings"
   (test-equal "take and drop from both ends"
@@ -3525,7 +3558,23 @@
     '("a,b,c" ("a" "b" "" "c") ("a" "b"))
     (srfi-run 13 "(list (string-join '(\"a\" \"b\" \"c\") \",\")
                         (string-split \"a,b,,c\" #\\,)
-                        (string-tokenize \"  a  b \"))")))
+                        (string-tokenize \"  a  b \"))"))
+  ;; skip is index with the criterion negated — what trim runs conceptually.
+  (test-equal "string-skip from both ends"
+    '(3 1 #f)
+    (srfi-run 13 "(list (string-skip \"   x\" #\\space)
+                        (string-skip-right \"ax  \" #\\space)
+                        (string-skip \"aaa\" #\\a))"))
+  (test-equal "unfold builds forward, unfold-right backward"
+    '("abc" "cba" "-abc+")
+    (srfi-run 13 "(list (string-unfold null? car cdr '(#\\a #\\b #\\c))
+                        (string-unfold-right null? car cdr '(#\\a #\\b #\\c))
+                        (string-unfold null? car cdr '(#\\a #\\b #\\c)
+                                       \"-\" (lambda (s) \"+\")))"))
+  (test-equal "tabulate and titlecase"
+    '("abc" "Hello World 2Day")
+    (srfi-run 13 "(list (string-tabulate (lambda (i) (integer->char (+ 97 i))) 3)
+                        (string-titlecase \"hello wORLD 2day\"))")))
 
 (test-group "srfi 69: hash tables"
   (test-equal "set, ref and defaults"
@@ -3559,7 +3608,17 @@
   (test-equal "alist->hash-table lets earlier entries win"
     '(1 2)
     (srfi-run 69 "(define h (alist->hash-table '((a . 1) (a . 9) (b . 2))))
-                  (list (hash-table-ref h 'a) (hash-table-ref h 'b))")))
+                  (list (hash-table-ref h 'a) (hash-table-ref h 'b))"))
+  (test-equal "constructor arguments read back, merge! copies src over dst"
+    '(#t #t 9 2)
+    (srfi-run 69 "(define a (make-hash-table))
+                  (define b (make-hash-table))
+                  (hash-table-set! a 'x 1) (hash-table-set! b 'x 9)
+                  (hash-table-set! b 'y 2)
+                  (hash-table-merge! a b)
+                  (list (procedure? (hash-table-equivalence-function a))
+                        (procedure? (hash-table-hash-function a))
+                        (hash-table-ref a 'x) (hash-table-ref a 'y))")))
 
 (test-group "srfi 133: vectors"
   (test-equal "empty, count and index"
@@ -3577,7 +3636,37 @@
   (test-equal "binary search"
     '(2 #f)
     (srfi-run 133 "(list (vector-binary-search #(1 3 5 7) 5 (lambda (a b) (- a b)))
-                         (vector-binary-search #(1 3 5 7) 4 (lambda (a b) (- a b))))")))
+                         (vector-binary-search #(1 3 5 7) 4 (lambda (a b) (- a b))))"))
+  (test-equal "index and skip from the right"
+    '(2 3)
+    (srfi-run 133 "(list (vector-index-right odd? #(1 2 3 4))
+                         (vector-skip-right odd? #(1 2 3 4)))"))
+  (test-equal "the unfold family fills in every direction"
+    '(#(3 2 1 0) #(_ 1 2 4 _) #(_ 4 2 1 _))
+    (srfi-run 133 "(list (vector-unfold-right (lambda (i s) (values s (+ s 1))) 4 0)
+                         (let ((v (make-vector 5 '_)))
+                           (vector-unfold! (lambda (i s) (values s (* s 2))) v 1 4 1))
+                         (let ((v (make-vector 5 '_)))
+                           (vector-unfold-right! (lambda (i s) (values s (* s 2))) v 1 4 1)))"))
+  (test-equal "cumulate is the running fold"
+    #(1 3 6 10)
+    (srfi-run 133 "(vector-cumulate + 0 #(1 2 3 4))"))
+  (test-equal "append-subvectors and in-place map"
+    '(#(2 3 a b) #(1 4 9) #(11 22))
+    (srfi-run 133 "(list (vector-append-subvectors #(1 2 3 4) 1 3 #(a b c) 0 2)
+                         (let ((v (vector 1 2 3))) (vector-map! (lambda (x) (* x x)) v))
+                         (let ((v (vector 1 2))) (vector-map! + v #(10 20 30))))"))
+  ;; reverse-copy! reads through a temporary, so overlapping self-copy works.
+  (test-equal "reverse-copy! into a range, and onto itself"
+    '(#(3 2 1 9) #(3 2 1))
+    (srfi-run 133 "(list (let ((v (vector 0 0 0 9)))
+                           (vector-reverse-copy! v 0 #(1 2 3) 0 3) v)
+                         (let ((v (vector 1 2 3)))
+                           (vector-reverse-copy! v 0 v 0 3) v))"))
+  (test-equal "the reversing converters"
+    '((3 2 1) #(1 2 3))
+    (srfi-run 133 "(list (reverse-vector->list #(1 2 3))
+                         (reverse-list->vector '(3 2 1)))")))
 
 (test-group "srfi 28 / 48: format"
   (test-equal "srfi 28 directives"
@@ -3588,7 +3677,21 @@
     (srfi-run 48 "(list (format \"~d ~x ~b ~o\" 255 255 5 8) (format \"~c\" #\\z))"))
   (test-equal "srfi 48 accepts a leading #f"
     "1"
-    (srfi-run 48 "(format #f \"~a\" 1)")))
+    (srfi-run 48 "(format #f \"~a\" 1)"))
+  ;; The column directive: ~[width[,decimals]]F right-aligns, rounding
+  ;; numbers to the given fraction digits.
+  (test-equal "column-aligned ~F"
+    '("[    3.14]" "[   42]" "[3.142]" "[  abc]")
+    (srfi-run 48 "(list (format \"[~8,2F]\" 3.14159) (format \"[~5F]\" 42)
+                        (format \"[~1,3F]\" 3.14159) (format \"[~5F]\" \"abc\"))"))
+  ;; ~& emits a newline only when not already at a line start.
+  (test-equal "freshline collapses"
+    "a\nb\nc"
+    (srfi-run 48 "(format \"a~&b~%~&c\")"))
+  (test-equal "~w writes and ~h answers"
+    '("(1 \"x\")" #t)
+    (srfi-run 48 "(list (format \"~w\" '(1 \"x\"))
+                        (string? (format \"~h\")))")))
 
 ;; These three are import paths for things paal already provides.
 (test-group "srfi 9 / 23 / 39: already-present forms"
@@ -3600,7 +3703,20 @@
     (srfi-run 23 "(guard (e (#t (error-object-message e))) (error \"boom\" 1))"))
   (test-equal "srfi 39 parameterize"
     2
-    (srfi-run 39 "(define p (make-parameter 1)) (parameterize ((p 2)) (p))")))
+    (srfi-run 39 "(define p (make-parameter 1)) (parameterize ((p 2)) (p))"))
+  ;; (p v) sets through the converter — the SRFI 39 convention R7RS dropped
+  ;; but kaappi keeps.  Both pipelines; parameterize restores unaffected.
+  (test-equal "srfi 39 (p v) sets through the converter"
+    20
+    (srfi-run 39 "(define p (make-parameter 1 (lambda (x) (* x 10)))) (p 2) (p)"))
+  (test-equal "(p v) sets on the tree-walking path too"
+    20
+    (pkaappi-run-string
+      "(define p (make-parameter 1 (lambda (x) (* x 10)))) (p 2) (p)"))
+  (test-equal "a set value is still parameterize-restorable"
+    '(5 2)
+    (srfi-run 39 "(define p (make-parameter 1)) (p 2)
+                  (list (parameterize ((p 5)) (p)) (p))")))
 
 ;; ---------------------------------------------------------------
 ;; (scheme eval) / (scheme load) / (scheme repl)
