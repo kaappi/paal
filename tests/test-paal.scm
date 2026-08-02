@@ -3862,8 +3862,10 @@
     '(#t #f #t)
     (srfi-run 1 "(list (circular-list? '#0=(1 2 . #0#))
                        (circular-list? '(1 2)) (dotted-list? '(1 . 2)))"))
+  ;; New elements arrive consed on the front — kaappi's (and the SRFI 1
+  ;; reference implementation's) order, pinned by the shelf's srfi1-ext.
   (test-equal "lset operations"
-    '((1 2 3) (1 2 3) (2 3) (1 3))
+    '((3 1 2) (3 1 2) (2 3) (1 3))
     (srfi-run 1 "(list (lset-adjoin eqv? '(1 2) 2 3) (lset-union eqv? '(1 2) '(2 3))
                        (lset-intersection eqv? '(1 2 3) '(2 3 4))
                        (lset-difference eqv? '(1 2 3) '(2)))"))
@@ -4677,7 +4679,24 @@
     (pkaappi-run-bc-string
       "(import (scheme base) (srfi 13) (srfi 14))
        (list (string-index \"123abc\" char-set:digit)
-             (string-filter char-set:digit \"a1b2c3\"))")))
+             (string-filter char-set:digit \"a1b2c3\"))"))
+  ;; (srfi 1) and (srfi 133): the n-ary and range arms the shelf's -ext
+  ;; files exercise.  Multi-sequence traversal stops at the shortest.
+  (test-equal "list-index walks lists in lockstep" 1
+    (pkaappi-run-bc-string
+      "(import (scheme base) (srfi 1)) (list-index = '(1 2 3) '(3 2 1))"))
+  (test-equal "vector-fold and fold-right take several vectors" '(32 ((1 4) (2 5) (3 6)))
+    (pkaappi-run-bc-string
+      "(import (scheme base) (srfi 133))
+       (list (vector-fold (lambda (acc a b) (+ acc (* a b))) 0 #(1 2 3) #(4 5 6))
+             (vector-fold-right (lambda (acc a b) (cons (list a b) acc)) '()
+                                #(1 2 3) #(4 5 6)))"))
+  (test-equal "vector-reverse! and reverse-copy take ranges" '(#(1 4 3 2 5) #(4 3 2))
+    (pkaappi-run-bc-string
+      "(import (scheme base) (srfi 133))
+       (define v (vector 1 2 3 4 5))
+       (vector-reverse! v 1 4)
+       (list v (vector-reverse-copy #(1 2 3 4 5) 1 4))")))
 
 ;; ---------------------------------------------------------------
 ;; Bytecode cache for user programs

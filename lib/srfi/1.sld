@@ -334,11 +334,18 @@
                   ((apply pred (map car ls)) => (lambda (v) (loop (map cdr ls) v)))
                   (else #f)))))
 
-    (define (list-index pred lst)
-      (let loop ((l lst) (i 0))
-        (cond ((null? l) #f)
-              ((pred (car l)) i)
-              (else (loop (cdr l) (+ i 1))))))
+    ;; n-ary, stopping at the shortest list, per SRFI 1.  The one-list arm
+    ;; stays inlined so the common case pays no apply.
+    (define (list-index pred lst . rest)
+      (if (null? rest)
+          (let loop ((l lst) (i 0))
+            (cond ((null? l) #f)
+                  ((pred (car l)) i)
+                  (else (loop (cdr l) (+ i 1)))))
+          (let loop ((ls (cons lst rest)) (i 0))
+            (cond ((any null? ls) #f)
+                  ((apply pred (map car ls)) i)
+                  (else (loop (map cdr ls) (+ i 1)))))))
 
     (define (take-while pred lst)
       (let loop ((l lst) (acc '()))
@@ -402,9 +409,12 @@
 
     ;; --- sets over lists ---------------------------------------------
 
+    ;; New elements are consed on the front, matching the SRFI 1 reference
+    ;; implementation and kaappi: (lset-adjoin eqv? '(1 2) 2 3) is (3 1 2).
+    ;; The spec leaves the order open; the shelf's tests pin kaappi's.
     (define (lset-adjoin elt= lst . elts)
       (fold (lambda (e acc)
-              (if (%member? e acc elt=) acc (append acc (list e))))
+              (if (%member? e acc elt=) acc (cons e acc)))
             lst elts))
 
     (define (lset-union elt= . lists)
@@ -412,7 +422,7 @@
           '()
           (fold (lambda (l acc)
                   (fold (lambda (e acc)
-                          (if (%member? e acc elt=) acc (append acc (list e))))
+                          (if (%member? e acc elt=) acc (cons e acc)))
                         acc l))
                 (car lists) (cdr lists))))
 

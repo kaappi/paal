@@ -10,7 +10,7 @@
       '(
         ("srfi-258.scm" pass)
         ("srfi-27-unit.scm" pass)
-        ("srfi1-ext.scm" fail) ; '=': expected at least 2 arguments, got 1
+        ("srfi1-ext.scm" pass)
         ("srfi1.scm" pass)
         ("srfi113-audit.scm" pass)
         ("srfi113.scm" pass)
@@ -21,7 +21,7 @@
         ("srfi13-ext.scm" pass)
         ("srfi13-startend.scm" pass)
         ("srfi132.scm" pass)
-        ("srfi133-ext.scm" fail) ; SRFI 133 extended tests failed 4
+        ("srfi133-ext.scm" pass)
         ("srfi141.scm" pass)
         ("srfi151.scm" pass)
         ("srfi158.scm" pass)

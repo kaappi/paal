@@ -360,11 +360,18 @@
                   ((apply pred (map car ls)) => (lambda (v) (loop (map cdr ls) v)))
                   (else #f)))))
 
-    (define (list-index pred lst)
-      (let loop ((l lst) (i 0))
-        (cond ((null? l) #f)
-              ((pred (car l)) i)
-              (else (loop (cdr l) (+ i 1))))))
+    ;; n-ary, stopping at the shortest list, per SRFI 1.  The one-list arm
+    ;; stays inlined so the common case pays no apply.
+    (define (list-index pred lst . rest)
+      (if (null? rest)
+          (let loop ((l lst) (i 0))
+            (cond ((null? l) #f)
+                  ((pred (car l)) i)
+                  (else (loop (cdr l) (+ i 1)))))
+          (let loop ((ls (cons lst rest)) (i 0))
+            (cond ((any null? ls) #f)
+                  ((apply pred (map car ls)) i)
+                  (else (loop (map cdr ls) (+ i 1)))))))
 
     (define (take-while pred lst)
       (let loop ((l lst) (acc '()))
@@ -428,9 +435,12 @@
 
     ;; --- sets over lists ---------------------------------------------
 
+    ;; New elements are consed on the front, matching the SRFI 1 reference
+    ;; implementation and kaappi: (lset-adjoin eqv? '(1 2) 2 3) is (3 1 2).
+    ;; The spec leaves the order open; the shelf's tests pin kaappi's.
     (define (lset-adjoin elt= lst . elts)
       (fold (lambda (e acc)
-              (if (%member? e acc elt=) acc (append acc (list e))))
+              (if (%member? e acc elt=) acc (cons e acc)))
             lst elts))
 
     (define (lset-union elt= . lists)
@@ -438,7 +448,7 @@
           '()
           (fold (lambda (l acc)
                   (fold (lambda (e acc)
-                          (if (%member? e acc elt=) acc (append acc (list e))))
+                          (if (%member? e acc elt=) acc (cons e acc)))
                         acc l))
                 (car lists) (cdr lists))))
 
@@ -6078,17 +6088,37 @@
 
     ;; (vector-fold kons knil v) — kons receives the accumulator first, per
     ;; SRFI 133, which is the opposite order from SRFI 1's fold.
-    (define (vector-fold kons knil v)
-      (let loop ((i 0) (acc knil))
-        (if (= i (vector-length v))
-            acc
-            (loop (+ i 1) (kons acc (vector-ref v i))))))
+    ;; n-ary, stopping at the shortest vector, per SRFI 133.  The
+    ;; one-vector arms stay inlined so the common case pays no apply.
+    (define (vector-fold kons knil v . rest)
+      (if (null? rest)
+          (let loop ((i 0) (acc knil))
+            (if (= i (vector-length v))
+                acc
+                (loop (+ i 1) (kons acc (vector-ref v i)))))
+          (let* ((vs (cons v rest))
+                 (n (apply min (map vector-length vs))))
+            (let loop ((i 0) (acc knil))
+              (if (= i n)
+                  acc
+                  (loop (+ i 1)
+                        (apply kons acc
+                               (map (lambda (u) (vector-ref u i)) vs))))))))
 
-    (define (vector-fold-right kons knil v)
-      (let loop ((i (- (vector-length v) 1)) (acc knil))
-        (if (< i 0)
-            acc
-            (loop (- i 1) (kons acc (vector-ref v i))))))
+    (define (vector-fold-right kons knil v . rest)
+      (if (null? rest)
+          (let loop ((i (- (vector-length v) 1)) (acc knil))
+            (if (< i 0)
+                acc
+                (loop (- i 1) (kons acc (vector-ref v i)))))
+          (let* ((vs (cons v rest))
+                 (n (apply min (map vector-length vs))))
+            (let loop ((i (- n 1)) (acc knil))
+              (if (< i 0)
+                  acc
+                  (loop (- i 1)
+                        (apply kons acc
+                               (map (lambda (u) (vector-ref u i)) vs))))))))
 
     (define (vector-reduce f knil v)
       (if (vector-empty? v)
@@ -6196,18 +6226,28 @@
         (vector-set! v i (vector-ref v j))
         (vector-set! v j tmp)))
 
-    (define (vector-reverse! v)
-      (let loop ((i 0) (j (- (vector-length v) 1)))
-        (if (< i j)
-            (begin (vector-swap! v i j) (loop (+ i 1) (- j 1)))
-            v)))
+    ;; (vector-reverse! v [start end]) — reverse the range in place.
+    (define (vector-reverse! v . rest)
+      (let* ((start (if (pair? rest) (car rest) 0))
+             (end   (if (and (pair? rest) (pair? (cdr rest)))
+                        (cadr rest) (vector-length v))))
+        (let loop ((i start) (j (- end 1)))
+          (if (< i j)
+              (begin (vector-swap! v i j) (loop (+ i 1) (- j 1)))
+              v))))
 
-    (define (vector-reverse-copy v)
-      (let* ((n (vector-length v)) (out (make-vector n)))
+    ;; (vector-reverse-copy v [start end]) — the range, reversed, as a
+    ;; fresh vector.
+    (define (vector-reverse-copy v . rest)
+      (let* ((start (if (pair? rest) (car rest) 0))
+             (end   (if (and (pair? rest) (pair? (cdr rest)))
+                        (cadr rest) (vector-length v)))
+             (n (- end start))
+             (out (make-vector n)))
         (let loop ((i 0))
           (if (= i n)
               out
-              (begin (vector-set! out i (vector-ref v (- n 1 i)))
+              (begin (vector-set! out i (vector-ref v (- end 1 i)))
                      (loop (+ i 1)))))))
 
     ;; (vector-reverse-copy! to at from [start [end]]) — from's [start,end)
