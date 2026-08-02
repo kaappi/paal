@@ -3067,6 +3067,146 @@
         r))))
 
 ;; ---------------------------------------------------------------
+;; Library declarations beyond import/export/begin/include
+;; ---------------------------------------------------------------
+;;
+;; R7RS 5.6.1: cond-expand and include-library-declarations are declarations
+;; that produce further declarations; include-ci is a body source like
+;; include.  All are rewritten to the flat vocabulary by normalize-decls
+;; before install-library! reads anything, and the same pass serves the
+;; define-library-as-program-form path.  Fixture libraries are single-name
+;; .sld files in the working directory, which is on the default search path.
+
+(define (%write-fixture path text)
+  (let ((port (open-output-file path)))
+    (display text port)
+    (close-output-port port)))
+
+(test-group "library declarations"
+  (test-equal "cond-expand declaration selects export and body" 12
+    (let ((p "paal-tmp-ce.sld"))
+      (%write-fixture p
+        "(define-library (paal-tmp-ce)
+           (import (scheme base))
+           (cond-expand
+             (paal (export twelve) (begin (define twelve 12)))
+             (else (export twelve) (begin (define twelve 'wrong)))))")
+      (let ((r (pkaappi-run-bc-string "(import (paal-tmp-ce)) twelve")))
+        (delete-file p)
+        r)))
+  (test-equal "cond-expand declaration falls to else" 'fallback
+    (let ((p "paal-tmp-ce2.sld"))
+      (%write-fixture p
+        "(define-library (paal-tmp-ce2)
+           (import (scheme base))
+           (cond-expand
+             (this-is-no-feature (export which) (begin (define which 'wrong)))
+             (else (export which) (begin (define which 'fallback)))))")
+      (let ((r (pkaappi-run-bc-string "(import (paal-tmp-ce2)) which")))
+        (delete-file p)
+        r)))
+  (test-equal "include-ci as a library declaration folds case" 9
+    (let ((p "paal-tmp-ci.sld") (inc "paal-tmp-ci-body.scm"))
+      (%write-fixture inc "(DEFINE Nine 9)\n")
+      (%write-fixture p
+        "(define-library (paal-tmp-ci)
+           (import (scheme base))
+           (export nine)
+           (include-ci \"paal-tmp-ci-body.scm\"))")
+      (let ((r (pkaappi-run-bc-string "(import (paal-tmp-ci)) nine")))
+        (delete-file p)
+        (delete-file inc)
+        r)))
+  (test-equal "include-library-declarations splices declarations" 30
+    (let ((p "paal-tmp-ild.sld") (inc "paal-tmp-ild-decls.scm"))
+      (%write-fixture inc
+        "(export thirty)\n(begin (define thirty (* 3 ten)))\n")
+      (%write-fixture p
+        "(define-library (paal-tmp-ild)
+           (import (scheme base))
+           (begin (define ten 10))
+           (include-library-declarations \"paal-tmp-ild-decls.scm\"))")
+      (let ((r (pkaappi-run-bc-string "(import (paal-tmp-ild)) thirty")))
+        (delete-file p)
+        (delete-file inc)
+        r)))
+  (test-equal "an included declaration file may itself cond-expand" 'chosen
+    (let ((p "paal-tmp-ild2.sld") (inc "paal-tmp-ild2-decls.scm"))
+      (%write-fixture inc
+        "(cond-expand (paal (export pick) (begin (define pick 'chosen))))\n")
+      (%write-fixture p
+        "(define-library (paal-tmp-ild2)
+           (import (scheme base))
+           (include-library-declarations \"paal-tmp-ild2-decls.scm\"))")
+      (let ((r (pkaappi-run-bc-string "(import (paal-tmp-ild2)) pick")))
+        (delete-file p)
+        (delete-file inc)
+        r)))
+  (test-equal "begin and include interleave in declaration order" '(1 2 3)
+    (let ((p "paal-tmp-ord.sld") (inc "paal-tmp-ord-body.scm"))
+      (%write-fixture inc "(define two (+ one 1))\n")
+      (%write-fixture p
+        "(define-library (paal-tmp-ord)
+           (import (scheme base))
+           (export one two three)
+           (begin (define one 1))
+           (include \"paal-tmp-ord-body.scm\")
+           (begin (define three (+ two 1))))")
+      (let ((r (pkaappi-run-bc-string
+                 "(import (scheme base) (paal-tmp-ord)) (list one two three)")))
+        (delete-file p)
+        (delete-file inc)
+        r)))
+  ;; The program-form path (`paal file.sld`) reads the same vocabulary: a
+  ;; define-library at top level with cond-expand and include declarations
+  ;; splices its body instead of dropping the includes on the floor.
+  (test-equal "program-form define-library honours include and cond-expand" 21
+    (let ((inc "paal-tmp-pf-body.scm"))
+      (%write-fixture inc "(define twenty 20)\n")
+      (let ((r (pkaappi-run-bc-string
+                 "(define-library (paal-tmp-pf)
+                    (import (scheme base))
+                    (include \"paal-tmp-pf-body.scm\")
+                    (cond-expand
+                      (paal (begin (define one 1)))))
+                  (+ twenty one)")))
+        (delete-file inc)
+        r)))
+  (test-equal "(scheme case-lambda) is importable" 'two
+    (pkaappi-run-bc-string
+      "(import (scheme base) (scheme case-lambda))
+       (define f (case-lambda ((a) 'one) ((a b) 'two)))
+       (f 1 2)"))
+  ;; Private macros are tag-mangled at install: the exported macro's template
+  ;; was rewritten to call the mangled name, and the original private name is
+  ;; not reachable from the importer.
+  (test-equal "an exported macro may use a private one" 'ok
+    (let ((p "paal-tmp-priv.sld"))
+      (%write-fixture p
+        "(define-library (paal-tmp-priv)
+           (import (scheme base))
+           (export pub)
+           (begin
+             (define-syntax helper (syntax-rules () ((_) 'ok)))
+             (define-syntax pub    (syntax-rules () ((_) (helper))))))")
+      (let ((r (pkaappi-run-bc-string "(import (paal-tmp-priv)) (pub)")))
+        (delete-file p)
+        r)))
+  (test-equal "a private macro is not visible to the importer" 'error
+    (let ((p "paal-tmp-priv2.sld"))
+      (%write-fixture p
+        "(define-library (paal-tmp-priv2)
+           (import (scheme base))
+           (export pub)
+           (begin
+             (define-syntax hidden (syntax-rules () ((_) 'leak)))
+             (define-syntax pub    (syntax-rules () ((_) 'fine)))))")
+      (let ((r (guard (e (#t 'error))
+                 (pkaappi-run-bc-string "(import (paal-tmp-priv2)) (hidden)"))))
+        (delete-file p)
+        r))))
+
+;; ---------------------------------------------------------------
 ;; Import scope: what a library actually grants
 ;; ---------------------------------------------------------------
 ;;

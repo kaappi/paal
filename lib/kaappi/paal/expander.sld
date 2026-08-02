@@ -447,6 +447,42 @@
     (define (decls-of decls tag)
       (filter (lambda (d) (and (pair? d) (eq? (car d) tag))) decls))
 
+    ;; R7RS 5.6.1 lets two declarations produce further declarations:
+    ;; cond-expand chooses among declaration lists, and
+    ;; include-library-declarations splices a file of them.  Both are
+    ;; rewritten away up front — recursively, since each may yield more of
+    ;; either — so everything downstream reads one flat vocabulary:
+    ;; export / import / begin / include / include-ci.
+    ;; The included files are read like `include` reads its own, with no
+    ;; case folding; a library wanting folded declarations can put a
+    ;; #!fold-case directive at the top of the file.
+    (define (normalize-decls decls)
+      (append-map
+        (lambda (d)
+          (cond
+            ((not (pair? d)) (list d))
+            ((eq? (car d) 'cond-expand)
+             (normalize-decls (cond-expand-select (cdr d))))
+            ((eq? (car d) 'include-library-declarations)
+             (normalize-decls (apply append (map read-forms-from (cdr d)))))
+            (else (list d))))
+        decls))
+
+    ;; The library's body, gathered in declaration order.  R7RS 5.6.1 makes
+    ;; begin, include and include-ci equal citizens; collecting the begins
+    ;; and the includes in separate passes reordered them, so an included
+    ;; file could not use a name a later begin defines — or vice versa.
+    (define (body-forms-of decls)
+      (append-map
+        (lambda (d)
+          (cond
+            ((not (pair? d)) '())
+            ((eq? (car d) 'begin)      (cdr d))
+            ((eq? (car d) 'include)    (cdr (expand-include (cdr d) #f)))
+            ((eq? (car d) 'include-ci) (cdr (expand-include (cdr d) #t)))
+            (else '())))
+        decls))
+
     ;; (export a b (rename internal external)) -> alist external -> internal
     (define (export-alist decls)
       (let loop ((ds (decls-of decls 'export)) (acc '()))
@@ -464,16 +500,14 @@
                                     acc)))
                       (else (error "paal: malformed export spec" (car specs)))))))))
 
-    (define (install-library! name decls)
-      (let* ((%scope    (import-scope-save))
+    (define (install-library! name decls0)
+      (let* ((decls    (normalize-decls decls0))
+             (%scope    (import-scope-save))
              (imports  (append-map cdr (decls-of decls 'import)))
              ;; The library's own imports first: they may define macros its
              ;; body uses, and expansion is where a macro takes effect.
              (prologue (map expand-one-import imports))
-             (bodies   (append-map cdr (decls-of decls 'begin)))
-             (includes (decls-of decls 'include))
-             (included (append-map (lambda (d) (cdr (expand-include (cdr d) #f)))
-                                   includes))
+             (bodies   (body-forms-of decls))
              (exports  (export-alist decls))
              (macros-before %paal-macros)
              ;; Expand to core forms.  Renaming afterwards only has to know
@@ -483,7 +517,7 @@
              ;; paal-expand-all resets the import-scope state — so an
              ;; `(import (scheme base) (srfi 1))` lost its own base grant the
              ;; moment (srfi 1)'s body was expanded, and `+` became unbound.
-             (core     (expand-nested (append included bodies)))
+             (core     (expand-nested bodies))
              (%restored (import-scope-restore! %scope))
              ;; The prologue is renamed along with the body.  It used to be
              ;; spliced in untouched, so a library's *imports* landed in its
@@ -526,20 +560,11 @@
           (rename-macro-templates!
             (map (lambda (n) (cons n (paal-macro-spec n))) own-macros)
             all-renames))
-        ;; A library's macros all stay installed, including ones it did not
-        ;; export.  Dropping the private ones is what you want for hygiene, and
-        ;; it was the first thing tried — but an *exported* macro whose template
-        ;; calls a private one then breaks at the use site, because the
-        ;; template still names it and the table no longer has it.  Fixing that
-        ;; properly means rewriting exported templates to name the private
-        ;; macro under a mangled name, and by this point a transformer is a
-        ;; closure over its rules rather than data one can walk.
-        ;;
-        ;; So the trade is: a private macro name leaks into the importer, where
-        ;; it can collide.  The alternative silently breaks working library
-        ;; code, which is worse.  Private *values* are unaffected — those are
-        ;; renamed, and the renaming is what hides them.  See docs/TODO.md.
-        %paal-macros
+        ;; Exported macros stay installed under their own names, private ones
+        ;; under the mangled names — an exported template may call a private
+        ;; macro, so the private entries must remain resolvable, just not
+        ;; under any name an importer could utter.  See docs/TODO.md ("A
+        ;; macro template can name a library's private binding").
         (let ((export-map
                (map (lambda (e)
                       (let ((hit (assq (cdr e) renames)))
@@ -1676,16 +1701,17 @@
             ;; --- Library forms ---
             ;; A define-library evaluated as a program form -- `paal file.sld`,
             ;; or pkaappi-load-file on a pipeline stage.  Its own imports are
-            ;; honoured, but its body is spliced unrenamed: there is no importer
-            ;; here to hide anything from, and paal's own stages rely on
-            ;; loading this way into one shared globals table.
+            ;; honoured, but its body — begins and includes in declaration
+            ;; order — is spliced unrenamed: there is no importer here to hide
+            ;; anything from, and paal's own stages rely on loading this way
+            ;; into one shared globals table.
             ((define-library)
-             (let* ((decls    (cddr form))
+             (let* ((decls    (normalize-decls (cddr form)))
                     (%scope   (import-scope-save))
                     (imports  (append-map cdr (decls-of decls 'import)))
                     (prologue (map expand-one-import imports))
                     (%restored (import-scope-restore! %scope))
-                    (bodies   (append-map cdr (decls-of decls 'begin))))
+                    (bodies   (body-forms-of decls)))
                (paal-expand
                  (cons 'begin (append (drain-pending!) prologue bodies)))))
             ((import)
@@ -2342,17 +2368,18 @@
     ;; cond-expand
     ;; ---------------------------------------------------------------
 
+    ;; Clause selection alone, shared with normalize-decls: cond-expand
+    ;; appears both as an expression and as a library declaration (R7RS
+    ;; 5.6.1), and only what the chosen clause splices into differs.
+    (define (cond-expand-select clauses)
+      (cond
+        ((null? clauses) '())    ; no matching clause and no else → nothing
+        ((eq? (caar clauses) 'else) (cdar clauses))
+        ((feature-req? (caar clauses)) (cdar clauses))
+        (else (cond-expand-select (cdr clauses)))))
+
     (define (expand-cond-expand form)
-      (let loop ((clauses (cdr form)))
-        (cond
-          ((null? clauses)
-           '(begin))    ; no matching clause and no else → void
-          ((eq? (caar clauses) 'else)
-           `(begin ,@(cdar clauses)))
-          ((feature-req? (caar clauses))
-           `(begin ,@(cdar clauses)))
-          (else
-           (loop (cdr clauses))))))
+      (cons 'begin (cond-expand-select (cdr form))))
 
     ;; ---------------------------------------------------------------
     ;; Body expansion (internal defines → letrec*)

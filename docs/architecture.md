@@ -844,6 +844,18 @@ High-level entry points that run the full pipeline:
 
 Individual stage exports are also re-exported for embedding or incremental use.
 
+### Library declarations
+
+A `define-library` body speaks the full R7RS 5.6.1 vocabulary. `cond-expand`
+and `include-library-declarations` — the two declarations that produce further
+declarations — are rewritten away first (`normalize-decls`, recursive, since
+each may yield more of either), so everything downstream reads a flat list of
+`export` / `import` / `begin` / `include` / `include-ci`. The body is then
+gathered in declaration order: `begin`, `include` and `include-ci` interleave
+as written, so an included file can use a name an earlier `begin` defines and
+vice versa. The same pass serves both `install-library!` and a
+`define-library` evaluated as a program form (`paal file.sld`).
+
 ### Import scope
 
 `(import (scheme base))` is enforced, and the mechanism is a **check rather than
