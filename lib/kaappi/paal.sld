@@ -1523,8 +1523,12 @@
     ;; that calls map, for-each, apply or force needs the paal-compiled versions,
     ;; since the HOST ones cannot invoke a paal closure.  With the raw initial env
     ;; `paal file.pbc` failed with "type error in 'map': expected procedure".
-    (define (pkaappi-run-pbc-file path)
-      (paal-run-bc (paal-read-bc-file path) (pkaappi-make-globals)))
+    ;;
+    ;; Extra arguments seed (command-line) as (path . args) — the same shape
+    ;; a .scm run gets.
+    (define (pkaappi-run-pbc-file path . user-args)
+      (paal-run-bc (paal-read-bc-file path)
+                   (pkaappi-make-globals (cons path user-args))))
 
     ;; --- Self-hosted run ---
 

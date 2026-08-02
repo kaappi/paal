@@ -46,7 +46,7 @@
 (define (run-file path . extra-args)
   (let ((len (string-length path)))
     (if (and (>= len 4) (string=? (substring path (- len 4) len) ".pbc"))
-        (pkaappi-run-pbc-file path)  ; .pbc: no command-line forwarding yet
+        (apply pkaappi-run-pbc-file path extra-args)
         (cond
           ;; --profile runs on the HOST pipeline deliberately.  The
           ;; self-hosted path executes the user's program through the

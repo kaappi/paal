@@ -756,6 +756,43 @@
           (delete-file path)
           (vector? bf))))))
 
+;; The .pbc version header.  The round-trip group above already goes through
+;; it on every write/read, and the dot-boundary file above is headerless —
+;; so tolerance in both directions is exercised; what is pinned here is the
+;; header itself and the refusal.
+(test-group "pbc format"
+  (test-assert "a fresh .pbc opens with the version header"
+    (let ((out (open-output-string)))
+      (paal-write-bc (pkaappi-compile "42") out)
+      (let ((text (get-output-string out)))
+        (string=? (substring text 0 12) "(paal-pbc 1)"))))
+  (test-equal "a headerless .pbc still reads and runs"
+    42
+    (paal-run-bc
+      (paal-read-bc
+        (open-input-string "(pbc 0 #f 0 top-level ((load-const 0 42) (return 0)))"))
+      (pkaappi-make-globals)))
+  (test-assert "a version from the future refuses with a diagnosis"
+    (guard (e (#t (and (error-object? e)
+                       (%has-substring? (error-object-message e)
+                                        "newer paal"))))
+      (paal-read-bc (open-input-string "(paal-pbc 99) (pbc 0 #f 0 #f ())"))
+      #f))
+  (test-equal "a .pbc run forwards its command line"
+    '("paal-pbc-args-tmp.pbc" "a" "b")
+    (let ((src "paal-pbc-args-tmp.scm")
+          (pbc "paal-pbc-args-tmp.pbc"))
+      ;; write-temp! lives far below this group, and top-level defines run
+      ;; in order — inline the two lines instead.
+      (let ((port (open-output-file src)))
+        (display "(command-line)" port)
+        (close-output-port port))
+      (pkaappi-compile-to-file src pbc)
+      (let ((r (pkaappi-run-pbc-file pbc "a" "b")))
+        (delete-file src)
+        (delete-file pbc)
+        r))))
+
 ;; ---------------------------------------------------------------
 ;; Self-hosted compile subcommand
 ;; ---------------------------------------------------------------

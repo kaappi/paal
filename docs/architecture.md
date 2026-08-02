@@ -71,7 +71,7 @@ Each stage is a separate `define-library` importable independently:
 | `(kaappi paal ir)` | `lib/kaappi/paal/ir.sld` | shared — IR node constructors and accessors |
 | `(kaappi paal bytecode)` | `lib/kaappi/paal/bytecode.sld` | shared — `<bytecode-function>` and the ISA |
 | `(kaappi paal frame)` | `lib/kaappi/paal/frame.sld` | shared — closures and call frames for the bytecode VM |
-| `(kaappi paal serializer)` | `lib/kaappi/paal/serializer.sld` | `.pbc` read/write |
+| `(kaappi paal serializer)` | `lib/kaappi/paal/serializer.sld` | `.pbc` read/write — a `(paal-pbc <version>)` header datum ahead of the function; the reader accepts headerless files and refuses versions from the future |
 | `(kaappi paal formatter)` | `lib/kaappi/paal/formatter.sld` | `fmt` subcommand |
 | `(kaappi paal embedded)` | `lib/kaappi/paal/embedded.sld` | bundled library source (outside the pipeline) |
 | `(kaappi paal)` | `lib/kaappi/paal.sld` | public API |

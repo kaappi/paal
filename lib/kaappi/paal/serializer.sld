@@ -2,7 +2,13 @@
 ;;;
 ;;; Converts bytecode-function objects to/from a text S-expression format (.pbc).
 ;;;
-;;; Format: (pbc <arity> <variadic?> <upvalue-count> <name> (<instr> ...))
+;;; Format: (paal-pbc <version>)
+;;;         (pbc <arity> <variadic?> <upvalue-count> <name> (<instr> ...))
+;;;
+;;; The header datum names the format version, so a .pbc from a future paal
+;;; refuses with a diagnosis instead of a list-ref error deep in sexp->bf.
+;;; The reader is tolerant in the one direction that matters: a headerless
+;;; file — everything written before the header existed — still reads.
 ;;;
 ;;; All instructions pass through as plain S-expressions except (closure dst fn specs),
 ;;; where fn is a bytecode-function record that must be serialized recursively.
@@ -63,11 +69,21 @@
     ;; Public API
     ;; ---------------------------------------------------------------
 
+    (define %paal-pbc-version 1)
+
     (define (paal-write-bc fn port)
+      (write (list 'paal-pbc %paal-pbc-version) port)
+      (newline port)
       (write (bf->sexp fn) port))
 
     (define (paal-read-bc port)
-      (sexp->bf (read port)))
+      (let ((first (read port)))
+        (if (and (pair? first) (eq? (car first) 'paal-pbc))
+            (let ((v (and (pair? (cdr first)) (cadr first))))
+              (if (and (exact-integer? v) (<= 1 v %paal-pbc-version))
+                  (sexp->bf (read port))
+                  (error "paal-read-bc: .pbc written by a newer paal" v)))
+            (sexp->bf first))))
 
     (define (paal-write-bc-file fn path)
       ; Use explicit open/close — call-with-port can't invoke paal closures
