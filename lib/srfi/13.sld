@@ -224,15 +224,29 @@
               n
               (loop (+ i 1) (if (match (string-ref s i)) (+ n 1) n))))))
 
-    ;; (string-join strings [delimiter [grammar]]) — infix is the default.
+    ;; (string-join strings [delimiter [grammar]]) — grammar is 'infix
+    ;; (default), 'strict-infix (the empty list is an error), 'suffix or
+    ;; 'prefix, per SRFI 13.  (srfi 140)'s string-join tests the suffix
+    ;; grammar through this seam.
     (define (string-join strings . rest)
-      (let ((delim (if (pair? rest) (car rest) " ")))
-        (if (null? strings)
-            ""
-            (let loop ((l (cdr strings)) (acc (car strings)))
-              (if (null? l)
-                  acc
-                  (loop (cdr l) (string-append acc delim (car l))))))))
+      (let ((delim   (if (pair? rest) (car rest) " "))
+            (grammar (if (and (pair? rest) (pair? (cdr rest)))
+                         (cadr rest)
+                         'infix)))
+        (cond
+          ((null? strings)
+           (if (eq? grammar 'strict-infix)
+               (error "string-join: empty list with strict-infix grammar")
+               ""))
+          (else
+           (let ((joined (let loop ((l (cdr strings)) (acc (car strings)))
+                           (if (null? l)
+                               acc
+                               (loop (cdr l) (string-append acc delim (car l)))))))
+             (case grammar
+               ((suffix) (string-append joined delim))
+               ((prefix) (string-append delim joined))
+               (else joined)))))))
 
     ;; kaappi's extension, kaappi-compatible: string delimiter only (a char
     ;; is an error there too), empty delimiter splits into one-character
