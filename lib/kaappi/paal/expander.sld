@@ -759,6 +759,7 @@
         ((eq? pat '_)   '())
         ((ellipsis-mark? pat ell lits) '())
         ((symbol? pat)  (list pat))
+        ((vector? pat)  (pattern-vars (vector->list pat) lits ell))
         ((not (pair? pat)) '())
         ((and (pair? (cdr pat)) (ellipsis-mark? (cadr pat) ell lits))
          (append (pattern-vars (car pat) lits ell)
@@ -779,16 +780,46 @@
          (+ 1 (count-required (cdr rest-pat) ell lits)))
         (else 0)))
 
+    ;; Two denotations are the same when both are the top level (no lexical
+    ;; entry) or literally the same environment entry.
+    (define (denotation-eq? a b)
+      (if (and (not a) (not b)) #t (eq? a b)))
+
     ;; Match pattern against form.
     ;; Returns an alist of (var . value) on success, #f on failure.
     ;; Ellipsis-bound vars have value (make-ellipsis list-of-values).
-    (define (match-syntax pat frm lits ell)
+    ;;
+    ;; use-env is the lexical environment at the macro use, def-env the one
+    ;; where the macro was defined; the literal branch compares denotations
+    ;; across the two.
+    (define (match-syntax pat frm lits ell use-env def-env)
       (cond
-        ;; Literal: must be the same identifier.  Checked before _ and before
-        ;; the variable case — the literals list wins (R7RS 4.3.2), so a
-        ;; pattern may treat _ or the ellipsis itself as a literal.
+        ;; Literal: matches when the use-site occurrence denotes the same
+        ;; binding the literal denotes at the definition site (R7RS 4.3.2's
+        ;; rule, under paal's denotation approximation: unbound-lexically on
+        ;; both sides — the top level — is one denotation, and anything else
+        ;; must be the same environment entry).  A use site that rebinds the
+        ;; name therefore un-matches the literal, the else-shadowing rule
+        ;; generalized to every literal.  Checked before _ and before the
+        ;; variable case — the literals list wins, so a pattern may treat _
+        ;; or the ellipsis itself as a literal.  A %gref% mark on the form
+        ;; means top level by construction; a %core% mark names the keyword,
+        ;; which matches the literal of the same spelling.
         ((and (symbol? pat) (memq pat lits))
-         (if (and (symbol? frm) (eq? pat frm)) '() #f))
+         (cond
+           ((not (symbol? frm)) #f)
+           ((gref-name frm)
+            => (lambda (g)
+                 (if (and (eq? g pat)
+                          (denotation-eq? #f (cenv-lookup def-env pat)))
+                     '() #f)))
+           ((core-name frm)
+            => (lambda (c) (if (eq? c pat) '() #f)))
+           ((eq? frm pat)
+            (if (denotation-eq? (cenv-lookup use-env frm)
+                                (cenv-lookup def-env pat))
+                '() #f))
+           (else #f)))
         ;; Underscore: match anything, no binding
         ((eq? pat '_) '())
         ;; Pattern variable: bind to form
@@ -797,6 +828,10 @@
         ;; Null: matches null
         ((null? pat)
          (if (null? frm) '() #f))
+        ;; Vector pattern: elementwise, ellipses included, via the list walk
+        ((vector? pat)
+         (and (vector? frm)
+              (match-syntax (vector->list pat) (vector->list frm) lits ell use-env def-env)))
         ;; Non-pair datum: must be equal
         ((not (pair? pat))
          (if (equal? pat frm) '() #f))
@@ -817,7 +852,7 @@
                (let* ((n-ell     (- n-total n-req))
                       (ell-frms  (list-take frm n-ell))
                       (rest-frms (list-drop frm n-ell))
-                      (sub-envs  (map (lambda (f) (match-syntax subpat f lits ell))
+                      (sub-envs  (map (lambda (f) (match-syntax subpat f lits ell use-env def-env))
                                       ell-frms)))
                  (if (has-false? sub-envs)
                      #f
@@ -835,16 +870,16 @@
                                  ;; No rest pattern: the whole form must have
                                  ;; been consumed, tail included.
                                  (if (null? rest-frms) '() #f)
-                                 (match-syntax rest-pat rest-frms lits ell))))
+                                 (match-syntax rest-pat rest-frms lits ell use-env def-env))))
                        (if rest-env
                            (append merged rest-env)
                            #f)))))))
         ;; Pair: match recursively
         ((pair? pat)
          (if (pair? frm)
-             (let ((e1 (match-syntax (car pat) (car frm) lits ell)))
+             (let ((e1 (match-syntax (car pat) (car frm) lits ell use-env def-env)))
                (and e1
-                    (let ((e2 (match-syntax (cdr pat) (cdr frm) lits ell)))
+                    (let ((e2 (match-syntax (cdr pat) (cdr frm) lits ell use-env def-env)))
                       (and e2 (append e1 e2)))))
              #f))
         ;; Anything else: must be equal
@@ -856,6 +891,8 @@
         ((symbol? tmpl)
          (let ((b (assq tmpl env)))
            (if (and b (ellipsis? (cdr b))) (list tmpl) '())))
+        ((vector? tmpl)
+         (find-ellipsis-vars (vector->list tmpl) env ell lits))
         ((pair? tmpl)
          ;; `(sub ... rest)` used to return only sub's variables and drop the
          ;; tail, so a variable appearing *after* the ellipsis was never bound
@@ -920,6 +957,8 @@
                (cdr b)
                (let ((r (assq tmpl subst)))
                  (if r (cdr r) tmpl)))))
+        ((vector? tmpl)
+         (list->vector (instantiate-escaped (vector->list tmpl) penv subst)))
         ((pair? tmpl)
          ;; Quoted data takes pattern variables but not renames — same rule as
          ;; instantiate-template below.
@@ -954,6 +993,11 @@
                      val))
                (let ((r (assq tmpl subst)))
                  (if r (cdr r) tmpl)))))
+        ;; Vector template: rebuild from the list instantiation, so ellipses
+        ;; inside vectors come along for free
+        ((vector? tmpl)
+         (list->vector
+           (instantiate-template (vector->list tmpl) penv subst ell lits)))
         ;; Non-pair: datum
         ((not (pair? tmpl)) tmpl)
         ;; Ellipsis escape — must precede the ellipsis-template case, since
@@ -1028,7 +1072,11 @@
           (when (pair? l) (walk (car l)) (walk-list (cdr l))))
         (define (walk t)
           (when (pair? t)
-            (let ((head (car t)))
+            ;; A nested template — one produced by an enclosing expansion —
+            ;; carries its keywords %core%-marked; binder recognition must
+            ;; see through the mark.
+            (let ((head (let ((h (car t)))
+                          (if (symbol? h) (or (core-name h) h) h))))
               (cond
                 ((and (eq? head 'lambda) (pair? (cdr t)))
                  (note-formals! (cadr t))
@@ -1049,7 +1097,27 @@
                 ((and (eq? head 'guard) (pair? (cdr t)) (pair? (cadr t)))
                  (note! (car (cadr t)))
                  (walk-list (cddr t)))
-                (else (walk-list t))))))
+                ;; Definitions bind too (R7RS 5.3.2): a template that
+                ;; introduces (define n v) binds n — as a letrec* variable in
+                ;; a body, hygienically invisible at top level — and the
+                ;; shorthand's formals are its lambda's.  Treating the name
+                ;; as free instead is what used to turn it into a %gref%
+                ;; global and break every macro-produced definition.
+                ((and (eq? head 'define) (pair? (cdr t)))
+                 (if (pair? (cadr t))
+                     (begin (note! (car (cadr t)))
+                            (note-formals! (cdr (cadr t))))
+                     (note! (cadr t)))
+                 (walk-list (cddr t)))
+                ((and (eq? head 'define-values) (pair? (cdr t)))
+                 (note-formals! (cadr t))
+                 (walk-list (cddr t)))
+                ((and (eq? head 'define-syntax) (pair? (cdr t)))
+                 (note! (cadr t))
+                 (walk-list (cddr t)))
+                (else (walk-list t)))))
+          (when (vector? t)
+            (walk-list (vector->list t))))
         (walk tmpl)
         acc))
 
@@ -1153,6 +1221,7 @@
         (define (walk t)
           (cond
             ((symbol? t) (note! t))
+            ((vector? t) (walk (vector->list t)))
             ((pair? t)
              (cond
                ((eq? (car t) 'quote) #f)
@@ -1185,6 +1254,7 @@
         (define (walk t)
           (cond
             ((symbol? t) (note! t))
+            ((vector? t) (walk (vector->list t)))
             ((pair? t)
              (cond
                ;; (quote datum) contributes no references
@@ -1250,7 +1320,7 @@
                     (let* ((clause   (car cls))
                            (pat-args (cdr (car clause)))
                            (template (cadr clause))
-                           (env      (match-syntax pat-args (cdr form) literals ell)))
+                           (env      (match-syntax pat-args (cdr form) literals ell use-env def-env)))
                       (if env
                           ;; Fresh renames per expansion, so two uses of the same
                           ;; macro never share an introduced name.  Pattern
@@ -2296,9 +2366,20 @@
     ;; It also bought nothing measurable: the R7RS suite scores identically with
     ;; and without it.  Making both shapes work needs the hygiene model changed,
     ;; not this function.
+    ;; The head symbol with any %core% mark stripped, or #f for a non-symbol
+    ;; head.  Body scanning must treat a template's marked (%core%define ...)
+    ;; exactly like a source (define ...): a macro whose template introduces a
+    ;; definition instantiates with the keyword marked, and the scan is where
+    ;; that definition must be recognized.
+    (define (body-head form)
+      (and (pair? form)
+           (symbol? (car form))
+           (let ((h (car form)))
+             (or (core-name h) h))))
+
     (define (body-splice form)
       (and (pair? form)
-           (case (car form)
+           (case (body-head form)
              ((begin)       (cdr form))
              ((cond-expand) (cdr (expand-cond-expand form)))
              ((include)     (cdr (expand-include (cdr form) #f)))
@@ -2318,7 +2399,7 @@
           ((not (pair? (car fs))) (loop (cdr fs) acc))
           (else
            (let ((f (car fs)))
-             (case (car f)
+             (case (body-head f)
                ((define)
                 (loop (cdr fs)
                       (cons (if (pair? (cadr f)) (caadr f) (cadr f)) acc)))
@@ -2334,6 +2415,20 @@
                 (loop (append (cdr f) (cdr fs)) acc))
                (else (loop (cdr fs) acc))))))))
 
+    ;; The transformer a head symbol denotes inside a body, or #f: a %core%
+    ;; mark names the keyword (never a macro), a lexical variable shadows
+    ;; everything, a local macro answers through its alias, a %gref% mark
+    ;; through the global table it pinned, and otherwise the global table.
+    (define (body-macro-transformer head env)
+      (and (symbol? head)
+           (not (core-name head))
+           (let ((d (cenv-lookup env head)))
+             (cond
+               ((and (pair? d) (eq? (car d) 'macro)) (paal-macro-get (cdr d)))
+               ((pair? d) #f)
+               ((gref-name head) => (lambda (g) (paal-macro-get g)))
+               (else (paal-macro-get head))))))
+
     (define (expand-body forms env)
       (let loop ((rest forms) (defs '()) (env env))
         (cond
@@ -2342,7 +2437,7 @@
                (error "paal-expand: empty lambda body")
                (error "paal-expand: lambda body has only definitions")))
           ;; define-values in body: wrap remaining forms in let-values
-          ((and (pair? (car rest)) (eq? (caar rest) 'define-values))
+          ((eq? (body-head (car rest)) 'define-values)
            (let* ((dvform    (car rest))
                   (names     (cadr dvform))
                   (expr      (caddr dvform))
@@ -2355,7 +2450,7 @@
                            (cons (map define->binding (reverse defs))
                                  (list wrapped)))
                          env)))))
-          ((and (pair? (car rest)) (eq? (caar rest) 'define))
+          ((eq? (body-head (car rest)) 'define)
            (loop (cdr rest) (cons (car rest) defs) env))
           ;; A body define-syntax scopes to this body (R7RS 5.3.2): the
           ;; transformer installs under a fresh %mac- alias, the environment
@@ -2365,7 +2460,7 @@
           ;; transformer closes over knows this body's value names, so a
           ;; template may reference a sibling defined later and resolve to
           ;; it rather than to the top level.
-          ((and (pair? (car rest)) (eq? (caar rest) 'define-syntax))
+          ((eq? (body-head (car rest)) 'define-syntax)
            (let* ((dsform (car rest))
                   (name   (cadr dsform))
                   (spec   (caddr dsform))
@@ -2384,6 +2479,16 @@
           ;; arm above and a nested begin unwraps too.
           ((body-splice (car rest))
            => (lambda (spliced) (loop (append spliced (cdr rest)) defs env)))
+          ;; A macro use at the head of a body may produce a definition
+          ;; (R7RS 5.3.2).  Instantiate exactly one step — no recursive
+          ;; expansion, so every node of the output is still expanded once,
+          ;; later, in its final position — and re-examine what came out: a
+          ;; produced (%core%define ...) reaches the define arm above, a
+          ;; produced expression falls through to the else arm on the next
+          ;; visit.
+          ((body-macro-transformer (body-head (car rest)) env)
+           => (lambda (t)
+                (loop (cons (t (car rest) env) (cdr rest)) defs env)))
           (else
            (if (null? defs)
                (map (lambda (f) (expand-form f env)) rest)

@@ -203,20 +203,23 @@
     3
     (pkaappi-run-bc-string
       "(let () (cond-expand (paal (define a 1) (define b 2))) (+ a b))"))
-  ;; A *macro* producing a definition in a body is still not supported —
-  ;; R7RS 5.3.2 allows it, paal does not. Expanding the macro one step here
-  ;; makes `(def x 2)` work but leaves the shape where the template introduces
-  ;; the name broken, and worse than before: paal marks a template's free
-  ;; identifiers `%gref%` and does not treat `define` in a template as a
-  ;; binding position, so the name becomes a letrec* binding the emitter still
-  ;; resolves as a global. Asserted as an error so the gap is recorded rather
-  ;; than mistaken for working.
-  (test-equal "a macro producing a definition is not supported"
-    'not-supported
-    (guard (e (#t 'not-supported))
-      (pkaappi-run-bc-string
-        "(define-syntax def (syntax-rules () ((_ n v) (define n v))))
-         (let () (def x 2) x)")))
+  ;; A *macro* producing a definition in a body works now (R7RS 5.3.2): the
+  ;; body scan expands a head macro use exactly one step and re-examines the
+  ;; output, and template-bound-ids treats define/define-values/define-syntax
+  ;; as binding positions, so a name the pattern supplies keeps its use-site
+  ;; spelling while a name the template introduces gets a hygienic rename —
+  ;; the failure mode that made an earlier one-step attempt worse than none.
+  (test-equal "a macro producing a definition defines it" 2
+    (pkaappi-run-bc-string
+      "(define-syntax def (syntax-rules () ((_ n v) (define n v))))
+       (let () (def x 2) x)"))
+  (test-equal "a template-introduced definition name is hygienic" 'invisible
+    (pkaappi-run-bc-string
+      "(define-syntax defhelper
+         (syntax-rules () ((_ v) (begin (define helper v) helper))))
+       (define helper 'invisible)
+       (let () (defhelper 99))
+       helper"))
   ;; An ordinary macro at the head of a body still expands as an expression.
   (test-equal "a macro producing an expression is unaffected"
     10
@@ -1319,6 +1322,58 @@
          (syntax-rules ()
            ((_ (a b) ... . c) (vector '(a b) ... 'c))))
        (part-2x (10 43) (31 41) . \"tail\")")))
+
+;; A syntax-rules literal matches only when the use-site occurrence denotes
+;; the binding the literal denotes at the definition site — under paal's
+;; approximation, the top level on both sides or the same lexical entry.  A
+;; use site that rebinds the name un-matches the literal.
+(test-group "define-syntax: literal denotation"
+  (test-equal "a literal matches at top level" '(matched other)
+    (pkaappi-run-bc-string
+      "(define-syntax has-kw (syntax-rules (kw) ((_ kw) 'matched) ((_ x) 'other)))
+       (list (has-kw kw) (has-kw 5))"))
+  (test-equal "a rebound literal falls to the next clause" 'other
+    (pkaappi-run-bc-string
+      "(define-syntax has-kw (syntax-rules (kw) ((_ kw) 'matched) ((_ x) 'other)))
+       (let ((kw 1)) (has-kw kw))"))
+  (test-equal "a top-level binding of the name still matches" 'matched
+    (pkaappi-run-bc-string
+      "(define-syntax has-kw (syntax-rules (kw) ((_ kw) 'matched) ((_ x) 'other)))
+       (define kw 'top)
+       (has-kw kw)"))
+  ;; The mismatch surfaces at expansion time, so the guard sits around the
+  ;; compile, not inside the program.
+  (test-equal "a rebound literal with no other clause is a match failure"
+    'no-pattern
+    (guard (e (#t 'no-pattern))
+      (pkaappi-run-bc-string
+        "(define-syntax only-kw (syntax-rules (kw) ((_ kw) 'matched)))
+         (let ((kw 1)) (only-kw kw))"))))
+
+;; Vector patterns match elementwise with full ellipsis support, and vector
+;; templates rebuild through the list instantiation.  Both used to fall
+;; through to a literal equal? comparison.
+(test-group "define-syntax: vector patterns and templates"
+  (test-equal "vector pattern destructures" '(3 2 1)
+    (pkaappi-run-bc-string
+      "(define-syntax vp (syntax-rules () ((_ #(a b c)) (list c b a))))
+       (vp #(1 2 3))"))
+  (test-equal "vector pattern with ellipsis" '(1 (2 3 4))
+    (pkaappi-run-bc-string
+      "(define-syntax vp2 (syntax-rules () ((_ #(a b ...)) (list a (list b ...)))))
+       (vp2 #(1 2 3 4))"))
+  (test-equal "a non-vector does not match a vector pattern" 'no
+    (pkaappi-run-bc-string
+      "(define-syntax vp3 (syntax-rules () ((_ #(a)) 'yes) ((_ x) 'no)))
+       (vp3 (1))"))
+  (test-equal "vector template builds from pattern variables" #(5 6 7)
+    (pkaappi-run-bc-string
+      "(define-syntax vt (syntax-rules () ((_ x ...) #(x ...))))
+       (vt 5 6 7)"))
+  (test-equal "quoted vector literal in a template" #(b)
+    (pkaappi-run-bc-string
+      "(let-syntax ((vector-lit (syntax-rules () ((vector-lit) '#(b)))))
+         (vector-lit))")))
 
 ;; Quoted data in a template takes pattern variables but not the expander's
 ;; renames: hygiene names exist to steer resolution, and quoted data resolves
