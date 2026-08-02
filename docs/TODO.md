@@ -3,9 +3,11 @@
 Goal: make `paal` a correct R7RS-small Scheme implementation that runs the
 same programs as `kaappi`, with the same CLI conventions.
 
-Current: bootstrap stage 6 complete (self-hosting). **671 tests pass** (was 194 before Phase 1–2).
+Current: bootstrap stage 6 complete (self-hosting); Phases 1–9 all done. The unit
+suite and the R7RS ratchet gate `make test`; their counts live in the test files,
+which is where a number stays true.
 
-Phases 1–6 are done. Two of their entries rest on host bugs still open upstream —
+Two early entries rest on host bugs still open upstream —
 kaappi/kaappi#2010 and kaappi/kaappi#1920 / kaappi/kaappi#2043 — but paal has no
 exposure to either left, so both are recorded as worked around rather than as work
 outstanding. What each entry says about *why* is the point of keeping them; several
@@ -20,15 +22,17 @@ list cannot contain, because nobody suspected it. `(values 1)` returned a tagged
 answered `(4 6)`. `(environment …)` destroyed the caller's macro table. None of those
 raise; they return a plausible wrong value.
 
-The suite went from **974 passing / 131 failing to 1174 / 24**, and now gates `make test`
-as a ratchet, so those numbers cannot move in either direction without someone deciding
-they should.
+The suite went from **974 passing / 131 failing to 1174 / 24** in Phase 7, and gates
+`make test` as a ratchet, so the numbers cannot move in either direction without
+someone deciding they should. The parity campaign (Phase 9) then took the baseline to
+**1221 / 4 with zero aborting top-level forms** — keyword shadowing, `call/cc`, the
+module tail and the library surface all closed.
 
-Three R7RS gaps remain, recorded here rather than as checkboxes because each is a
-decision rather than an oversight — see the end of Phase 7 for the reasons: §4.3's
-keyword-shadowing cases, the `(scheme …)` libraries being one flat table, and §6.2's
-one residual failure, `(real? -2.5+0.0i)`, which needs a value the host runtime
-cannot represent.
+What remains is small and decided, not overlooked: §4.3's three cases needing
+per-identifier provenance (syntax objects — see Phase 9), the `(scheme …)` libraries
+being one flat table narrowed by filtration rather than separate environments, and
+§6.2's one residual, `(real? -2.5+0.0i)`, which needs a value the host runtime cannot
+represent until kaappi#2166 lands.
 
 ---
 
@@ -237,7 +241,7 @@ together now.
 
 ---
 
-## Phase 3 — Reader Completeness
+## Phase 3 — Reader Completeness ✅
 
 Gaps in `lib/kaappi/paal/reader.sld`:
 
@@ -263,7 +267,7 @@ Gaps in `lib/kaappi/paal/reader.sld`:
 
 ---
 
-## Phase 4 — CLI Parity with kaappi
+## Phase 4 — CLI Parity with kaappi ✅
 
 - [x] **Script args forwarding** — `paal file.scm arg1 arg2` sets `(command-line)`
       to `("file.scm" "arg1" "arg2")` inside user programs via HOST lambda in globals
@@ -315,7 +319,7 @@ Gaps in `lib/kaappi/paal/reader.sld`:
 
 ---
 
-## Phase 5 — Module System
+## Phase 5 — Module System ✅
 
 `import` and `export` both expand to `(quote #f)` — they are no-ops. Real library
 resolution is needed before `--lib-path` or SRFI imports can work.
@@ -345,7 +349,7 @@ resolution is needed before `--lib-path` or SRFI imports can work.
 
 ---
 
-## Phase 6 — Standalone Binary
+## Phase 6 — Standalone Binary ✅
 
 `make binary` compiles `src/main.scm` to `.sbc` and bundles it into **kaappi's
 own runtime** with `zig build -Dbundle=`. The product is kaappi with paal
@@ -717,7 +721,7 @@ Issues that span stages rather than belonging to one phase.
 
 ---
 
-## Phase 7 — R7RS correctness and conformance
+## Phase 7 — R7RS correctness and conformance ✅
 
 Everything above was found by looking. This phase is what an outside oracle found.
 
@@ -975,7 +979,7 @@ That is what `string->number` could not be trusted to do: it rejects `-3/2-i`,
 
 ---
 
-## Phase 8 — Import scope
+## Phase 8 — Import scope ✅
 
 - [x] **`(import (scheme base))` was a no-op** — every `(scheme …)` name
       resolved to an empty export list against one flat globals table, so it
@@ -1041,6 +1045,59 @@ That is what `string->number` could not be trusted to do: it rejects `-3/2-i`,
       module-system and SRFI tests were programs importing a library and *not*
       `(scheme base)`, which is not conforming R7RS. Their two helpers now
       prepend it.
+
+---
+
+## Phase 9 — Feature parity with kaappi ✅
+
+The 2026-08 campaign against a full inventory of both codebases: a name-level
+primitive diff, per-failure root-causing of the conformance baseline, and a
+plan executed phase by phase. Baseline movement: 1187 pass / 24 fail / 11
+aborting top-level forms → **1221 / 4 / 0**. Every feature landed on both
+pipelines; the ratchet moved only with behavior + tests + regenerated baseline
+in the same commit.
+
+- [x] Reader: complex literals parsed by paal itself (host `string->number`
+      rejects them — kaappi#1911); `letrec` ≠ `letrec*` (inits before any
+      assignment); `include-ci` actually folds case.
+- [x] Full multi-shot `call/cc` on the bytecode VM: capture and invoke live in
+      `do-call!` beside `apply`; full-copy continuations; dynamic-wind and
+      parameterize transitions; nested dispatch loops with a cross-loop escape
+      protocol. `raise-continuable` resumption across a continuation is the
+      recorded follow-up, shared with kaappi.
+- [x] Environment-aware expander (eight staged commits): compile-time
+      environment (cenv) threaded through expansion; `%core%` marks for
+      template keywords; quote-aware instantiation; env-aware dispatch with
+      `else`/`=>` shadowing; body definition contexts with body-scoped
+      `define-syntax`; template `define` binders (R7RS 5.3.2); vector
+      patterns; custom ellipsis; denotation-aware literal matching. See
+      `docs/architecture.md` § Pipeline Stage 2.
+- [x] Runtime & library surface: host-native SRFI 27/258/260, `rationalize`,
+      `(kaappi diagnostics)`; port parameters (the three current-port names
+      are paal parameters, so `parameterize` redirects I/O); full library
+      declaration vocabulary; `only`/`except` narrowing over `(scheme base)`;
+      `environment` honouring its specs; `spawn`/`ffi-callback` markers with
+      per-entry register files; embedded SRFI subsets completed; kaappi's
+      portable SRFI shelf vendored (21 libraries + reference SRFI 64) —
+      which flushed out and fixed four real bugs (rest-param boxing, chained
+      `force`, constructor-absent record fields, `%gref%` through library
+      renames).
+- [x] CLI & tooling: `ast`, `dis` + `(disassemble proc)`, `features
+      [--json]`, `cache status|clear` (stale-entry cleanup included),
+      `check` warnings (unknown top-levels, direct-call arity),
+      `--coverage-xml` (Cobertura), the unified REPL driver (multi-line
+      datums, `_`, comma commands, history), `.pbc` version header +
+      `(command-line)` forwarding for `.pbc` runs.
+- [x] Docs brought back to truth: this file's headline, README, CHANGELOG,
+      bootstrapping.md's reader list, the bytecode ISA header, and the
+      architecture.md expander section rewritten for the cenv design.
+
+**Deferred, with the reason on record:** a template-introduced identifier
+bound only by a *later* expansion step needs per-identifier provenance —
+syntax objects — which the symbol-marking scheme does not carry. That is
+§4.3 tests 117/149/153 and the SRFI 26 adaptation; do not attempt it without
+that design. §6.2's `(real? -2.5+0.0i)` closes when kaappi#2166 lands
+upstream and the baseline is regenerated.
 
 ---
 

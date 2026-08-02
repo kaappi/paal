@@ -39,7 +39,10 @@ Tiers 0–4 are reached. Tier 5 is reached at run time — `make binary` produce
 source checkout and zig. Status is tracked in one place only, the section below;
 this ladder deliberately carries no per-rung markers, because when it did they drifted.
 
-## Current Status: Bootstrap Stage 6 complete — 671 tests pass
+## Current Status: Bootstrap Stage 6 complete
+
+(The suite has grown well past the count once recorded here; `make test` is
+the number that stays true.)
 
 Paal can load all 8 of its own library files through its bytecode pipeline and
 compile and execute arbitrary Scheme through its own loaded pipeline with no HOST
@@ -206,15 +209,19 @@ to handle deep nesting without stack overflow.
 
 Comments: `;` (line), `#|…|#` (nested block), `#;` (datum).
 
-**Deferred:** bignum, rational, complex, datum labels (`#N=` `#N#`), `#u8(`,
-SRFI 207 raw strings — add incrementally as needed.
+**Since landed, all of it but one:** bignums and rationals (the atom path
+defers to `string->number`, which the host closes over both), complex
+literals (parsed by the reader itself, splitting the token at the interior
+sign — the host's `string->number` rejects them, kaappi#1911), datum labels
+(`#N=` `#N#`, circular structure included), and `#u8(…)`. Still absent:
+SRFI 207 raw strings, which nothing has needed.
 
 **Test gate:** `pkaappi-run-file` on paal's own `.sld` source files must parse and
 return correct results with the new reader.
 
-### Bootstrap Stage 6 — Self-Compilation
+### Bootstrap Stage 6 — Self-Compilation ✓ complete
 
-Once bootstrap stages 2–5 are complete, paal can compile its own source:
+With bootstrap stages 2–5 in place, paal compiles its own source:
 
 ```sh
 paal compile lib/kaappi/paal/compiler.sld -o compiler.pbc
