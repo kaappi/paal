@@ -15,13 +15,22 @@
 ;;;   (define-global sym src)     globals[sym] = reg[src]  (create/overwrite)
 ;;;   (get-upvalue dst idx)       reg[dst] = closure.upvalues[idx]
 ;;;   (set-upvalue idx src)       closure.upvalues[idx] = reg[src]
+;;;   (make-box    dst src)       reg[dst] = fresh box holding reg[src]
+;;;   (box-ref     dst src)       reg[dst] = contents of the box in reg[src]
+;;;   (box-set!    box val)       box in reg[box] := reg[val]
 ;;;   (closure     dst fn specs)  instantiate closure; specs = ((local? . idx)...)
 ;;;   (call        base nargs)    non-tail call; callee at reg[base]
 ;;;   (tail-call   base nargs)    tail call; reuses current frame
 ;;;   (return      src)           return reg[src] to caller
 ;;;   (jump        offset)        ip += offset + 1  (relative to next instr)
 ;;;   (jump-if-false test offset) if reg[test]=#f, ip += offset + 1
-;;;   (halt)                      stop; caller receives reg[0]
+;;;   (halt)                      stop; caller receives reg[0].  Dispatched
+;;;                               but never emitted: `return` ends every
+;;;                               function, the top level included
+;;;
+;;; Boxes carry captured variables that are mutated: the emitter boxes a
+;;; local (rest parameters included) when some closure captures it and
+;;; something set!s it, so all copies see the write.
 
 (define-library (kaappi paal bytecode)
   (import (scheme base))
