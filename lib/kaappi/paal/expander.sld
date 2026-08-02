@@ -1627,9 +1627,32 @@
       (and (pair? reqs)
            (or (feature-req? (car reqs)) (feature-any? (cdr reqs)))))
 
+    ;; srfi-<n> → n, or #f when the symbol is not that shape.
+    (define (srfi-feature-number sym)
+      (let* ((s (symbol->string sym)) (n (string-length s)))
+        (and (> n 5)
+             (string=? (substring s 0 5) "srfi-")
+             (let loop ((i 5))
+               (cond ((= i n) (string->number (substring s 5 n)))
+                     ((let ((c (string-ref s i)))
+                        (and (char>=? c #\0) (char<=? c #\9)))
+                      (loop (+ i 1)))
+                     (else #f))))))
+
     (define (feature-req? req)
       (cond
-        ((symbol? req) (if (memq req %paal-features) #t #f))
+        ((symbol? req)
+         (cond
+           ((memq req %paal-features) #t)
+           ;; srfi-<n> is the feature spelling of (library (srfi <n>)) —
+           ;; kaappi routes both through one availability check, and so
+           ;; does this: the id holds exactly when the import would
+           ;; resolve.  Deliberately not added to (features)' answer,
+           ;; matching kaappi, whose list also stops at the named
+           ;; capabilities.
+           ((srfi-feature-number req)
+            => (lambda (n) (feature-req? (list 'library (list 'srfi n)))))
+           (else #f)))
         ((not (pair? req)) #f)
         ;; (library <name>) asks whether that library can be imported here.
         ;; It was hard-wired to #f, so the common

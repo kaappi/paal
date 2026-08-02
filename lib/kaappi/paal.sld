@@ -41,7 +41,8 @@
     ;; High-level pipeline (tree-walking)
     pkaappi-run-string pkaappi-run-file
     ;; High-level pipeline (bytecode)
-    pkaappi-compile pkaappi-run-bc-string pkaappi-run-bc-file
+    pkaappi-compile pkaappi-compile-file
+    pkaappi-run-bc-string pkaappi-run-bc-file
     ;; Multi-file sequential loading
     pkaappi-make-globals pkaappi-load-file pkaappi-run-string-in
     ;; Self-hosted run, compile, and REPL

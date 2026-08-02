@@ -1,0 +1,82 @@
+;; SRFI-141 (integer division) conformance tests — audit Phase 3.4
+;; Run directly: zig-out/bin/kaappi tests/scheme/srfi/srfi141.scm
+
+;; (srfi 141) re-exports floor//truncate/ (and their -quotient/-remainder
+;; halves) alongside its own ceiling/round/euclidean/balanced families,
+;; tested uniformly below -- the (scheme base) overlap is excluded to avoid
+;; the R7RS 5.2 colliding-import error (kaappi#1726).
+(import (except (scheme base)
+                 floor/ floor-quotient floor-remainder
+                 truncate/ truncate-quotient truncate-remainder)
+        (srfi 141) (scheme process-context) (srfi 64))
+
+(test-begin "srfi-141")
+
+(define (mv->list producer) (call-with-values producer list))
+
+;;; --- floor/ : quotient rounds toward -inf, remainder has divisor's sign ---
+(test-equal '(3 1) (mv->list (lambda () (floor/ 7 2))))
+(test-equal '(-4 1) (mv->list (lambda () (floor/ -7 2))))
+(test-equal '(-4 -1) (mv->list (lambda () (floor/ 7 -2))))
+(test-equal '(3 -1) (mv->list (lambda () (floor/ -7 -2))))
+(test-equal 3 (floor-quotient 7 2))
+(test-equal -4 (floor-quotient -7 2))
+(test-equal 1 (floor-remainder -7 2))
+(test-equal -1 (floor-remainder 7 -2))
+
+;;; --- ceiling/ : quotient rounds toward +inf ---
+(test-equal '(4 -1) (mv->list (lambda () (ceiling/ 7 2))))
+(test-equal '(-3 -1) (mv->list (lambda () (ceiling/ -7 2))))
+(test-equal '(-3 1) (mv->list (lambda () (ceiling/ 7 -2))))
+(test-equal '(4 1) (mv->list (lambda () (ceiling/ -7 -2))))
+
+;;; --- truncate/ : quotient rounds toward zero ---
+(test-equal '(3 1) (mv->list (lambda () (truncate/ 7 2))))
+(test-equal '(-3 -1) (mv->list (lambda () (truncate/ -7 2))))
+(test-equal '(-3 1) (mv->list (lambda () (truncate/ 7 -2))))
+(test-equal '(3 -1) (mv->list (lambda () (truncate/ -7 -2))))
+
+;;; --- round/ : quotient rounds to nearest, ties to even ---
+(test-equal '(4 -1) (mv->list (lambda () (round/ 7 2))))
+(test-equal '(-4 1) (mv->list (lambda () (round/ -7 2))))
+(test-equal '(-4 -1) (mv->list (lambda () (round/ 7 -2))))
+(test-equal '(4 1) (mv->list (lambda () (round/ -7 -2))))
+(test-equal '(2 1) (mv->list (lambda () (round/ 5 2))))     ; 2.5 ties to even 2
+(test-equal '(2 1) (mv->list (lambda () (round/ 7 3))))     ; 2.33 rounds to 2
+
+;;; --- euclidean/ : remainder always in [0, |d|) ---
+(test-equal '(3 1) (mv->list (lambda () (euclidean/ 7 2))))
+(test-equal '(-4 1) (mv->list (lambda () (euclidean/ -7 2))))
+(test-equal '(-3 1) (mv->list (lambda () (euclidean/ 7 -2))))
+(test-equal '(4 1) (mv->list (lambda () (euclidean/ -7 -2))))
+(test-equal 1 (euclidean-remainder -7 2))
+(test-equal 1 (euclidean-remainder -7 -2))
+
+;;; --- balanced/ : remainder in [-|d|/2, |d|/2) ---
+(test-equal '(4 -1) (mv->list (lambda () (balanced/ 7 2))))
+(test-equal '(3 -1) (mv->list (lambda () (balanced/ 5 2))))     ; tie: r=-1 not +1
+(test-equal '(-3 -1) (mv->list (lambda () (balanced/ -7 2))))   ; tie: keep q=-3
+(test-equal '(-4 -1) (mv->list (lambda () (balanced/ 7 -2))))   ; tie: adjust q
+(test-equal '(3 -1) (mv->list (lambda () (balanced/ -7 -2))))   ; tie: keep q=3
+(test-equal '(-2 -1) (mv->list (lambda () (balanced/ -5 2))))   ; tie: keep q=-2
+(test-equal '(-3 -1) (mv->list (lambda () (balanced/ 5 -2))))   ; tie: adjust q
+(test-equal '(2 -1) (mv->list (lambda () (balanced/ -5 -2))))   ; tie: keep q=2
+(test-equal '(2 1) (mv->list (lambda () (balanced/ 7 3))))      ; non-tie
+(test-equal 3 (balanced-quotient 5 2))
+(test-equal -1 (balanced-remainder 5 2))
+
+;;; --- bignums ---
+(test-equal '(14285714285714285714 2)
+            (mv->list (lambda () (floor/ 100000000000000000000 7))))
+
+;;; --- exact zero dividend ---
+(test-equal '(0 0) (mv->list (lambda () (floor/ 0 5))))
+(test-equal '(0 0) (mv->list (lambda () (euclidean/ 0 -5))))
+
+;;; --- division by zero raises ---
+(test-equal #t (guard (e (#t #t)) (floor/ 5 0) #f))
+(test-equal #t (guard (e (#t #t)) (truncate-quotient 5 0) #f))
+
+(let ((runner (test-runner-current)))
+  (test-end "srfi-141")
+  (when (> (test-runner-fail-count runner) 0) (exit 1)))

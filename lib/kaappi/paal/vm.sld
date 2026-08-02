@@ -632,6 +632,12 @@
              (random-source-state-ref . ,random-source-state-ref)
              (random-source-state-set! . ,random-source-state-set!)
              (random-source? . ,random-source?)
+             ;; The two generator constructors return HOST closures, which
+             ;; paal can call — the same one-way door spawn's trampoline
+             ;; documents.  Missed in the first SRFI 27 binding pass; the
+             ;; shelf harness's srfi-27 suites found the gap.
+             (random-source-make-integers . ,random-source-make-integers)
+             (random-source-make-reals . ,random-source-make-reals)
              (generate-uninterned-symbol . ,generate-uninterned-symbol)
              (string->uninterned-symbol . ,string->uninterned-symbol)
              (symbol-interned? . ,symbol-interned?)
