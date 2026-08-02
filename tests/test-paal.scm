@@ -1220,6 +1220,46 @@
   (test-equal "keyword shadowing works on the tree-walking path too" 1
     (pkaappi-run-string "(let ((if car)) (if '(1 2)))")))
 
+;; Bodies are bodies everywhere R7RS says so: let-values, let*-values,
+;; let-syntax and letrec-syntax scope a leading definition to themselves,
+;; and a body may define its own syntax — visible to the whole body,
+;; forward references from templates included, and gone with it.
+(test-group "expander: body definition contexts"
+  (test-equal "define inside an empty let*-values body stays inside" 1
+    (pkaappi-run-bc-string
+      "(let ((x 1)) (let*-values () (define x 2) #f) x)"))
+  (test-equal "define inside an empty let-syntax body stays inside" 1
+    (pkaappi-run-bc-string
+      "(let () (define x 1) (let-syntax () (define x 2) #f) x)"))
+  (test-equal "a let-values body defines its own names" 12
+    (pkaappi-run-bc-string
+      "(define y 1) (let-values (((a) (values 10))) (define y 2) (+ a y))"))
+  (test-equal "a body macro's template reaches a sibling defined later" 42
+    (pkaappi-run-bc-string
+      "(let ()
+         (define-syntax foo399 (syntax-rules () ((foo399) (bar399))))
+         (define (quux399) (foo399))
+         (define (bar399) 42)
+         (quux399))"))
+  (test-equal "a body macro is self-visible" 6
+    (pkaappi-run-bc-string
+      "(let ()
+         (define-syntax up
+           (syntax-rules () ((_ x) x) ((_ x y ...) (+ x (up y ...)))))
+         (up 1 2 3))"))
+  (test-equal "a body macro does not leak past its body" 'proc
+    (pkaappi-run-bc-string
+      "(define (m) 'proc)
+       (let ()
+         (define-syntax m (syntax-rules () ((_) 'mac)))
+         (m))
+       (m)"))
+  (test-equal "a let-syntax body may use its macros in definitions" 9
+    (pkaappi-run-bc-string
+      "(let-syntax ((tw (syntax-rules () ((_ e) (* 2 e)))))
+         (define q (tw 4))
+         (+ q 1))")))
+
 ;; Local macros scope through the compile-time environment: installed under
 ;; unutterable %mac- aliases, mapped by the body's env, gone with it.  The
 ;; definition environment handed to the transformer distinguishes the two

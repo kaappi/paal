@@ -1575,7 +1575,13 @@
                (for-each (lambda (b a)
                            (paal-macro-set! a (make-transformer (cadr b) def-env)))
                          bindings aliases)
-               (expand-form `(begin ,@body) env*)))
+               ;; The body is a *body* (R7RS 4.3.1 and 5.3.2): a leading
+               ;; definition is scoped to it, so (let-syntax () (define x 2))
+               ;; defines an inner x, not the enclosing one.  An empty body
+               ;; keeps the old begin, which expand-body would reject.
+               (if (null? body)
+                   '(begin)
+                   (expand-form `(let () ,@body) env*))))
             ;; --- Library forms ---
             ;; A define-library evaluated as a program form -- `paal file.sld`,
             ;; or pkaappi-load-file on a pipeline stage.  Its own imports are
@@ -2187,11 +2193,16 @@
     ;;       (call-with-values (lambda () e2)
     ;;         (lambda (c) body...))))
 
+    ;; The empty-bindings base is (let () ...), not (begin ...): R7RS 4.2.2
+    ;; makes a let-values body a *body*, so a leading definition belongs to it
+    ;; — (let*-values () (define x 2) #f) defines its own x — where a begin
+    ;; left the define sitting in expression position and the whole form
+    ;; failed at emission.
     (define (expand-let-values form)
       (let ((bindings (cadr form))
             (body     (cddr form)))
         (if (null? bindings)
-            `(begin ,@body)
+            `(let () ,@body)
             (let* ((b     (car bindings))
                    (names (car b))
                    (expr  (cadr b)))
@@ -2205,7 +2216,7 @@
       (let ((bindings (cadr form))
             (body     (cddr form)))
         (if (null? bindings)
-            `(begin ,@body)
+            `(let () ,@body)
             (let* ((b     (car bindings))
                    (names (car b))
                    (expr  (cadr b)))
@@ -2294,8 +2305,37 @@
              ((include-ci)  (cdr (expand-include (cdr form) #t)))
              (else          #f))))
 
+    ;; The value names a body defines, from a cheap structural scan — enough
+    ;; for a body macro's definition environment to know that a name used in
+    ;; a template is a sibling definition rather than a top-level reference,
+    ;; forward references included (R7RS 5.3.2 regions cover the whole body).
+    ;; Head begins are looked through; anything subtler falls back to the
+    ;; %gref% default, which is the pre-existing behavior.
+    (define (body-defined-names forms)
+      (let loop ((fs forms) (acc '()))
+        (cond
+          ((null? fs) acc)
+          ((not (pair? (car fs))) (loop (cdr fs) acc))
+          (else
+           (let ((f (car fs)))
+             (case (car f)
+               ((define)
+                (loop (cdr fs)
+                      (cons (if (pair? (cadr f)) (caadr f) (cadr f)) acc)))
+               ((define-values)
+                (let flatten ((n (cadr f)) (acc acc))
+                  (cond ((symbol? n) (loop (cdr fs) (cons n acc)))
+                        ((pair? n) (flatten (cdr n)
+                                            (if (symbol? (car n))
+                                                (cons (car n) acc)
+                                                acc)))
+                        (else (loop (cdr fs) acc)))))
+               ((begin)
+                (loop (append (cdr f) (cdr fs)) acc))
+               (else (loop (cdr fs) acc))))))))
+
     (define (expand-body forms env)
-      (let loop ((rest forms) (defs '()))
+      (let loop ((rest forms) (defs '()) (env env))
         (cond
           ((null? rest)
            (if (null? defs)
@@ -2316,11 +2356,34 @@
                                  (list wrapped)))
                          env)))))
           ((and (pair? (car rest)) (eq? (caar rest) 'define))
-           (loop (cdr rest) (cons (car rest) defs)))
+           (loop (cdr rest) (cons (car rest) defs) env))
+          ;; A body define-syntax scopes to this body (R7RS 5.3.2): the
+          ;; transformer installs under a fresh %mac- alias, the environment
+          ;; maps the source name to it for the rest of the scan — the
+          ;; hoisted defines re-expand under that environment, so the macro's
+          ;; region is the whole body — and the definition environment the
+          ;; transformer closes over knows this body's value names, so a
+          ;; template may reference a sibling defined later and resolve to
+          ;; it rather than to the top level.
+          ((and (pair? (car rest)) (eq? (caar rest) 'define-syntax))
+           (let* ((dsform (car rest))
+                  (name   (cadr dsform))
+                  (spec   (caddr dsform))
+                  (alias  (fresh-name
+                            (string-append "%mac-" (symbol->string name) "-")))
+                  (def-env
+                    (cenv-bind-macro
+                      (let extend ((ns (body-defined-names forms)) (e env))
+                        (if (null? ns)
+                            e
+                            (extend (cdr ns) (cenv-extend-var e (car ns)))))
+                      name alias)))
+             (paal-macro-set! alias (make-transformer spec def-env))
+             (loop (cdr rest) defs (cenv-bind-macro env name alias))))
           ;; Splice and re-examine, so definitions inside reach the `define`
           ;; arm above and a nested begin unwraps too.
           ((body-splice (car rest))
-           => (lambda (spliced) (loop (append spliced (cdr rest)) defs)))
+           => (lambda (spliced) (loop (append spliced (cdr rest)) defs env)))
           (else
            (if (null? defs)
                (map (lambda (f) (expand-form f env)) rest)

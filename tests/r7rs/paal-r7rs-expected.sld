@@ -9,8 +9,8 @@
     (define expected-sections
       '(("R7RS" 0 0)
         ("4.1 Primitive expression types" 27 0)
-        ("4.2 Derived expression types" 73 0)
-        ("4.3 Macros" 18 5)
+        ("4.2 Derived expression types" 74 0)
+        ("4.3 Macros" 20 5)
         ("5 Program structure" 15 0)
         ("6.1 Equivalence Predicates" 25 0)
         ("6.2 Numbers" 210 1)
@@ -31,4 +31,4 @@
 
     ;; Top-level forms that raise before any test inside them runs.
     (define expected-errors
-      '(65 148 152))))
+      '())))
