@@ -893,10 +893,23 @@ in all, so the split is 4 + 24. paal's own libraries use `caddr` and `cadddr` fr
 while importing only `(scheme base)`, which is fine because a `define-library` is never
 checked and its body is skipped when spliced into an importer.
 
+Modifiers over base narrow it. `(only (scheme base) car)` grants exactly `car` — the
+names are manufactured as identity aliases, taken on faith since base has no export
+list to validate against, and outer modifiers compose over them, so
+`(prefix (only (scheme base) car) b:)` defines and grants `b:car`. `except` over base
+records an exclusion set instead, one per spec so that imports still union:
+`(import (except (scheme base) car) (scheme base))` grants `car` back through the
+second spec. `environment` honours its import specs by the same computation, packaged
+as `paal-import-grant-predicate`: the table is built full and filtered down to the
+grant, with `%`-prefixed plumbing always kept; a spec rooted in a file-backed library
+leaves the table full, since resolving it would load the library into the caller.
+
 Two deliberate limits remain, both over-permissive rather than wrongly rejecting: a
-modifier over base does not narrow it, so `(only (scheme base) car)` still grants base;
-and because base is "everything else", a name belonging to no library at all reaches the
-runtime rather than the check.
+name `only` takes on faith that base does not actually have surfaces at run time as an
+unbound global rather than at the check; and because base is "everything else", a name
+belonging to no library at all reaches the runtime rather than the check. A bare
+`prefix` or `rename` directly over base (no `only` beneath) still grants base whole —
+there is no list to transform.
 
 ### One feature list, one owner
 

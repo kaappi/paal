@@ -19,7 +19,7 @@
           (kaappi paal embedded))
   (export paal-expand paal-expand-all paal-macros-reset! gref-name
           paal-lib-path-add! paal-lib-paths-list paal-libraries-reset!
-          paal-feature-list)
+          paal-feature-list paal-import-grant-predicate)
   (begin
 
     ;; ---------------------------------------------------------------
@@ -332,18 +332,23 @@
     (define (resolve-import spec)
       (cond
         ((not (pair? spec)) (error "paal: malformed import spec" spec))
-        ;; The "does the library export this" check is skipped over a library
-        ;; that grants everything — `(scheme base)` has no enumerable export
-        ;; list here, so validating `(only (scheme base) car)` against one
-        ;; would reject a legal program.
+        ;; Over a library that grants everything — `(scheme base)` has no
+        ;; enumerable export list — the names are taken on faith as identity
+        ;; aliases: they cannot be *validated*, but they can be granted
+        ;; exactly, which is what makes `only` over base narrow.  A name base
+        ;; does not actually have then surfaces at run time as an unbound
+        ;; global rather than at the check.  Outer modifiers compose over the
+        ;; manufactured aliases like over any others, so
+        ;; (prefix (only (scheme base) car) b:) defines and grants b:car.
         ((eq? (car spec) 'only)
-         (let ((base (resolve-import (cadr spec))) (names (cddr spec)))
-           (unless (grants-everything? (cadr spec))
-             (for-each (lambda (n)
-                         (unless (assq n base)
-                           (error "paal: `only` names a binding the library does not export" n)))
-                       names))
-           (filter (lambda (p) (memq (car p) names)) base)))
+         (if (grants-everything? (cadr spec))
+             (map (lambda (n) (cons n n)) (cddr spec))
+             (let ((base (resolve-import (cadr spec))) (names (cddr spec)))
+               (for-each (lambda (n)
+                           (unless (assq n base)
+                             (error "paal: `only` names a binding the library does not export" n)))
+                         names)
+               (filter (lambda (p) (memq (car p) names)) base))))
         ((eq? (car spec) 'except)
          (let ((base (resolve-import (cadr spec))) (names (cddr spec)))
            (unless (grants-everything? (cadr spec))
@@ -1765,13 +1770,13 @@
     ;; unearned base grant.  Same leak as the library prologue, by another
     ;; route.  Save around the whole of it, restore after.
     (define (import-scope-save)
-      (list %import-seen? %import-base? %import-allowed %import-alias-defs))
+      (list %import-seen? %import-base-excepts %import-allowed %import-alias-defs))
 
     (define (import-scope-restore! saved)
-      (set! %import-seen?      (car saved))
-      (set! %import-base?      (cadr saved))
-      (set! %import-allowed    (caddr saved))
-      (set! %import-alias-defs (cadddr saved))
+      (set! %import-seen?         (car saved))
+      (set! %import-base-excepts  (cadr saved))
+      (set! %import-allowed       (caddr saved))
+      (set! %import-alias-defs    (cadddr saved))
       #t)
 
     (define (paal-expand-all forms)
@@ -1801,14 +1806,20 @@
     ;; the pipeline and the globals table, which this never crosses.
 
     (define %import-seen?   #f)   ; did the program have a top-level import
-    (define %import-base?   #f)   ; …and did it include (scheme base)
+    ;; One entry per base-rooted spec with no `only` on its modifier path;
+    ;; each is that spec's excluded names, so plain (scheme base) contributes
+    ;; '() — everything unclaimed — and (except (scheme base) car) a set the
+    ;; check consults.  A list of sets rather than one flag or one set
+    ;; because imports union: (import (except (scheme base) car)
+    ;; (scheme base)) grants car back through the second spec.
+    (define %import-base-excepts '())
     (define %import-allowed '())  ; names granted by the imports it did have
     (define %import-lib-defs '()) ; names defined by spliced library bodies
     (define %import-alias-defs '()) ; names defined by emitted import aliases
 
     (define (import-scope-reset!)
       (set! %import-seen? #f)
-      (set! %import-base? #f)
+      (set! %import-base-excepts '())
       (set! %import-allowed '())
       (set! %import-lib-defs '())
       (set! %import-alias-defs '()))
@@ -1828,15 +1839,33 @@
     ;; it.  Treating the export list as exhaustive would reject a program that
     ;; imports r5rs alone and uses `car`.
     ;; Seen through the modifiers, so `(only (scheme base) car)` is still
-    ;; recognized as resting on a grants-everything library.  The consequence
-    ;; is that a modifier over base does not narrow anything — over-permissive,
-    ;; never wrongly rejecting, and written down in docs/architecture.md.
+    ;; recognized as resting on base — the predicate answers "is there no
+    ;; export list to validate or filter against", which is a property of the
+    ;; root.  What the *grant* then is depends on the modifier path:
+    ;; import-scope-note! narrows it by the `only` and `except` found there.
     (define (grants-everything? spec)
       (cond
         ((not (pair? spec)) #f)
         ((memq (car spec) '(only except prefix rename))
          (grants-everything? (cadr spec)))
         (else (or (equal? spec '(scheme base)) (equal? spec '(scheme r5rs))))))
+
+    ;; Is there an `only` anywhere on the modifier path?  If so the spec's
+    ;; whole grant is the aliases `only` manufactured (transformed by any
+    ;; outer modifiers), and no base-wide grant applies.
+    (define (base-only-path? spec)
+      (and (pair? spec)
+           (memq (car spec) '(only except prefix rename))
+           (or (eq? (car spec) 'only)
+               (base-only-path? (cadr spec)))))
+
+    ;; Every name an `except` along the modifier path removes.
+    (define (base-except-union spec)
+      (if (and (pair? spec) (memq (car spec) '(only except prefix rename)))
+          (if (eq? (car spec) 'except)
+              (append (cddr spec) (base-except-union (cadr spec)))
+              (base-except-union (cadr spec)))
+          '()))
 
     ;; `(prefix (scheme inexact) m:)` emits `(define m:sin sin)`, whose
     ;; right-hand side names the *internal* binding — which the program was not
@@ -1848,7 +1877,10 @@
 
     (define (import-scope-note! spec names)
       (set! %import-seen? #t)
-      (when (grants-everything? spec) (set! %import-base? #t))
+      (when (and (grants-everything? spec)
+                 (not (base-only-path? spec)))
+        (set! %import-base-excepts
+              (cons (base-except-union spec) %import-base-excepts)))
       (set! %import-allowed (append names %import-allowed)))
 
     ;; A name a program may reference: one it defined, one an import granted,
@@ -1860,12 +1892,54 @@
       (or (memq name defined)
           (memq name %import-allowed)
           (internal-name? name)
-          (and %import-base?
-               (not (memq name (scheme-lib-claimed-names))))))
+          (and (not (memq name (scheme-lib-claimed-names)))
+               (let loop ((es %import-base-excepts))
+                 (and (pair? es)
+                      (or (not (memq name (car es)))
+                          (loop (cdr es))))))))
 
     (define (internal-name? name)
       (let ((s (symbol->string name)))
         (and (> (string-length s) 0) (char=? (string-ref s 0) #\%))))
+
+    ;; The same grant computation as the check above, packaged for
+    ;; `environment`: given import specs as data, answer whether each named
+    ;; global belongs in the resulting table.  #f when any spec roots in a
+    ;; file-backed library — resolving one of those *loads* it, with macro
+    ;; and pending-form side effects inside the caller's program, and its
+    ;; definitions would then have to run in the child table; until the
+    ;; module system can do that, such an environment stays a full table.
+    ;; %-prefixed plumbing is always kept, as in the check.
+    (define (import-spec-root spec)
+      (if (and (pair? spec) (memq (car spec) '(only except prefix rename)))
+          (import-spec-root (cadr spec))
+          spec))
+
+    (define (paal-import-grant-predicate specs)
+      (let loop ((ss specs) (names '()) (excepts '()))
+        (cond
+          ((null? ss)
+           (let ((claimed (scheme-lib-claimed-names)))
+             (lambda (name)
+               (or (internal-name? name)
+                   (memq name names)
+                   (and (not (memq name claimed))
+                        (let scan ((es excepts))
+                          (and (pair? es)
+                               (or (not (memq name (car es)))
+                                   (scan (cdr es))))))))))
+          ((not (builtin-library? (import-spec-root (car ss))))
+           #f)
+          (else
+           (let* ((spec    (car ss))
+                  (aliases (resolve-import spec))
+                  (vis     (map car aliases)))
+             (loop (cdr ss)
+                   (append vis names)
+                   (if (and (grants-everything? spec)
+                            (not (base-only-path? spec)))
+                       (cons (base-except-union spec) excepts)
+                       excepts)))))))
 
     (define (library-body-form? form)
       (and (pair? form) (eq? (car form) 'define)

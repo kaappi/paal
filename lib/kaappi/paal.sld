@@ -407,16 +407,30 @@
                                                          (if (pair? rest)
                                                              (car rest)
                                                              (car g-cell)))))
-                      ;; R7RS environment takes import specs; paal has one flat
-                      ;; table per program, so any spec yields a fresh one with
-                      ;; everything in it.  Honouring the specs would need the
-                      ;; module system to build a table rather than splice.
+                      ;; R7RS environment takes import specs, and they are
+                      ;; honoured by filtration: the table is built full —
+                      ;; the blob's plumbing has to run regardless — and then
+                      ;; narrowed to what the specs grant, the same
+                      ;; computation the import-scope check runs, packaged as
+                      ;; a predicate.  %-prefixed plumbing always survives;
+                      ;; eval'd code that reaches for an ungranted name gets
+                      ;; an unbound global at run time, since a bare
+                      ;; expression has no import to check against.  A spec
+                      ;; rooted in a file-backed library yields #f — loading
+                      ;; it here would splice into the caller — and the
+                      ;; environment stays a full table, the old behaviour.
                       ;;
                       ;; %make-globals-table, not pkaappi-make-globals: this
                       ;; runs inside the caller's program, and the reset would
                       ;; take the caller's own macros with it.
                       (environment                . ,(lambda specs
-                                                       (%make-globals-table)))
+                                                       (let ((g (%make-globals-table))
+                                                             (grants? (paal-import-grant-predicate specs)))
+                                                         (when grants?
+                                                           (vector-set! g 0
+                                                             (filter (lambda (e) (grants? (car e)))
+                                                                     (vector-ref g 0))))
+                                                         g)))
                       ;; (scheme r5rs).  Same honest limitation as
                       ;; `environment` -- paal has one flat table per program,
                       ;; so any spec yields a full one -- but the version

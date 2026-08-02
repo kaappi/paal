@@ -3281,6 +3281,66 @@
   (test-assert "but its exports do"
     (compiles? "(import (scheme base) (srfi 1)) (fold + 0 '(1 2 3))")))
 
+;; Modifiers over (scheme base) itself.  base has no enumerable export list,
+;; so `only` takes its names on faith as identity aliases — unvalidatable but
+;; grantable exactly — and `except` records an exclusion set per spec.
+(test-group "import narrowing over base"
+  (test-assert "only over base grants its names"
+    (compiles? "(import (only (scheme base) car list)) (car (list 1))"))
+  (test-assert "only over base grants nothing else"
+    (not (compiles? "(import (only (scheme base) car)) (cdr '(1 2))")))
+  (test-assert "except over base removes the name"
+    (not (compiles? "(import (except (scheme base) car)) (car '(1))")))
+  (test-assert "except over base keeps the rest"
+    (compiles? "(import (except (scheme base) car)) (cdr '(1 2))"))
+  ;; Imports union: a second spec may grant back what the first excluded.
+  (test-assert "a second spec grants back an excepted name"
+    (compiles? "(import (except (scheme base) car) (scheme base)) (car '(1))"))
+  ;; Outer modifiers compose over the manufactured aliases.
+  (test-assert "prefix over only over base"
+    (compiles? "(import (only (scheme base) car) (prefix (only (scheme base) car) b:)) (b:car '(1))"))
+  (test-assert "rename over only over base"
+    (compiles? "(import (only (scheme base) list) (rename (only (scheme base) car) (car head))) (head (list 1))"))
+  ;; A bare prefix or rename directly over base still grants base whole —
+  ;; there is no list to transform.  Pinned so a change is a decision.
+  (test-assert "bare prefix over base still grants base"
+    (compiles? "(import (prefix (scheme base) b:)) (car '(1))")))
+
+;; `environment` honours its import specs by the same grant computation,
+;; filtering the fresh table down to what the specs name.  %-prefixed
+;; plumbing survives, so the eval machinery keeps working inside.
+(test-group "environment honours its specs"
+  (test-equal "a granted name resolves" 21
+    (pkaappi-run-bc-string
+      "(import (scheme base) (scheme eval))
+       (eval '(* 7 3) (environment '(scheme base)))"))
+  (test-equal "an ungranted name is unbound" 'unbound
+    (pkaappi-run-bc-string
+      "(import (scheme base) (scheme eval))
+       (guard (e (#t 'unbound))
+         (eval '(sin 0) (environment '(scheme base))))"))
+  (test-equal "a small library's names arrive with it" 1.0
+    (pkaappi-run-bc-string
+      "(import (scheme base) (scheme eval))
+       (eval '(exp 0.0) (environment '(scheme base) '(scheme inexact)))"))
+  (test-equal "only narrows an environment too" '(1 unbound)
+    (pkaappi-run-bc-string
+      "(import (scheme base) (scheme eval))
+       (let ((env (environment '(only (scheme base) car list))))
+         (list (eval '(car (list 1 2)) env)
+               (guard (e (#t 'unbound)) (eval '(cdr (list 1 2)) env))))"))
+  (test-equal "base does not hand an environment the write library" 'unbound
+    (pkaappi-run-bc-string
+      "(import (scheme base) (scheme eval))
+       (guard (e (#t 'unbound))
+         (eval '(display 1) (environment '(scheme base))))"))
+  ;; A file-backed spec cannot be honoured without loading into the caller;
+  ;; the environment stays a full table.  Pinned so a change is a decision.
+  (test-equal "a file-backed spec leaves the table full" 3
+    (pkaappi-run-bc-string
+      "(import (scheme base) (scheme eval))
+       (eval '(+ 1 2) (environment '(srfi 1)))")))
+
 (test-group "module system"
   (test-equal "a library's exports are visible, its internals are not"
     '(25 27 unbound)
