@@ -33,9 +33,9 @@ make pbc-pipeline                      # build pipeline cache (speeds up self-ho
 `paal` follows the same interpreter-style conventions as `kaappi`: no args starts
 the REPL, a positional file runs it, and subcommands (`check`, `fmt`, `compile`,
 `ast`, `expand`, `ir`, `features`, `cache`, `eval`, `repl`, `run`) and flags
-(`--lib-path`, `--help`, `--version`) work the same way. Paal-only: `debug`,
-`dis` (print compiled bytecode; kaappi spells it `(disassemble proc)` only, which
-paal also binds), `--cache`, `--profile`, `--coverage`.
+(`--lib-path`, `--coverage`, `--coverage-xml`, `--help`, `--version`) work the
+same way. Paal-only: `debug`, `dis` (print compiled bytecode; kaappi spells it
+`(disassemble proc)` only, which paal also binds), `--cache`, `--profile`.
 
 **Exceptions:** `compile` outputs `.pbc` text bytecode (not a native binary);
 `cache` manages paal's two caches (the `<file>.<hash>.pbc` entries `--cache`

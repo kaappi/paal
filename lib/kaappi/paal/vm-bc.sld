@@ -12,7 +12,7 @@
           %paal-spawn-marker %paal-ffi-callback-marker
           paal-vm-raise-escape!
           paal-profile-start! paal-profile-report paal-profile-masked
-          paal-coverage-start! paal-coverage-report
+          paal-coverage-start! paal-coverage-report paal-coverage-hits
           paal-debug-start! paal-debug-stop!
           paal-debug-break! paal-debug-unbreak! paal-debug-breaks)
   (begin
@@ -709,6 +709,21 @@
                  (loop (cdr alist) (+ total 1) (+ covered 1) uncalled)
                  (loop (cdr alist) (+ total 1) covered (cons name uncalled)))))
           (else (loop (cdr alist) total covered uncalled)))))
+
+    ;; -> ((name . hits) ...) over the same entries paal-coverage-report
+    ;; counts, in definition order, zeroes included — what a per-line
+    ;; coverage writer needs and the summary does not.  The alist is
+    ;; newest-first, so consing on the way down restores program order.
+    (define (paal-coverage-hits globals)
+      (let loop ((alist (vector-ref globals 0)) (acc '()))
+        (cond
+          ((or (null? alist) (eq? alist %coverage-baseline)) acc)
+          ((closure? (cdr (car alist)))
+           (let* ((name (car (car alist)))
+                  (hit  (assq name %profile-counts)))
+             (loop (cdr alist)
+                   (cons (cons name (if hit (cdr hit) 0)) acc))))
+          (else (loop (cdr alist) acc)))))
 
     ;; --- stepping debugger ---------------------------------------------
     ;;

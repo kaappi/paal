@@ -4868,4 +4868,40 @@
     (test-equal "entries for a missing source are all stale"
       '() (pkaappi-cache-entries src))))
 
+(test-group "coverage xml"
+  (let* ((r (pkaappi-run-bc-string-coverage
+              "(define (used x) x) (define (unused y) y) (used 1)"))
+         (report (car r))
+         (hits   (cadr r)))
+    (test-equal "the summary reads as before"
+      '(1 2 (unused)) report)
+    (test-equal "hits come per name, zeroes included, in definition order"
+      '((used . 1) (unused . 0)) hits))
+  (let ((xml (paal-coverage-xml
+               '((used . 1) (unused . 0))
+               "(define (used x) x)\n(define (unused y) y)\n(used 1)\n"
+               "prog.scm")))
+    (test-assert "the coverage element carries rate and totals"
+      (%has-substring? xml
+        "<coverage line-rate=\"0.5000\" branch-rate=\"0\" version=\"paal\" timestamp=\"0\" lines-covered=\"1\" lines-valid=\"2\">"))
+    (test-assert "each procedure is a line with hits, at its define"
+      (and (%has-substring? xml
+             "<line number=\"1\" hits=\"1\" name=\"used\"/>")
+           (%has-substring? xml
+             "<line number=\"2\" hits=\"0\" name=\"unused\"/>")))
+    (test-assert "the file names the package and the class"
+      (%has-substring? xml "filename=\"prog.scm\"")))
+  (test-assert "full coverage renders as 1.0000"
+    (%has-substring?
+      (paal-coverage-xml '((f . 2)) "(define (f) 1)\n(f) (f)\n" "p.scm")
+      "line-rate=\"1.0000\""))
+  (test-assert "a name the source scan misses falls back to its position"
+    (%has-substring?
+      (paal-coverage-xml '((ghost . 0)) "no defines here\n" "p.scm")
+      "<line number=\"1\" hits=\"0\" name=\"ghost\"/>"))
+  (test-assert "xml-special characters in names are escaped"
+    (%has-substring?
+      (paal-coverage-xml '((|a<b| . 1)) "" "p.scm")
+      "name=\"a&lt;b\"")))
+
 (test-exit)

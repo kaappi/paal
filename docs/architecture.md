@@ -971,6 +971,15 @@ parent. The runtime binding prints to the HOST error port, as kaappi's prints to
 the listing is a diagnostic, so a paal-level port rebinding deliberately does not
 capture it.
 
+**`--coverage-xml <file>`** writes the run's procedure coverage as Cobertura XML — the
+shape Codecov ingests, matching kaappi's writer field for field: one package per report
+(for a program, the file), one class, one `<line>` per procedure. The VM half is
+`paal-coverage-hits`, a second reader over the state `--coverage` already collects:
+`(name . count)` per program-defined procedure, zeroes included, in definition order.
+Line numbers come from scanning the source for each procedure's define, with the
+1-based position as fallback when the scan misses, exactly as kaappi's. The writer
+(`paal-coverage-xml`) is a pure string function.
+
 **`check` warnings** come from `(kaappi paal lint)`, run by `pkaappi-check-file` after a
 successful compile. Two lints over the emitted bytecode: an *unknown top-level
 variable* (a `get-global` name the program neither defines anywhere in its function

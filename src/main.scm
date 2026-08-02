@@ -34,6 +34,7 @@
   (display "  --cache                 Cache compiled bytecode beside the source\n")
   (display "  --profile               Count calls per procedure; report on exit\n")
   (display "  --coverage              Report which procedures were never called\n")
+  (display "  --coverage-xml <file>   Also write the run's coverage as Cobertura XML\n")
   (display "  -h, --help              Show this help\n")
   (display "  --version               Show version\n")
   (display "\nIn a bundled binary, kaappi's CLI claims any first argument it\n")
@@ -55,8 +56,15 @@
           ;; user's procedures under the pipeline's own map/filter traffic,
           ;; which is not what anyone asked for.
           ;; Both run on the HOST pipeline, for the reason given below.
-          (%coverage (report-coverage! (pkaappi-run-bc-string-covered
-                                         (read-source path))))
+          ((or %coverage %coverage-xml)
+           (let* ((text   (read-source path))
+                  (result (pkaappi-run-bc-string-coverage text)))
+             (when %coverage-xml
+               (let ((port (open-output-file %coverage-xml)))
+                 (display (paal-coverage-xml (cadr result) text path) port)
+                 (close-output-port port)))
+             (when %coverage
+               (report-coverage! (car result)))))
           (%profile (pkaappi-run-bc-file path))
           (%use-cache (pkaappi-run-file-cached path (cons path extra-args)))
           (else (apply pkaappi-self-run-file path extra-args))))))
@@ -78,9 +86,15 @@
 (define %profile #f)
 ;; --coverage reports which of the program's procedures were ever called.
 (define %coverage #f)
+;; --coverage-xml writes the same run's counts as Cobertura XML.
+(define %coverage-xml #f)
 
 (define (strip-lib-paths args)
   (let loop ((as args))
+    (if (and (pair? as) (string=? (car as) "--coverage-xml"))
+        (if (null? (cdr as))
+            (begin (display "error: --coverage-xml: missing file\n") (exit 1))
+            (begin (set! %coverage-xml (cadr as)) (loop (cddr as))))
     (if (and (pair? as) (string=? (car as) "--coverage"))
         (begin (set! %coverage #t) (loop (cdr as)))
     (if (and (pair? as) (string=? (car as) "--profile"))
@@ -91,7 +105,7 @@
         (if (null? (cdr as))
             (begin (display "error: --lib-path: missing directory\n") (exit 1))
             (begin (paal-lib-path-add! (cadr as)) (loop (cddr as))))
-        as))))))
+        as)))))))
 
 (define (read-source path)
   (let ((port (open-input-file path)))

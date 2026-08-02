@@ -67,8 +67,9 @@
     paal-lint-program
     ;; Profiling
     paal-profile-start! paal-profile-report
-    paal-coverage-start! paal-coverage-report
+    paal-coverage-start! paal-coverage-report paal-coverage-hits
     pkaappi-run-bc-string-covered
+    pkaappi-run-bc-string-coverage paal-coverage-xml
     ;; Stepping debugger
     paal-debug-start! paal-debug-stop!
     paal-debug-break! paal-debug-unbreak! paal-debug-breaks
@@ -121,6 +122,15 @@
         (paal-coverage-start! g)
         (paal-run-bc (pkaappi-compile src) g)
         (paal-coverage-report g)))
+
+    ;; The same run answering both readers: the (covered total uncalled)
+    ;; summary and the per-name hit counts the Cobertura writer needs,
+    ;; zeroes included.  -> ((covered total uncalled) ((name . hits) ...))
+    (define (pkaappi-run-bc-string-coverage src)
+      (let ((g (pkaappi-make-globals)))
+        (paal-coverage-start! g)
+        (paal-run-bc (pkaappi-compile src) g)
+        (list (paal-coverage-report g) (paal-coverage-hits g))))
 
     (define (pkaappi-run-bc-file path)
       (let ((g (pkaappi-make-globals)))
@@ -1185,6 +1195,129 @@
     (define (paal-pipeline-cache-status)
       (map (lambda (f) (cons f (file-exists? f)))
            (append %paal-cache-files (list %paal-serializer-cache))))
+
+    ;; --- coverage XML: --coverage-xml (Cobertura) ---
+    ;;
+    ;; The shape Codecov ingests, matching kaappi's writer (reporting.zig)
+    ;; field for field: one package per report — for a program, the file —
+    ;; one class, one <line> per procedure.  Line numbers come from scanning
+    ;; the source for each procedure's define; a name the scan cannot find
+    ;; falls back to its 1-based position, exactly as kaappi's does.  A pure
+    ;; string function, so the suite asserts on the document itself.
+
+    (define (%paal-xml-escape s)
+      (let ((out (open-output-string)))
+        (string-for-each
+          (lambda (c)
+            (cond ((char=? c #\&) (display "&amp;" out))
+                  ((char=? c #\<) (display "&lt;" out))
+                  ((char=? c #\>) (display "&gt;" out))
+                  ((char=? c #\") (display "&quot;" out))
+                  (else (write-char c out))))
+          s)
+        (get-output-string out)))
+
+    ;; covered/total to four decimals, in exact arithmetic.
+    (define (%paal-rate4 covered total)
+      (if (zero? total)
+          "1.0000"
+          (let* ((n    (exact (round (/ (* covered 10000) total))))
+                 (frac (number->string (remainder n 10000)))
+                 (pad  (make-string (- 4 (string-length frac)) #\0)))
+            (string-append (number->string (quotient n 10000))
+                           "." pad frac))))
+
+    (define (%paal-split-lines text)
+      (let ((n (string-length text)))
+        (let loop ((i 0) (start 0) (acc '()))
+          (cond
+            ((= i n)
+             (reverse (if (> i start)
+                          (cons (substring text start i) acc)
+                          acc)))
+            ((char=? (string-ref text i) #\newline)
+             (loop (+ i 1) (+ i 1) (cons (substring text start i) acc)))
+            (else (loop (+ i 1) start acc))))))
+
+    (define (%paal-find-substring hay needle from)
+      (let ((hl (string-length hay)) (nl (string-length needle)))
+        (let loop ((i from))
+          (cond ((> (+ i nl) hl) #f)
+                ((string=? (substring hay i (+ i nl)) needle) i)
+                (else (loop (+ i 1)))))))
+
+    ;; Is `name` at position i of `line`, ended by a delimiter?
+    (define (%paal-name-at? line i name)
+      (let ((nl (string-length name)) (ll (string-length line)))
+        (and (<= (+ i nl) ll)
+             (string=? (substring line i (+ i nl)) name)
+             (or (= (+ i nl) ll)
+                 (let ((c (string-ref line (+ i nl))))
+                   (or (char=? c #\space) (char=? c #\tab)
+                       (char=? c #\)) (char=? c #\()))))))
+
+    ;; The 1-based line whose text reads (define (name …) or (define name …),
+    ;; or #f.  First hit wins; a define-values or a second define on the
+    ;; same line simply misses and takes the fallback.
+    (define (%paal-define-line lines name)
+      (let loop ((ls lines) (n 1))
+        (cond
+          ((null? ls) #f)
+          ((let* ((line (car ls))
+                  (dl   (%paal-find-substring line "(define" 0)))
+             (and dl
+                  (let skip ((i (+ dl 7)))
+                    (cond
+                      ((>= i (string-length line)) #f)
+                      ((or (char=? (string-ref line i) #\space)
+                           (char=? (string-ref line i) #\tab))
+                       (skip (+ i 1)))
+                      ((char=? (string-ref line i) #\()
+                       (%paal-name-at? line (+ i 1) name))
+                      (else (%paal-name-at? line i name))))))
+           n)
+          (else (loop (cdr ls) (+ n 1))))))
+
+    ;; hits: ((name . count) ...) from paal-coverage-hits.  text: the
+    ;; program's source.  path: how the file is named in the report.
+    (define (paal-coverage-xml hits text path)
+      (let* ((total   (length hits))
+             (covered (length (filter (lambda (h) (positive? (cdr h))) hits)))
+             (rate    (%paal-rate4 covered total))
+             (lines   (%paal-split-lines text))
+             (out     (open-output-string)))
+        (display "<?xml version=\"1.0\" ?>\n" out)
+        (display "<coverage line-rate=\"" out)
+        (display rate out)
+        (display "\" branch-rate=\"0\" version=\"paal\" timestamp=\"0\" lines-covered=\"" out)
+        (display covered out)
+        (display "\" lines-valid=\"" out)
+        (display total out)
+        (display "\">\n  <packages>\n    <package name=\"" out)
+        (display (%paal-xml-escape path) out)
+        (display "\" line-rate=\"" out)
+        (display rate out)
+        (display "\" branch-rate=\"0\">\n      <classes>\n        <class name=\"" out)
+        (display (%paal-xml-escape path) out)
+        (display "\" filename=\"" out)
+        (display (%paal-xml-escape path) out)
+        (display "\" line-rate=\"" out)
+        (display rate out)
+        (display "\" branch-rate=\"0\">\n          <lines>\n" out)
+        (let loop ((hs hits) (fallback 1))
+          (unless (null? hs)
+            (let* ((name (symbol->string (car (car hs))))
+                   (ln   (or (%paal-define-line lines name) fallback)))
+              (display "            <line number=\"" out)
+              (display ln out)
+              (display "\" hits=\"" out)
+              (display (cdr (car hs)) out)
+              (display "\" name=\"" out)
+              (display (%paal-xml-escape name) out)
+              (display "\"/>\n" out))
+            (loop (cdr hs) (+ fallback 1))))
+        (display "          </lines>\n        </class>\n      </classes>\n    </package>\n  </packages>\n</coverage>\n" out)
+        (get-output-string out)))
 
     ;; --- capability report: paal features ---
     ;;
