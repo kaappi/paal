@@ -1579,6 +1579,50 @@
                     (else (error \"comparison value not in {-1,0,1}\"))))))
        (cmp 1)")))
 
+;; SRFI 147, which kaappi supports: the transformer-spec position accepts a
+;; macro use that expands into a (syntax-rules ...) form.  SRFI 148's
+;; em-syntax-rules is exactly this shape, and the whole library failed to
+;; load while the expander demanded a literal syntax-rules.
+(test-group "define-syntax: macro-produced transformer specs"
+  (test-equal "a macro use in transformer position (SRFI 147)" '(2 1)
+    (pkaappi-run-bc-string
+      "(define-syntax my-rules
+         (syntax-rules ()
+           ((_ lits (pat tmpl) ...) (syntax-rules lits (pat tmpl) ...))))
+       (define-syntax swap!
+         (my-rules () ((_ a b) (let ((t a)) (set! a b) (set! b t)))))
+       (define x 1) (define y 2) (swap! x y) (list x y)"))
+  (test-equal "chained: a macro producing a macro-produced spec" 9
+    (pkaappi-run-bc-string
+      "(define-syntax sr (syntax-rules () ((_ c ...) (syntax-rules () c ...))))
+       (define-syntax sr2 (syntax-rules () ((_ c ...) (sr c ...))))
+       (define-syntax nine (sr2 ((_) 9)))
+       (nine)"))
+  (test-equal "tree-walking pipeline agrees" '(2 1)
+    (pkaappi-run-string
+      "(define-syntax my-rules
+         (syntax-rules ()
+           ((_ lits (pat tmpl) ...) (syntax-rules lits (pat tmpl) ...))))
+       (define-syntax swap!
+         (my-rules () ((_ a b) (let ((t a)) (set! a b) (set! b t)))))
+       (define x 1) (define y 2) (swap! x y) (list x y)"))
+  (test-equal "let-syntax accepts a produced spec" 7
+    (pkaappi-run-bc-string
+      "(define-syntax sr (syntax-rules () ((_ c ...) (syntax-rules () c ...))))
+       (let-syntax ((seven (sr ((_) 7)))) (seven))"))
+  (test-equal "bare-keyword alias spec (SRFI 147)" 25
+    (pkaappi-run-bc-string
+      "(define-syntax sq (syntax-rules () ((_ n) (* n n))))
+       (define-syntax square sq)
+       (square 5)"))
+  (test-equal "begin spec with a private helper (SRFI 147)" 30
+    (pkaappi-run-bc-string
+      "(define-syntax trip
+         (begin
+           (define-syntax h (syntax-rules () ((_ n) (* n 3))))
+           h))
+       (trip 10)")))
+
 (test-group "define-syntax: hygiene"
   (test-equal "introduced let binding does not capture the user's variable"
     '(2 1)
@@ -3361,7 +3405,18 @@
     (pkaappi-run-string
       "(import (except (scheme base) list car length vector-ref)
                (shadow machinery))
-       (qq-pair 9 8)")))
+       (qq-pair 9 8)"))
+  ;; The library-rename half of the SRFI 147 work: a self-recursive
+  ;; macro's template names itself, and the clause head must not count as
+  ;; a pattern variable when templates are rewritten for the rename — or
+  ;; the self-call keeps the spelling the rename just dropped from the
+  ;; macro table.
+  (test-equal "self-recursive library macro survives the rename" 3
+    (pkaappi-run-bc-string
+      "(import (scheme base) (shadow selfrec)) (count-args a b c)"))
+  (test-equal "self-recursive rename on the tree-walking pipeline" 2
+    (pkaappi-run-string
+      "(import (scheme base) (shadow selfrec)) (count-args x y)")))
 
 ;; ---------------------------------------------------------------
 ;; Library declarations beyond import/export/begin/include

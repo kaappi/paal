@@ -691,7 +691,20 @@
          (if (or (eq? tmpl '...) (eq? tmpl ell)
                  (memq tmpl pvars) (memq tmpl literals))
              tmpl
-             (let ((hit (assq tmpl renames))) (if hit (cdr hit) tmpl))))
+             (let ((hit (assq tmpl renames)))
+               (cond
+                 (hit (cdr hit))
+                 ;; A spec that came through resolve-transformer-spec was
+                 ;; instantiated once already, so its free identifiers
+                 ;; carry %gref% marks — follow the mark through the
+                 ;; rename, the way rename-core does.  SRFI 148 defines
+                 ;; its later macros via em-syntax-rules, so their stored
+                 ;; specs are exactly this shape.
+                 ((gref-name tmpl)
+                  => (lambda (bare)
+                       (let ((h2 (assq bare renames)))
+                         (if h2 (gref-symbol (cdr h2)) tmpl))))
+                 (else tmpl)))))
         ((pair? tmpl)
          (cons (rename-template (car tmpl) renames pvars literals ell)
                (rename-template (cdr tmpl) renames pvars literals ell)))
@@ -712,7 +725,16 @@
                            (list 'syntax-rules literals))))
         (append head
                 (map (lambda (clause)
-                       (let ((pvars (pattern-vars (car clause) literals ell)))
+                       ;; Operands only, the way the matcher strips the
+                       ;; keyword: the head is the macro's own name, and
+                       ;; counting it as a pattern variable exempted a
+                       ;; self-recursive template's self-call from the
+                       ;; rename — SRFI 148's aux transformers are exactly
+                       ;; that shape.
+                       (let ((pvars (pattern-vars (if (pair? (car clause))
+                                                      (cdr (car clause))
+                                                      (car clause))
+                                                  literals ell)))
                          (list (car clause)
                                (rename-template (cadr clause) renames
                                                 pvars literals ell))))
@@ -1461,6 +1483,77 @@
                       (else
                        (cons (cons s (gref-symbol s)) acc))))))))
 
+    ;; SRFI 147, which kaappi supports: the transformer-spec position of
+    ;; define-syntax / let-syntax / letrec-syntax accepts, beyond a literal
+    ;; (syntax-rules …): a macro use that expands — possibly through
+    ;; several macros — into a transformer spec; a bare keyword, aliasing
+    ;; an existing macro; and (begin <define-syntax>… <spec>), private
+    ;; helper macros followed by the final spec.  SRFI 148 needs all three
+    ;; together — its em-syntax-rules bottoms out through exactly
+    ;; (begin (define-syntax a spec) a).
+    ;;
+    ;; Resolved in the *definition* environment, since the spec is text
+    ;; written where the binding form is; heads may arrive %core%-marked
+    ;; when the spec came out of a template.  Fuel-bounded so a spec that
+    ;; never converges is a compile error, not a hang.  Callers store the
+    ;; resolved spec, so rename-macro-templates! always sees syntax-rules.
+    ;;
+    ;; Like kaappi, aliasing a builtin special form is out: a bare keyword
+    ;; must name a syntax-rules macro whose spec is on record.
+    (define (spec-head-is? s sym)
+      (and (pair? s) (symbol? (car s))
+           (or (eq? (car s) sym) (eq? (core-name (car s)) sym))))
+
+    ;; 4096, not a small bound: SRFI 148's aux transformers step once per
+    ;; template token, so a realistic em-syntax-rules use burns hundreds of
+    ;; steps before bottoming out.
+    (define (resolve-transformer-spec spec0 env)
+      (let resolve ((spec spec0) (fuel 4096))
+        (cond
+          ((zero? fuel)
+           (error "define-syntax: transformer spec does not converge" spec0))
+          ;; Bare keyword: the new name aliases an existing macro — resolve
+          ;; to its recorded spec so the alias is a full rebuild, renameable
+          ;; like any other.
+          ((symbol? spec)
+           (let* ((d (cenv-lookup env spec))
+                  (gname (cond
+                           ((and (pair? d) (eq? (car d) 'macro)) (cdr d))
+                           ((gref-name spec))
+                           (else spec)))
+                  (s (paal-macro-spec gname)))
+             (or s
+                 (error "define-syntax: keyword alias names no syntax-rules macro"
+                        spec))))
+          ;; (begin defs … final): install the helpers, then resolve the
+          ;; final spec — usually a bare reference to a helper just
+          ;; installed.  The helper names are hygiene-fresh when this shape
+          ;; comes out of a template, so installing them globally is safe.
+          ((spec-head-is? spec 'begin)
+           (let loop ((ds (cdr spec)))
+             (cond
+               ((null? ds)
+                (error "define-syntax: empty begin transformer spec" spec0))
+               ((null? (cdr ds)) (resolve (car ds) (- fuel 1)))
+               (else
+                (let ((d (car ds)))
+                  (unless (spec-head-is? d 'define-syntax)
+                    (error "define-syntax: a begin transformer spec allows only define-syntax before the final spec"
+                           d))
+                  (let ((hspec (resolve-transformer-spec (caddr d) env)))
+                    (paal-macro-set! (cadr d)
+                                     (make-transformer hspec env)
+                                     hspec))
+                  (loop (cdr ds)))))))
+          (else
+           (let ((t (and (pair? spec)
+                         (symbol? (car spec))
+                         (not (eq? (car spec) 'syntax-rules))
+                         (body-macro-transformer (car spec) env))))
+             (if t
+                 (resolve (t spec env) (- fuel 1))
+                 spec))))))
+
     ;; Build a transformer from a syntax-rules spec — either shape, with or
     ;; without the custom ellipsis identifier (see spec-ellipsis above).
     ;;
@@ -1774,8 +1867,9 @@
              (apply error (cdr form)))
             ;; --- Macro definition ---
             ((define-syntax)
-             (let ((name          (cadr form))
-                   (transformer-spec (caddr form)))
+             (let* ((name (cadr form))
+                    (transformer-spec
+                      (resolve-transformer-spec (caddr form) env)))
                (paal-macro-set! name (make-transformer transformer-spec env)
                                 transformer-spec)
                '(quote #f)))
@@ -1808,7 +1902,10 @@
                                                            (car as))))))
                     (def-env  (if letrec? env* env)))
                (for-each (lambda (b a)
-                           (paal-macro-set! a (make-transformer (cadr b) def-env)))
+                           (paal-macro-set! a
+                             (make-transformer
+                               (resolve-transformer-spec (cadr b) def-env)
+                               def-env)))
                          bindings aliases)
                ;; The body is a *body* (R7RS 4.3.1 and 5.3.2): a leading
                ;; definition is scoped to it, so (let-syntax () (define x 2))
@@ -2731,7 +2828,9 @@
                             e
                             (extend (cdr ns) (cenv-extend-var e (car ns)))))
                       name alias)))
-             (paal-macro-set! alias (make-transformer spec def-env))
+             (paal-macro-set! alias
+               (make-transformer (resolve-transformer-spec spec def-env)
+                                 def-env))
              (loop (cdr rest) defs (cenv-bind-macro env name alias))))
           ;; Splice and re-examine, so definitions inside reach the `define`
           ;; arm above and a nested begin unwraps too.
