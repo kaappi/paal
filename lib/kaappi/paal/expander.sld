@@ -17,7 +17,8 @@
 (define-library (kaappi paal expander)
   (import (scheme base) (scheme file) (scheme read)
           (kaappi paal embedded))
-  (export paal-expand paal-expand-all paal-macros-reset! gref-name
+  (export paal-expand paal-expand-all paal-expand-all-for-file
+          paal-macros-reset! gref-name
           paal-lib-path-add! paal-lib-paths-list paal-libraries-reset!
           paal-feature-list paal-import-grant-predicate)
   (begin
@@ -78,6 +79,10 @@
     (define (paal-macros-reset!)
       (set! %paal-macros '())
       (set! %paal-macro-specs '())
+      ;; A load-library! that errored out leaves its include-context frame up
+      ;; (same exposure %paal-loading has); a fresh program must not resolve
+      ;; its includes against the dead library's directory.
+      (set! %paal-include-dirs '())
       (paal-libraries-reset!))
 
     ;; ---------------------------------------------------------------
@@ -144,6 +149,47 @@
     ;; %paal-lib-paths, and --lib-path was only ever applied to the HOST copy —
     ;; so the loaded expander searched "." alone and silently found nothing.
     (define (paal-lib-paths-list) %paal-lib-paths)
+
+    ;; R7RS 4.1.7 leaves include resolution implementation-defined; kaappi
+    ;; resolves a relative path against the directory of the *including file*,
+    ;; and real libraries rely on it — (srfi 135) includes "135-impl.scm"
+    ;; beside its .sld, (srfi 171 meta) includes "../171-meta-impl.scm".
+    ;; Resolving against the process CWD instead made both unloadable from
+    ;; anywhere but one directory.
+    ;;
+    ;; The stack holds one context per file being processed: the .sld's
+    ;; directory while a library installs, the program file's while a program
+    ;; expands, #f for embedded sources, which have no directory and must not
+    ;; inherit an unrelated one.  Empty stack or #f on top means paths pass
+    ;; through untouched — the old behavior, which is also the right one for
+    ;; a bare filename run from its own directory.
+    ;;
+    ;; An include *inside an included file* resolves against the outer file's
+    ;; directory, not its own — the included forms are expanded after this
+    ;; frame is the context, and the sibling-file layout every real library
+    ;; uses makes the two the same directory.  Recorded rather than solved:
+    ;; solving it needs a context marker every form walker understands.
+    (define %paal-include-dirs '())
+
+    (define (include-dir-push! d)
+      (set! %paal-include-dirs (cons d %paal-include-dirs)))
+    (define (include-dir-pop!)
+      (set! %paal-include-dirs (cdr %paal-include-dirs)))
+
+    ;; #f for a path with no directory part.
+    (define (paal-dirname path)
+      (let loop ((i (- (string-length path) 1)))
+        (cond ((< i 0) #f)
+              ((char=? (string-ref path i) #\/) (substring path 0 i))
+              (else (loop (- i 1))))))
+
+    (define (resolve-include-path p)
+      (let ((top (and (pair? %paal-include-dirs) (car %paal-include-dirs))))
+        (if (or (not top)
+                (= (string-length p) 0)
+                (char=? (string-ref p 0) #\/))
+            p
+            (string-append top "/" p))))
 
     (define (paal-libraries-reset!)
       (set! %paal-libraries '())
@@ -417,7 +463,13 @@
                       ((and (pair? (car fs)) (eq? (caar fs) 'define-library))
                        (car fs))
                       (else (loop (cdr fs)))))))
-        (install-library! name (cddr form))))
+        ;; #f, not nothing: an embedded library has no directory, and letting
+        ;; it inherit whatever file happens to be enclosing the import would
+        ;; make its includes resolve differently per call site.
+        (include-dir-push! #f)
+        (let ((result (install-library! name (cddr form))))
+          (include-dir-pop!)
+          result)))
 
     (define (paal-read-forms-from-string text)
       (let ((port (open-input-string text)))
@@ -447,7 +499,14 @@
                       ((and (pair? (car fs)) (eq? (caar fs) 'define-library))
                        (car fs))
                       (else (loop (cdr fs)))))))
-        (install-library! name (cddr form))))
+        ;; The whole install runs under the .sld's directory, so its includes
+        ;; — declaration and body alike — resolve beside the file that names
+        ;; them.  No unwind protection, same as %paal-loading above: an error
+        ;; aborts the expansion, and the next fresh program resets the stack.
+        (include-dir-push! (paal-dirname path))
+        (let ((result (install-library! name (cddr form))))
+          (include-dir-pop!)
+          result)))
 
     (define (decls-of decls tag)
       (filter (lambda (d) (and (pair? d) (eq? (car d) tag))) decls))
@@ -469,7 +528,10 @@
             ((eq? (car d) 'cond-expand)
              (normalize-decls (cond-expand-select (cdr d))))
             ((eq? (car d) 'include-library-declarations)
-             (normalize-decls (apply append (map read-forms-from (cdr d)))))
+             (normalize-decls
+               (apply append
+                      (map (lambda (p) (read-forms-from (resolve-include-path p)))
+                           (cdr d)))))
             (else (list d))))
         decls))
 
@@ -1801,6 +1863,19 @@
         (check-import-scope! expanded)
         expanded))
 
+    ;; The entry point for expanding a *file's* forms: the same expansion under
+    ;; the file's directory as include context, so `(include "sibling.scm")` in
+    ;; a program resolves the way it does in a library — beside the file that
+    ;; wrote it, matching kaappi.  Guarded so the frame comes down when
+    ;; expansion raises: `check` keeps going after a broken file, and the next
+    ;; file's includes must not resolve against this one's directory.
+    (define (paal-expand-all-for-file path forms)
+      (include-dir-push! (paal-dirname path))
+      (guard (e (#t (include-dir-pop!) (raise e)))
+        (let ((expanded (paal-expand-all forms)))
+          (include-dir-pop!)
+          expanded)))
+
     ;; --- import scope checking --------------------------------------------
     ;;
     ;; What makes `(import (scheme base))` mean anything.  Emitting aliases
@@ -2449,10 +2524,11 @@
     ;; paal closure to HOST call-with-input-file cannot work under
     ;; self-hosting.
     (define (expand-include paths case-fold?)
-      (cons 'begin
-            (apply append
-                   (map (if case-fold? read-forms-from-ci read-forms-from)
-                        paths))))
+      (let ((read-one (if case-fold? read-forms-from-ci read-forms-from)))
+        (cons 'begin
+              (apply append
+                     (map (lambda (p) (read-one (resolve-include-path p)))
+                          paths)))))
 
     ;; ---------------------------------------------------------------
     ;; cond-expand

@@ -3239,6 +3239,40 @@
         (delete-file p)
         r))))
 
+;; Includes resolve against the directory of the file that wrote them —
+;; kaappi's behavior, and the shape real libraries rely on: (srfi 135)
+;; includes "135-impl.scm" beside its .sld, (srfi 171 meta) includes
+;; "../171-meta-impl.scm".  The suite runs from the repo root, so before the
+;; fix every case here failed with "cannot open input file".  Committed
+;; fixtures under tests/libs/inc/ and tests/fixtures/incprog/.
+(test-group "include paths resolve beside the including file"
+  (test-equal "library body include, sibling file" 135
+    (module-run "(import (inc withimpl)) (impl-answer)"))
+  (test-equal "include-ci through the same resolution" 42
+    (module-run "(import (inc withimpl)) (shouty-answer)"))
+  (test-equal "../-style include from a sub-directory library" 171
+    (module-run "(import (inc deeper updir)) (updir-answer)"))
+  (test-equal "include-library-declarations beside the .sld" 61
+    (module-run "(import (inc decls)) (decls-answer)"))
+  (test-equal "tree-walking pipeline agrees" 135
+    (pkaappi-run-string "(import (scheme base) (inc withimpl)) (impl-answer)"))
+  (test-equal "program file include, sibling file" 77
+    (pkaappi-run-file "tests/fixtures/incprog/prog.scm"))
+  (test-equal "program file include on the bytecode pipeline" 77
+    (pkaappi-run-bc-file "tests/fixtures/incprog/prog.scm"))
+  ;; A bare string program has no file, so its relative includes still
+  ;; resolve against the CWD — asserted so the passthrough stays deliberate
+  ;; rather than becoming an accident someone later "fixes".
+  (test-equal "string programs keep CWD resolution" 5
+    (let ((p "paal-include-cwd-tmp.scm"))
+      (let ((port (open-output-file p)))
+        (display "(define cwd-inc 5)\n" port)
+        (close-output-port port))
+      (let ((r (pkaappi-run-bc-string
+                 "(include \"paal-include-cwd-tmp.scm\") cwd-inc")))
+        (delete-file p)
+        r))))
+
 ;; ---------------------------------------------------------------
 ;; Library declarations beyond import/export/begin/include
 ;; ---------------------------------------------------------------

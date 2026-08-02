@@ -29,7 +29,7 @@
     ;; Reader
     paal-read paal-read-string paal-read-all paal-read-file
     ;; Expander
-    paal-expand paal-expand-all paal-macros-reset!
+    paal-expand paal-expand-all paal-expand-all-for-file paal-macros-reset!
     ;; Library path / module system
     paal-lib-path-add! paal-lib-paths-list paal-libraries-reset!
     ;; Compiler (analyzer)
@@ -97,7 +97,7 @@
       (paal-macros-reset!)
       (paal-eval-program
         (paal-analyze-all
-          (paal-expand-all
+          (paal-expand-all-for-file path
             (paal-read-file path)))))
 
     ;; --- Bytecode pipeline ---
@@ -107,6 +107,14 @@
 
     (define (pkaappi-compile src)
       (pkaappi-compile-forms (paal-read-string src)))
+
+    ;; Like pkaappi-compile, but for a file: expansion runs with the file's
+    ;; directory as include context, so a program's `(include "sibling.scm")`
+    ;; resolves beside the program, matching kaappi.
+    (define (pkaappi-compile-file path)
+      (paal-emit-program
+        (paal-analyze-all
+          (paal-expand-all-for-file path (paal-read-file path)))))
 
     ;; Globals first, then compile — pkaappi-make-globals resets the macro table,
     ;; and argument evaluation order is unspecified, so building it inline would
@@ -136,7 +144,7 @@
 
     (define (pkaappi-run-bc-file path)
       (let ((g (pkaappi-make-globals)))
-        (paal-run-bc (pkaappi-compile-forms (paal-read-file path)) g)))
+        (paal-run-bc (pkaappi-compile-file path) g)))
 
     ;; --- Stepping debugger ---
     ;;
@@ -172,7 +180,7 @@
         (display "paal debugger: h for help, c to run, q to quit\n")
         (guard (e (#t (paal-debug-stop!) (raise e)))
           (let ((result (paal-run-bc
-                          (pkaappi-compile-forms (paal-read-file path)) g)))
+                          (pkaappi-compile-file path) g)))
             (paal-debug-stop!)
             result))))
 
@@ -504,8 +512,7 @@
                       (interaction-environment    . ,(lambda () (car g-cell)))
                       (load                       . ,(lambda (path . rest)
                                                        (paal-run-bc
-                                                         (pkaappi-compile-forms
-                                                           (paal-read-file path))
+                                                         (pkaappi-compile-file path)
                                                          (if (pair? rest)
                                                              (car rest)
                                                              (car g-cell))))))
@@ -1058,7 +1065,7 @@
     ;; New names defined by the file are added to globals via define-global ops.
     ;; Returns globals for easy chaining: (pkaappi-load-file b (pkaappi-load-file a g))
     (define (pkaappi-load-file path globals)
-      (paal-run-bc (pkaappi-compile-forms (paal-read-file path)) globals)
+      (paal-run-bc (pkaappi-compile-file path) globals)
       globals)
 
     ;; Compile and evaluate a source string in an existing globals table.
@@ -1069,7 +1076,7 @@
     ;; --- Serializer high-level API ---
 
     (define (pkaappi-compile-to-file input output)
-      (let ((fn (pkaappi-compile-forms (paal-read-file input))))
+      (let ((fn (pkaappi-compile-file input)))
         (paal-write-bc-file fn output)))
 
     ;; --- Bytecode cache for user programs ---
@@ -1457,7 +1464,7 @@
                     #f))
         (let ((known (%paal-known-names)))
           (paal-macros-reset!)
-          (let ((fn (pkaappi-compile-forms (paal-read-file path))))
+          (let ((fn (pkaappi-compile-file path)))
             (for-each
               (lambda (w) (%paal-print-warning path w))
               (paal-lint-program fn (lambda (n) (and (memq n known) #t))))
@@ -1658,7 +1665,7 @@
                  "(paal-run-bc"
                  "  (paal-emit-program"
                  "    (paal-analyze-all"
-                 "      (paal-expand-all"
+                 "      (paal-expand-all-for-file \"" path "\""
                  "        (paal-read-file \"" path "\"))))"
                  "  (pkaappi-make-globals (quote " cmd-str ")))"))))
           ((file-exists? "lib/kaappi/paal/ir.sld")
@@ -1669,7 +1676,7 @@
                  "(paal-run-bc"
                  "  (paal-emit-program"
                  "    (paal-analyze-all"
-                 "      (paal-expand-all"
+                 "      (paal-expand-all-for-file \"" path "\""
                  "        (paal-read-file \"" path "\"))))"
                  "  (pkaappi-make-globals (quote " cmd-str ")))"))))
           (else
@@ -1695,7 +1702,7 @@
                "(paal-write-bc-file"
                "  (paal-emit-program"
                "    (paal-analyze-all"
-               "      (paal-expand-all"
+               "      (paal-expand-all-for-file \"" input "\""
                "        (paal-read-file \"" input "\"))))"
                "  \"" output "\")"))))
         ((file-exists? "lib/kaappi/paal/ir.sld")
@@ -1707,7 +1714,7 @@
                "(paal-write-bc-file"
                "  (paal-emit-program"
                "    (paal-analyze-all"
-               "      (paal-expand-all"
+               "      (paal-expand-all-for-file \"" input "\""
                "        (paal-read-file \"" input "\"))))"
                "  \"" output "\")"))))
         (else

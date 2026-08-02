@@ -309,7 +309,7 @@
                  (paal-read-bc-file path)
                  (paal-emit-program
                    (paal-analyze-all
-                     (paal-expand-all
+                     (paal-expand-all-for-file path
                        (paal-read-file path)))))))))
     ; features [--json] — capability report
     ((string=? (car args) "features")
@@ -328,14 +328,15 @@
      (if (null? (cdr args))
          (begin (display "error: expand: missing file\n") (exit 1))
          (for-each (lambda (form) (write form) (newline))
-                   (paal-expand-all (paal-read-file (cadr args))))))
+                   (paal-expand-all-for-file (cadr args)
+                     (paal-read-file (cadr args))))))
     ; ir <file> — print IR nodes (diagnostic)
     ((string=? (car args) "ir")
      (if (null? (cdr args))
          (begin (display "error: ir: missing file\n") (exit 1))
          (for-each (lambda (node) (write node) (newline))
                    (paal-analyze-all
-                     (paal-expand-all
+                     (paal-expand-all-for-file (cadr args)
                        (paal-read-file (cadr args)))))))
     ; Positional file [args...]: first arg doesn't start with '-'
     ; Remaining args are forwarded to (command-line) inside the user program.
