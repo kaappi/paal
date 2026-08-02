@@ -591,13 +591,12 @@
              ;; declaring a signature means kaappi keeps enforcing arity, so
              ;; there is nothing here to get wrong.
              ;;
-             ;; The higher-order ones do not work from the bytecode path:
-             ;; `spawn` and `ffi-callback` take a procedure, and a paal closure
-             ;; is a tagged vector that HOST code cannot enter — the same
-             ;; boundary that made dynamic-wind and call-with-input-file fail.
-             ;; They are bound anyway, because they work on the tree-walking
-             ;; path and because an unbound variable is a worse diagnostic than
-             ;; a type error naming the closure.
+             ;; The higher-order ones — `spawn` and `ffi-callback` take a
+             ;; procedure HOST code calls later — work here directly, since a
+             ;; tree-walking closure is a HOST lambda.  The bytecode path
+             ;; rebinds those two names to do-call! markers that wrap the paal
+             ;; closure in a HOST trampoline (see vm-bc.sld); these raw
+             ;; bindings are what the trampoline's %paal-host- entries capture.
              (ffi-open . ,ffi-open) (ffi-fn . ,ffi-fn) (ffi-close . ,ffi-close)
              (ffi-callback . ,ffi-callback)
              (ffi-callback-release . ,ffi-callback-release)

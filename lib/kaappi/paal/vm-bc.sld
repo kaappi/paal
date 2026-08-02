@@ -9,6 +9,7 @@
   (import (scheme base) (kaappi paal bytecode) (kaappi paal frame))
   (export paal-run-bc paal-make-globals
           %paal-guard-run-marker %paal-apply-marker %paal-callcc-marker
+          %paal-spawn-marker %paal-ffi-callback-marker
           paal-vm-raise-escape!
           paal-profile-start! paal-profile-report paal-profile-masked
           paal-coverage-start! paal-coverage-report
@@ -55,6 +56,14 @@
     ;; register file, which only do-call! can see.  Invoking the captured
     ;; continuation is a do-call! arm too, so (apply k args) works unchanged.
     (define %paal-callcc-marker '%paal-vm-call/cc)
+
+    ;; spawn and ffi-callback are markers for the boundary reason again, with
+    ;; a twist: their procedure argument is not called now but *later*, from
+    ;; HOST code — the fiber scheduler, or C.  The arm wraps the paal closure
+    ;; in a HOST trampoline over paal-call-value and hands that to the raw
+    ;; primitive, kept in the table under a %paal-host- name.
+    (define %paal-spawn-marker '%paal-vm-spawn)
+    (define %paal-ffi-callback-marker '%paal-vm-ffi-callback)
 
     ;; A continuation invoked outside the dispatch loop that captured it cannot
     ;; be resumed by returning — the loop that owns its frames is suspended
@@ -947,6 +956,49 @@
                (vector-set! regs abs-base f)
                (vector-set! regs (+ abs-base 1) cont)
                (do-call! regs globals frames frame f abs-base 1 base-off tail?))))
+
+        ; spawn — (spawn thunk).  The thunk is called later, by the fiber
+        ; scheduler, which is HOST code that cannot enter a paal closure.  The
+        ; trampoline allocates a fresh register file per entry: the fiber body
+        ; runs interleaved with the program that spawned it, and sharing one
+        ; file would let either side overwrite the other's live registers at
+        ; the first yield.  paal-call-value gives the entry its own loop
+        ; identity, so a continuation captured inside the fiber cannot be
+        ; replayed from outside it.  (Fiber switches interleaving *separate*
+        ; paal episodes share the one '%paal-vm-loop cell — call/cc across an
+        ; interleaving is untested territory; see docs/TODO.md.)
+        ;
+        ; In the paal-compiled copy of this VM the trampoline is itself a paal
+        ; closure again, so the self-hosted path keeps the boundary type
+        ; error — the same class of HOST-only limit as the debugger hooks.
+        ((eq? callee %paal-spawn-marker)
+         (if (not (= nargs 1))
+             (error "paal-bc: spawn expects one thunk")
+             (let ((f   (vector-ref regs (+ abs-base 1)))
+                   (raw (globals-ref! globals '%paal-host-spawn)))
+               (deliver-result! regs globals frames frame abs-base
+                                (raw (lambda ()
+                                       (let ((fregs (make-vector REGS-SIZE #f)))
+                                         (paal-call-value fregs globals 0 f '()))))
+                                tail?))))
+
+        ; ffi-callback — (ffi-callback proc arg-types ret-type).  Same shape:
+        ; only the procedure needs wrapping, the type lists pass through, and
+        ; the fresh register file per invocation keeps a callback fired
+        ; mid-run reentrant.
+        ((eq? callee %paal-ffi-callback-marker)
+         (if (< nargs 1)
+             (error "paal-bc: ffi-callback expects a procedure first")
+             (let* ((given (call-args regs abs-base nargs))
+                    (f     (car given))
+                    (raw   (globals-ref! globals '%paal-host-ffi-callback)))
+               (deliver-result! regs globals frames frame abs-base
+                                (apply raw
+                                       (lambda args
+                                         (let ((fregs (make-vector REGS-SIZE #f)))
+                                           (paal-call-value fregs globals 0 f args)))
+                                       (cdr given))
+                                tail?))))
 
         ; Continuation invoke — reached by direct (k v) calls and through
         ; apply's re-dispatch, so (apply k args) needs nothing extra.  No

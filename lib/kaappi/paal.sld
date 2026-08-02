@@ -8,6 +8,8 @@
           (scheme file)
           (scheme write)
           (scheme process-context)
+          (kaappi ffi)
+          (kaappi fibers)
           (kaappi paal bytecode)
           (kaappi paal frame)
           (kaappi paal embedded)
@@ -384,6 +386,17 @@
                       ; VM is running supplies the catch and the closure callbacks
                       ; (see vm-bc.sld).
                       (%paal-guard-run            . ,%paal-guard-run-marker)
+                      ; The two primitives whose procedure argument is called
+                      ; *later*, from HOST code.  The markers shadow the raw
+                      ; bindings base-alist carries from paal-initial-env;
+                      ; do-call! wraps the paal closure in a HOST trampoline
+                      ; and hands it to the raw primitive kept just below.
+                      ; First-order fiber and ffi names (yield, channels,
+                      ; ffi-fn, …) stay raw — plain data crosses unaided.
+                      (spawn                      . ,%paal-spawn-marker)
+                      (ffi-callback               . ,%paal-ffi-callback-marker)
+                      (%paal-host-spawn           . ,spawn)
+                      (%paal-host-ffi-callback    . ,ffi-callback)
                       ;; --- (scheme eval) / (scheme load) / (scheme repl) ---
                       ;;
                       ;; eval re-enters the pipeline on a datum the program
@@ -632,6 +645,22 @@
              ; NB this blob is a Scheme string literal: a double quote anywhere
              ; in it, comments included, ends the string and silently wrecks the
              ; rest of the library.
+             ;
+             ; The VM markers are what apply, call/cc, spawn and ffi-callback
+             ; resolve to in this table, and each behaves as a procedure when
+             ; called -- do-call! has an arm per marker -- so procedure? must
+             ; say so.  The %paal-vm- namespace is do-call!'s own; a user
+             ; datum colliding with it is already inside paal's plumbing.
+             (define (%paal-vm-marker? x)
+               (if (eq? x '%paal-vm-apply)
+                   #t
+                   (if (eq? x '%paal-vm-call/cc)
+                       #t
+                       (if (eq? x '%paal-vm-guard-run)
+                           #t
+                           (if (eq? x '%paal-vm-spawn)
+                               #t
+                               (eq? x '%paal-vm-ffi-callback))))))
              (define (procedure? x)
                (if (%paal-host-procedure? x)
                    #t
@@ -645,7 +674,9 @@
                            (if (= (vector-length x) 7)
                                (eq? (vector-ref x 0) '%paal-continuation)
                                #f))
-                       #f)))
+                       (if (symbol? x)
+                           (%paal-vm-marker? x)
+                           #f))))
              ; map/for-each take any number of lists and stop at the shortest,
              ; per R7RS.  They used to accept two and silently ignore the rest,
              ; so (map + '(1 2) '(3 4) '(5 6)) answered (4 6).

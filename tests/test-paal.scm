@@ -4103,16 +4103,55 @@
     (pkaappi-run-bc-string
       "(let ((c (make-channel))) (channel-send c 42)
          (list (channel? c) (channel-receive c)))"))
-  ;; spawn takes a procedure.  On the bytecode path that is a tagged vector
-  ;; HOST code cannot enter -- the same boundary that made dynamic-wind and
-  ;; call-with-input-file fail -- so it is reachable but not usable there.
+  ;; spawn and ffi-callback take a procedure that HOST code calls *later* —
+  ;; the fiber scheduler, or C.  On the bytecode path they are do-call!
+  ;; markers now: the arm wraps the paal closure in a HOST trampoline over
+  ;; paal-call-value with a fresh register file per entry, since a fiber body
+  ;; interleaves with its spawner and sharing one file would corrupt both at
+  ;; the first yield.  The markers answer procedure? like apply and call/cc.
   (test-equal "spawn works on the tree-walking path"
     #t
     (pkaappi-run-string "(fiber? (spawn (lambda () 1)))"))
-  (test-equal "spawn on the bytecode path fails at the closure boundary"
-    'boundary
-    (guard (e (#t 'boundary))
-      (pkaappi-run-bc-string "(fiber? (spawn (lambda () 1)))"))))
+  (test-equal "spawn crosses the boundary on the bytecode path"
+    #t
+    (pkaappi-run-bc-string "(fiber? (spawn (lambda () 1)))"))
+  (test-equal "a fiber runs a paal thunk to completion" 7
+    (pkaappi-run-bc-string
+      "(import (scheme base) (kaappi fibers))
+       (fiber-join (spawn (lambda () (+ 3 4))))"))
+  ;; A loop inside the fiber exercises the fiber's own register file.
+  (test-equal "a fiber body computes in its own register file" 4950
+    (pkaappi-run-bc-string
+      "(import (scheme base) (kaappi fibers))
+       (fiber-join (spawn (lambda ()
+         (let loop ((i 0) (s 0)) (if (= i 100) s (loop (+ i 1) (+ s i)))))))"))
+  ;; Channel sends and receives force a deterministic interleaving, so this
+  ;; passes or fails regardless of scheduling order — and each switch back
+  ;; and forth is a register-file corruption opportunity if the fiber shared
+  ;; the spawner's.
+  (test-equal "a fiber and its spawner ping-pong through channels" '(1 11)
+    (pkaappi-run-bc-string
+      "(import (scheme base) (kaappi fibers))
+       (let ((a (make-channel)) (b (make-channel)))
+         (spawn (lambda ()
+           (channel-send a 1)
+           (channel-send a (+ (channel-receive b) 1))))
+         (let* ((x (channel-receive a))
+                (y (begin (channel-send b (* x 10)) (channel-receive a))))
+           (list x y)))"))
+  ;; Creation, predicate and release only: invoking the callback needs a C
+  ;; harness.  (int)→void is one of the seven signatures kaappi supports.
+  (test-equal "ffi-callback wraps a paal procedure" #t
+    (pkaappi-run-bc-string
+      "(import (scheme base) (kaappi ffi))
+       (let ((cb (ffi-callback (lambda (x) x) '(int) 'void)))
+         (let ((ok (ffi-callback? cb)))
+           (ffi-callback-release cb)
+           ok))"))
+  (test-equal "the markers answer procedure?" '(#t #t #t #t)
+    (pkaappi-run-bc-string
+      "(list (procedure? spawn) (procedure? ffi-callback)
+             (procedure? apply) (procedure? call/cc))")))
 
 ;; ---------------------------------------------------------------
 ;; Stepping debugger

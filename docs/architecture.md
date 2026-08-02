@@ -647,8 +647,20 @@ copies compile the same explicit `vector` / `vector-ref` code.
 | guard marker | `%paal-vm-guard-run` | `vm-bc.sld` |
 | apply marker | `%paal-vm-apply` | `vm-bc.sld` |
 | call/cc marker | `%paal-vm-call/cc` | `vm-bc.sld` |
+| spawn marker | `%paal-vm-spawn` | `vm-bc.sld` |
+| ffi-callback marker | `%paal-vm-ffi-callback` | `vm-bc.sld` |
 | raise wrapper | `%paal-vm-escape` | `vm-bc.sld` |
 | continuation-invoke escape | `%paal-vm-cont-invoke` | `vm-bc.sld` |
+
+`spawn` and `ffi-callback` are markers for the boundary reason with a twist: their
+procedure argument is called *later*, from HOST code — the fiber scheduler, or C. The
+arm wraps the paal closure in a HOST trampoline over `paal-call-value` and hands that
+to the raw primitive (kept under a `%paal-host-` name). Each trampoline entry
+allocates a fresh register file — a fiber body interleaves with its spawner, and
+sharing one would corrupt both at the first yield — and runs as its own dispatch-loop
+episode. The paal-compiled copy of the VM builds its trampoline as a paal closure
+again, so the self-hosted path keeps the boundary type error; the markers answer
+`procedure?` like the others.
 
 `<frame>` stays a `define-record-type`: frames are created and consumed inside a single
 VM invocation and never enter globals.

@@ -906,6 +906,27 @@ no value representation and no cross-copy protocol — so they can land in any o
 
       Only program files go through paal's reader; `.sld` and `include`d files
       are read by HOST kaappi's `read`, which already honours both.
+- [x] **`spawn` and `ffi-callback` cross the boundary** — the two primitives
+      whose procedure argument is called *later*, from HOST code (the fiber
+      scheduler, or C).  On the bytecode path each is a do-call! marker now:
+      the arm wraps the paal closure in a HOST trampoline over
+      `paal-call-value` and hands that to the raw primitive, kept in the
+      table under a `%paal-host-` name.  Every trampoline entry allocates a
+      fresh register file — a fiber body interleaves with its spawner, and
+      sharing one file would let either side overwrite the other's live
+      registers at the first yield — and gets its own dispatch-loop episode,
+      so a continuation captured inside a fiber cannot be replayed outside
+      it.  The markers answer `procedure?`, and that fix covered `apply` and
+      `call/cc` too, which had quietly answered `#f` since becoming markers.
+
+      Two documented limits.  The paal-compiled copy of the VM builds its
+      trampoline as a paal closure again, so the *self-hosted* path keeps the
+      boundary type error — same class of HOST-only limit as the debugger
+      hooks.  And fiber switches interleave separate paal episodes over the
+      one shared `'%paal-vm-loop` cell: `call/cc` captured in one fiber and
+      chased across an interleaving is untested territory — the episode
+      identity a fiber restores on exit is the one from its entry, which
+      another fiber may have replaced since.
 
 Deferred with reasons: R7RS §4.3's keyword-shadowing torture cases (variables
 named `let`, `if`) need an environment threaded through every `expand-*`; and
