@@ -1182,6 +1182,34 @@
 ;;
 ;; Referential transparency is *not* provided — see the group's last test.
 
+;; Quoted data in a template takes pattern variables but not the expander's
+;; renames: hygiene names exist to steer resolution, and quoted data resolves
+;; nothing.  Before the penv/subst split a template binding tmp and also
+;; mentioning 'tmp returned the %h- rename as a datum.
+(test-group "define-syntax: quote protection"
+  (test-equal "a bound identifier quoted in the template stays itself"
+    '(1 tmp)
+    (pkaappi-run-bc-string
+      "(define-syntax q1
+         (syntax-rules () ((_) (let ((tmp 1)) (list tmp 'tmp)))))
+       (q1)"))
+  (test-equal "a quoted free identifier stays itself"
+    'car
+    (pkaappi-run-bc-string
+      "(define-syntax q2 (syntax-rules () ((_) 'car))) (q2)"))
+  (test-equal "a pattern variable substitutes inside quoted data"
+    '(a 99)
+    (pkaappi-run-bc-string
+      "(define-syntax q3 (syntax-rules () ((_ x) '(a x)))) (q3 99)"))
+  (test-equal "ellipsis expansion works inside quoted data"
+    '(1 2 3)
+    (pkaappi-run-bc-string
+      "(define-syntax q4 (syntax-rules () ((_ x ...) '(x ...)))) (q4 1 2 3)"))
+  (test-equal "a quoted keyword stays itself"
+    '(let if)
+    (pkaappi-run-bc-string
+      "(define-syntax q5 (syntax-rules () ((_) '(let if)))) (q5)")))
+
 (test-group "define-syntax: hygiene"
   (test-equal "introduced let binding does not capture the user's variable"
     '(2 1)

@@ -856,69 +856,92 @@
     ;; Expand `subtempl` across `depth` levels of ellipsis, returning a flat list
     ;; of the results.  At depth 1 each iteration contributes one element; deeper
     ;; down each contributes a list, and those are concatenated — which is what
-    ;; makes the extra ellipses splice rather than nest.
-    (define (expand-ellipsis subtempl depth env)
-      (let* ((evars (find-ellipsis-vars subtempl env))
+    ;; makes the extra ellipses splice rather than nest.  Only penv is sliced
+    ;; per iteration — ellipsis values are pattern bindings; subst rides along.
+    (define (expand-ellipsis subtempl depth penv subst)
+      (let* ((evars (find-ellipsis-vars subtempl penv))
              (n     (if (null? evars)
                         0
-                        (length (ellipsis-vals (cdr (assq (car evars) env)))))))
+                        (length (ellipsis-vals (cdr (assq (car evars) penv)))))))
         (concat-lists
           (map (lambda (i)
                  (let* ((point-env
                          (map (lambda (v)
-                                (cons v (list-ref (ellipsis-vals (cdr (assq v env))) i)))
+                                (cons v (list-ref (ellipsis-vals (cdr (assq v penv))) i)))
                               evars))
-                        (local-env (append point-env env)))
+                        (local-env (append point-env penv)))
                    (if (= depth 1)
-                       (list (instantiate-template subtempl local-env))
-                       (expand-ellipsis subtempl (- depth 1) local-env))))
+                       (list (instantiate-template subtempl local-env subst))
+                       (expand-ellipsis subtempl (- depth 1) local-env subst))))
                (iota n)))))
 
     ;; (<ellipsis> <template>) — R7RS ellipsis escape: the template is used with
     ;; ellipses having no special meaning.  Pattern variables still substitute.
     ;; Overwhelmingly used as (... ...) to emit a literal ellipsis, in a macro
     ;; that itself expands to a macro definition.
-    (define (instantiate-escaped tmpl env)
+    (define (instantiate-escaped tmpl penv subst)
       (cond
         ((symbol? tmpl)
-         (let ((b (assq tmpl env)))
-           (if b (cdr b) tmpl)))
+         (let ((b (assq tmpl penv)))
+           (if b
+               (cdr b)
+               (let ((r (assq tmpl subst)))
+                 (if r (cdr r) tmpl)))))
         ((pair? tmpl)
-         (cons (instantiate-escaped (car tmpl) env)
-               (instantiate-escaped (cdr tmpl) env)))
+         ;; Quoted data takes pattern variables but not renames — same rule as
+         ;; instantiate-template below.
+         (if (and (eq? (car tmpl) 'quote) (pair? (cdr tmpl)) (null? (cddr tmpl)))
+             (list 'quote (instantiate-escaped (cadr tmpl) penv '()))
+             (cons (instantiate-escaped (car tmpl) penv subst)
+                   (instantiate-escaped (cdr tmpl) penv subst))))
         (else tmpl)))
 
-    ;; Instantiate a template with pattern-variable bindings.
-    ;; Ellipsis variables have (ellipsis-vals ...) values.
-    (define (instantiate-template tmpl env)
+    ;; Instantiate a template.  Two environments with different reach:
+    ;;
+    ;;   penv   pattern variables — substituted everywhere, (quote ...)
+    ;;          included, because R7RS says a pattern variable in quoted data
+    ;;          stands for the matched form.
+    ;;   subst  the expander's own renames — hygiene %h- names for
+    ;;          template-bound identifiers and %gref% marks for free ones —
+    ;;          suppressed under quote, because those exist to steer variable
+    ;;          *resolution* and quoted data resolves nothing.  Without the
+    ;;          split, a template reading (let ((tmp 1)) (list tmp 'tmp))
+    ;;          returned (1 %h-tmp-3): the rename leaked into the datum.
+    ;;
+    ;; Ellipsis variables have (ellipsis-vals ...) values in penv.
+    (define (instantiate-template tmpl penv subst)
       (cond
-        ;; Symbol: look up in env
+        ;; Symbol: pattern variables first, then renames
         ((symbol? tmpl)
-         (let ((b (assq tmpl env)))
+         (let ((b (assq tmpl penv)))
            (if b
                (let ((val (cdr b)))
                  (if (ellipsis? val)
                      (error "syntax-rules: ellipsis variable used outside ellipsis template" tmpl)
                      val))
-               tmpl)))
+               (let ((r (assq tmpl subst)))
+                 (if r (cdr r) tmpl)))))
         ;; Non-pair: datum
         ((not (pair? tmpl)) tmpl)
         ;; Ellipsis escape — must precede the ellipsis-template case, since
         ;; (... ...) also looks like "subtemplate followed by ellipsis".
         ((and (eq? (car tmpl) '...) (pair? (cdr tmpl)) (null? (cddr tmpl)))
-         (instantiate-escaped (cadr tmpl) env))
+         (instantiate-escaped (cadr tmpl) penv subst))
+        ;; Quoted data: pattern variables substitute, renames do not.
+        ((and (eq? (car tmpl) 'quote) (pair? (cdr tmpl)) (null? (cddr tmpl)))
+         (list 'quote (instantiate-template (cadr tmpl) penv '())))
         ;; Ellipsis template: (subtempl ... [... ...]) rest
         ((and (pair? (cdr tmpl)) (eq? (cadr tmpl) '...))
          (let* ((subtempl  (car tmpl))
                 (depth     (count-ellipses (cdr tmpl)))
                 (rest-tmpl (drop-ellipses (cdr tmpl))))
            (append
-             (expand-ellipsis subtempl depth env)
-             (instantiate-template rest-tmpl env))))
+             (expand-ellipsis subtempl depth penv subst)
+             (instantiate-template rest-tmpl penv subst))))
         ;; Regular pair
         (else
-         (cons (instantiate-template (car tmpl) env)
-               (instantiate-template (cdr tmpl) env)))))
+         (cons (instantiate-template (car tmpl) penv subst)
+               (instantiate-template (cdr tmpl) penv subst)))))
 
     ;; A transformer whose output is expanded in `env` rather than in whatever
     ;; macro environment is current where the macro is used.  let-syntax needs
@@ -1115,9 +1138,10 @@
                            (env      (match-syntax pat-args (cdr form) literals)))
                       (if env
                           ;; Fresh renames per expansion, so two uses of the same
-                          ;; macro never share an introduced name.  They go into
-                          ;; the same env instantiate-template already consults,
-                          ;; after the pattern bindings so those take precedence.
+                          ;; macro never share an introduced name.  Pattern
+                          ;; bindings and renames travel separately: pattern
+                          ;; variables substitute even inside quoted data,
+                          ;; renames never do — see instantiate-template.
                           (let* ((pvars   (map car env))
                                  (bound   (template-bound-ids template pvars literals))
                                  (renames (map (lambda (s)
@@ -1128,8 +1152,7 @@
                                  (frees   (referential-renames
                                             template pvars bound literals)))
                             (instantiate-template
-                              template
-                              (append env renames frees)))
+                              template env (append renames frees)))
                           (loop (cdr cls))))))))))
 
     ;; ---------------------------------------------------------------
