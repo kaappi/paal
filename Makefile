@@ -102,19 +102,31 @@ embed-srfi:
 	python3 tools/embed-srfi.py
 
 # Build the pipeline bytecode cache (speeds up self-hosted run/compile).
-# Run once after checkout, and again whenever a paal library file changes.
-pbc-pipeline:
+# Run once after checkout, and again whenever a paal library file changes —
+# make works out which of the nine are actually stale.
+#
+# A stage's .pbc depends on that stage's source and on every source that does
+# the compiling: src/main.scm drives the HOST pipeline through reader,
+# expander, compiler (with ir), emitter, and serializer, against the ISA in
+# bytecode.sld — so a change to any of those changes what every .pbc should
+# contain, and all nine rebuild.  The runtime-only files (frame.sld,
+# vm-bc.sld) are deliberately not in that set: a VM fix does not change
+# emitted bytecode, and the distinction is what makes the target incremental
+# at all — after a vm-bc-only change, eight of the nine stay up to date.
+# The full rebuild is ~25 minutes (paal compiling paal, interpreted); the
+# stages are independent, so `make -j3 pbc-pipeline` parallelizes it.
+PBC_STAGES = ir bytecode reader expander compiler frame emitter vm-bc serializer
+PBC_FILES  = $(PBC_STAGES:%=cache/paal-%.pbc)
+PBC_COMPILER_DEPS = $(addprefix lib/kaappi/paal/, \
+	reader.sld expander.sld compiler.sld ir.sld emitter.sld \
+	serializer.sld bytecode.sld) src/main.scm
+
+cache/paal-%.pbc: lib/kaappi/paal/%.sld $(PBC_COMPILER_DEPS)
 	@mkdir -p cache
-	$(KAAPPI) $(LIBS) src/main.scm compile lib/kaappi/paal/ir.sld        -o cache/paal-ir.pbc
-	$(KAAPPI) $(LIBS) src/main.scm compile lib/kaappi/paal/bytecode.sld  -o cache/paal-bytecode.pbc
-	$(KAAPPI) $(LIBS) src/main.scm compile lib/kaappi/paal/reader.sld    -o cache/paal-reader.pbc
-	$(KAAPPI) $(LIBS) src/main.scm compile lib/kaappi/paal/expander.sld  -o cache/paal-expander.pbc
-	$(KAAPPI) $(LIBS) src/main.scm compile lib/kaappi/paal/compiler.sld  -o cache/paal-compiler.pbc
-	$(KAAPPI) $(LIBS) src/main.scm compile lib/kaappi/paal/frame.sld     -o cache/paal-frame.pbc
-	$(KAAPPI) $(LIBS) src/main.scm compile lib/kaappi/paal/emitter.sld   -o cache/paal-emitter.pbc
-	$(KAAPPI) $(LIBS) src/main.scm compile lib/kaappi/paal/vm-bc.sld     -o cache/paal-vm-bc.pbc
-	$(KAAPPI) $(LIBS) src/main.scm compile lib/kaappi/paal/serializer.sld -o cache/paal-serializer.pbc
-	@echo "Pipeline cache built in cache/"
+	$(KAAPPI) $(LIBS) src/main.scm compile $< -o $@
+
+pbc-pipeline: $(PBC_FILES)
+	@echo "Pipeline cache up to date in cache/"
 
 clean-cache:
 	rm -f cache/*.pbc
