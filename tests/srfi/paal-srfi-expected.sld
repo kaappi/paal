@@ -8,49 +8,87 @@
     ;; fail line carries the reason as a trailing comment.
     (define expected-verdicts
       '(
+        ("srfi-19-tests.scm" fail) ; needs (scheme time) native time objects (make-time, time?, time-second …) — a Phase 2 host-native binding
         ("srfi-258.scm" pass)
         ("srfi-27-unit.scm" pass)
+        ("srfi0.scm" pass)
         ("srfi1-ext.scm" pass)
         ("srfi1.scm" pass)
-        ("srfi101.scm" fail) ; car: not a pair (test-runner record) — base-name capture across the static link
+        ("srfi101.scm" fail) ; car: not a pair (a test-runner record) — base-name capture across the static link
         ("srfi113-audit.scm" pass)
         ("srfi113.scm" pass)
+        ("srfi115.scm" pass)
+        ("srfi116.scm" pass)
         ("srfi117.scm" pass)
+        ("srfi118.scm" pass)
         ("srfi125.scm" pass)
+        ("srfi127.scm" pass)
         ("srfi128.scm" pass)
+        ("srfi129.scm" pass)
         ("srfi13-charset.scm" pass)
         ("srfi13-ext.scm" pass)
         ("srfi13-startend.scm" pass)
+        ("srfi130.scm" pass)
         ("srfi132.scm" pass)
         ("srfi133-ext.scm" pass)
+        ("srfi134.scm" pass)
         ("srfi135.scm" pass)
+        ("srfi139.scm" fail) ; syntax-parameterize must adjust the live transformer through a macro boundary; paal binds let-syntax lexically
         ("srfi140.scm" pass)
         ("srfi141.scm" pass)
+        ("srfi143.scm" pass)
+        ("srfi144.scm" pass)
+        ("srfi146-differential.scm" fail) ; paal-emitter: ir:define in expression position
+        ("srfi146-reference.scm" pass)
+        ("srfi146.scm" pass)
+        ("srfi147.scm" fail) ; a bare-keyword transformer alias naming a macro that is not itself syntax-rules
         ("srfi148.scm" fail) ; syntax-rules: no matching pattern (em …) — needs the un-adapted (srfi 26), blocked on Phase 4
+        ("srfi149.scm" fail) ; SRFI 149's relaxed ellipsis depths: a variable used outside its ellipsis template
         ("srfi151.scm" pass)
         ("srfi152-audit.scm" pass)
         ("srfi152.scm" pass)
         ("srfi158.scm" pass)
+        ("srfi17.scm" pass)
         ("srfi171.scm" pass)
         ("srfi2.scm" pass)
         ("srfi23.scm" pass)
+        ("srfi25.scm" fail) ; array-ref with a packed index *array* answers #f (1 of 46)
         ("srfi26.scm" pass)
         ("srfi260.scm" pass)
         ("srfi27-audit.scm" pass)
         ("srfi27-state.scm" pass)
+        ("srfi30.scm" pass)
         ("srfi35-audit.scm" pass)
         ("srfi35.scm" pass)
+        ("srfi36.scm" pass)
+        ("srfi37.scm" pass)
+        ("srfi38.scm" pass)
         ("srfi39.scm" pass)
-        ("srfi41.scm" fail) ; exit 1
-        ("srfi42.scm" fail) ; syntax-rules: no matching pattern (%gref%%srfi%42%%do-ec %h-%ec-stop-6089 (nested (:range i 2) (:range j 2)) (%core%set!…
+        ("srfi41.scm" fail) ; the 4 stream-of assertions — syntax-object provenance, a Phase 4 target
+        ("srfi42.scm" fail) ; do-ec: no matching pattern on the threaded stop variable — syntax-object provenance, a Phase 4 target
+        ("srfi43.scm" pass)
+        ("srfi45.scm" pass)
+        ("srfi46.scm" fail) ; custom-ellipsis hygiene and two ellipses in one pattern (4 of 31)
         ("srfi48.scm" pass)
+        ("srfi5.scm" pass)
+        ("srfi51.scm" pass)
+        ("srfi54.scm" pass)
+        ("srfi6.scm" pass)
         ("srfi60.scm" pass)
+        ("srfi61.scm" pass)
+        ("srfi62.scm" pass)
         ("srfi64.scm" pass)
         ("srfi67.scm" pass)
         ("srfi69-ext.scm" pass)
         ("srfi69.scm" pass)
+        ("srfi7.scm" pass)
         ("srfi70.scm" pass)
+        ("srfi71.scm" pass)
         ("srfi78.scm" pass)
-        ("srfi9.scm" fail) ; exit 1
+        ("srfi86.scm" pass)
+        ("srfi87.scm" pass)
+        ("srfi9.scm" fail) ; the 4 assertions that probe the tagged-vector record representation directly
+        ("srfi94.scm" pass)
         ("srfi95.scm" pass)
+        ("srfi98.scm" pass)
         ))))

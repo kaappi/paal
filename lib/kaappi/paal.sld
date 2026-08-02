@@ -1048,6 +1048,22 @@
                (let ((port (open-output-file path)))
                  (let ((r (parameterize ((current-output-port port)) (thunk))))
                    (close-output-port port)
+                   r)))
+             ; Also paal-side, for a different reason: the HOST versions
+             ; would have to *call* their procedure argument, and a paal
+             ; closure on this pipeline is a vector the host cannot enter.
+             ; Opening and closing around a paal-level call keeps the whole
+             ; crossing on this side.  R7RS 6.13.1: the port is closed when
+             ; proc returns.
+             (define (call-with-input-file path proc)
+               (let ((port (open-input-file path)))
+                 (let ((r (proc port)))
+                   (close-input-port port)
+                   r)))
+             (define (call-with-output-file path proc)
+               (let ((port (open-output-file path)))
+                 (let ((r (proc port)))
+                   (close-output-port port)
                    r)))")
           g)
         g))

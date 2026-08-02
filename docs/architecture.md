@@ -254,6 +254,22 @@ quote and quasiquote internals, the ellipsis, `_`, `syntax-rules` itself, and th
 library forms. Neither `%core%` nor `%kw-` nor `%mac-` ever reaches the IR — a leak
 assertion in the suite pins all three.
 
+The same marks carry a second rule, which the SRFI shelf forced: **an imported
+macro may be named for a core form, and it wins**. `(srfi 61)` exports `cond`,
+`(srfi 5)` and `(srfi 71)` export `let`; a program importing one of those gets a
+`cond` that understands `(generator guard => receiver)` clauses, so expression
+dispatch consults the global macro table *before* the derived-form table, exactly
+as body dispatch already did. What keeps that from eating the expander alive is
+that every keyword a desugaring emits is `%core%`-marked at the emission site:
+`case` expands into a `let`, and if a library's `let` could capture that one, the
+expansion would recurse forever. So the marks are the machinery's spelling for
+keywords the way `%paal-base-*` is its spelling for values — the two halves of one
+rule. Inside `install-library!` an exported macro's own name resolves as
+`%gref%<name>` in its templates, so a shadowing macro that calls itself reaches
+the macro rather than the keyword it shadows. And `cond-expand`'s requirement
+grammar reads past the marks, since a requirement written in a template arrives
+with its `and` marked.
+
 That is the capture half. The other half — referential transparency — is handled by
 marking a template's *free* identifiers `%gref%<name>`, which the emitter and the
 tree-walking VM both resolve straight to the top level, past any binding the use site
@@ -766,6 +782,15 @@ again, so the self-hosted path keeps the boundary type error; the markers answer
 
 `<frame>` stays a `define-record-type`: frames are created and consumed inside a single
 VM invocation and never enter globals.
+
+A HOST procedure that *calls* its procedure argument has the same problem without the
+marker treatment, and the cheap answer is to keep the call on this side. `with-input-
+from-file` and `with-output-to-file` were already paal-side (they rebind port
+parameters, which are paal's); `call-with-input-file` and `call-with-output-file`
+joined them — they open, call, and close, so the only crossing is a paal-level call.
+The tree-walking VM keeps its own pair, where the closure *is* a HOST procedure but
+answers through the trampoline, so the wrapper has to run the trampoline rather than
+hand a pending thunk back to the caller.
 
 The cost is that a user vector of the right length whose first slot is one of those
 symbols would be mistaken for the internal type. The gain is that closures built by

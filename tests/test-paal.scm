@@ -4739,6 +4739,85 @@
        (list (=? (make-default-comparator) (make-uq 1) (make-uq 1))
              (<? (make-default-comparator) (make-uq 1) (make-uq 2)))")))
 
+(test-group "a library may export a core keyword's name"
+  ;; An imported macro named for a core form has to win over the
+  ;; derived-form table at the use site — that is the whole point of
+  ;; (srfi 61)'s `cond` and (srfi 5)/(srfi 71)'s `let`.  Expression
+  ;; position now consults the global macro table before dispatch-core,
+  ;; as body position already did.
+  (test-equal "an imported cond macro handles its own clause shape" 'second
+    (pkaappi-run-bc-string
+      "(import (scheme base) (srfi 61))
+       (cond (#f 'first) (42 number? => (lambda (x) 'second)) (else 'third))"))
+  (test-equal "the tree-walker agrees" 'second
+    (pkaappi-run-string
+      "(import (scheme base) (srfi 61))
+       (cond (#f 'first) (42 number? => (lambda (x) 'second)) (else 'third))"))
+  ;; The other direction: machinery must not be captured by the shadow.
+  ;; Every keyword a desugaring emits is %core%-marked, so (srfi 71)'s
+  ;; `let` does not swallow the `let` that `case` or `do` expands into —
+  ;; which would recurse until the process died.
+  (test-equal "machinery keywords survive a library that shadows let" '(3 both)
+    (pkaappi-run-bc-string
+      "(import (scheme base) (srfi 71))
+       (list (let ((a b (values 1 2))) (+ a b))
+             (case 7 ((7) 'both) (else 'no)))"))
+  ;; A macro's template may name the macro itself; with the name shared
+  ;; with a keyword, the self-call must reach the macro, not the keyword.
+  (test-equal "a self-recursive shadowing macro recurses into itself" 6
+    (pkaappi-run-bc-string
+      "(import (scheme base) (srfi 5))
+       (let loop ((i 0) (acc 0))
+         (if (= i 4) acc (loop (+ i 1) (+ acc i))))")))
+
+(test-group "more fixes flushed out by the SRFI shelf"
+  ;; (set! (proc arg ...) val) → ((setter proc) arg ... val), the SRFI 17
+  ;; desugaring kaappi does while lowering.  `setter` is named bare, so a
+  ;; program that never imported (srfi 17) gets an unbound variable.
+  (test-equal "generalized set! goes through the setter table" '((9 2) #(1 9))
+    (pkaappi-run-bc-string
+      "(import (scheme base) (srfi 17))
+       (define p (list 1 2))
+       (define v (vector 1 2))
+       (set! (car p) 9)
+       (set! (vector-ref v 1) 9)
+       (list p v)"))
+  (test-equal "the tree-walker agrees on generalized set!" '(9 2)
+    (pkaappi-run-string
+      "(import (scheme base) (srfi 17))
+       (define p (list 1 2))
+       (set! (car p) 9)
+       p"))
+  ;; R7RS 4.2.5: a chain of delay-forces must force in bounded space.  The
+  ;; thunk hands its promise back to force, whose loop chases the chain,
+  ;; rather than forcing it inside the thunk and recursing per link.
+  (test-equal "a long delay-force chain forces iteratively" 'done
+    (pkaappi-run-bc-string
+      "(letrec ((chain (lambda (n)
+                         (if (= n 0) (delay 'done) (delay-force (chain (- n 1)))))))
+         (force (chain 10000)))"))
+  ;; call-with-input-file / call-with-output-file call their procedure
+  ;; argument, and on the bytecode pipeline that argument is a vector the
+  ;; host cannot enter — so both are paal-side, opening and closing around
+  ;; a paal-level call.
+  (test-equal "call-with-output-file takes a paal procedure" '("hi" #f)
+    (pkaappi-run-bc-string
+      "(import (scheme base) (scheme file) (scheme read) (scheme write))
+       (define p \"/tmp/paal-cwof-unit.txt\")
+       (call-with-output-file p (lambda (out) (write \"hi\" out)))
+       (let ((back (call-with-input-file p (lambda (in) (read in)))))
+         (delete-file p)
+         (list back (file-exists? p)))"))
+  ;; cond-expand's requirement grammar is compared past the %core% mark a
+  ;; template puts on `and`/`or`/`not`: SRFI 7's `program` wraps its
+  ;; required feature ids in exactly that shape.
+  (test-equal "a template-written cond-expand requirement still parses" 'yes
+    (pkaappi-run-bc-string
+      "(import (scheme base) (srfi 7))
+       (define answer 'no)
+       (program (requires srfi-1) (code (set! answer 'yes)))
+       answer")))
+
 ;; ---------------------------------------------------------------
 ;; Bytecode cache for user programs
 ;; ---------------------------------------------------------------

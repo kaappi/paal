@@ -644,7 +644,19 @@
                          (cons m (string->symbol
                                    (string-append tag (symbol->string m))))))
                   own-macros))
-               (all-renames (append renames macro-renames)))
+               ;; Exported macros keep their plain spelling in the table, but
+               ;; a template reference to one — a sibling call, or the macro
+               ;; calling itself — must not be left bare: when the name
+               ;; collides with a core keyword (SRFI 61 exports `cond`,
+               ;; SRFI 5 `let`), instantiation would %core%-force the bare
+               ;; spelling back to the keyword the macro shadows.  The
+               ;; %gref% mark says "the top-level macro of this name",
+               ;; which dispatch resolves ahead of any use-site binding.
+               (macro-grefs
+                (filter-map
+                  (lambda (m) (and (assq m exports) (cons m (gref-symbol m))))
+                  own-macros))
+               (all-renames (append renames macro-renames macro-grefs)))
           ;; Paired with their specs, since the table entries are about to be
           ;; dropped and looked up again under new names.
           (rename-macro-templates!
@@ -703,7 +715,14 @@
                  ((gref-name tmpl)
                   => (lambda (bare)
                        (let ((h2 (assq bare renames)))
-                         (if h2 (gref-symbol (cdr h2)) tmpl))))
+                         (cond
+                           ((not h2) tmpl)
+                           ;; The rename target may itself carry the mark
+                           ;; (the macro-grefs entries) — re-wrapping would
+                           ;; make %gref%%gref%x, which strips to a name
+                           ;; nothing is bound to.
+                           ((gref-name (cdr h2)) (cdr h2))
+                           (else (gref-symbol (cdr h2)))))))
                  (else tmpl)))))
         ((pair? tmpl)
          (cons (rename-template (car tmpl) renames pvars literals ell)
@@ -758,7 +777,12 @@
             (when spec
               (let* ((spec* (rename-syntax-rules spec renames))
                      (hit   (assq name renames))
-                     (final (if hit (cdr hit) name)))
+                     ;; A %gref% target is a template-reference spelling
+                     ;; (the macro-grefs entries), not a new install name:
+                     ;; the exported macro stays under its own name.
+                     (final (if (and hit (not (gref-name (cdr hit))))
+                                (cdr hit)
+                                name)))
                 ;; Library macros are top-level: the empty definition env.
                 (paal-macro-set! final (make-transformer spec* '()) spec*)))))
         names))
@@ -1401,10 +1425,21 @@
                      (not (eq? s ell))
                      (not (memq s pvars))
                      (not (memq s literals))
-                     (not (let ((d (cenv-lookup def-env s)))
-                            (and (pair? d) (eq? (car d) 'variable))))
                      (not (assq s acc)))
-            (set! acc (cons (cons s (core-symbol s)) acc))))
+            (let ((d (cenv-lookup def-env s)))
+              (cond
+                ;; Shadowed as a variable there: the template means that
+                ;; variable, and the frees classification handles it.
+                ((and (pair? d) (eq? (car d) 'variable)) #f)
+                ;; Bound as a macro there — a library defining its own
+                ;; `cond` (SRFI 61) or `let` (SRFI 5) whose template calls
+                ;; itself: substitute the macro's alias, so the self-call
+                ;; resolves to the library's macro rather than being
+                ;; %core%-forced back to the keyword it shadows.
+                ((and (pair? d) (eq? (car d) 'macro))
+                 (set! acc (cons (cons s (cdr d)) acc)))
+                (else
+                 (set! acc (cons (cons s (core-symbol s)) acc)))))))
         (define (walk t)
           (cond
             ((symbol? t) (note! t))
@@ -1642,6 +1677,9 @@
     (define (feature-req? req)
       (cond
         ((symbol? req)
+         ;; Feature ids are data; one written literally in a template
+         ;; arrives %gref%-marked, so unwrap before comparing.
+         (let ((req (or (gref-name req) req)))
          (cond
            ((memq req %paal-features) #t)
            ;; srfi-<n> is the feature spelling of (library (srfi <n>)) —
@@ -1652,22 +1690,30 @@
            ;; capabilities.
            ((srfi-feature-number req)
             => (lambda (n) (feature-req? (list 'library (list 'srfi n)))))
-           (else #f)))
+           (else #f))))
         ((not (pair? req)) #f)
         ;; (library <name>) asks whether that library can be imported here.
         ;; It was hard-wired to #f, so the common
         ;; `(cond-expand ((library (srfi 1)) ...) (else ...))` idiom always
         ;; took the fallback even when (srfi 1) was right there.
-        ((eq? (car req) 'library)
-         (and (pair? (cdr req))
-              (let ((name (cadr req)))
-                (or (builtin-library? name)
-                    (and (paal-embedded-source name) #t)
-                    (and (find-library-file name) #t)))))
-        ((eq? (car req) 'and) (feature-all? (cdr req)))
-        ((eq? (car req) 'or)  (feature-any? (cdr req)))
-        ((eq? (car req) 'not) (not (feature-req? (cadr req))))
-        (else #f)))
+        ;;
+        ;; and/or/not/library here are cond-expand's requirement grammar, not
+        ;; the derived forms — but a requirement written in a syntax-rules
+        ;; template arrives with its `and` %core%-marked (SRFI 7's `program`
+        ;; wraps required ids in one), so the heads are compared mark-blind.
+        (else
+         (let ((h (let ((c (core-name (car req)))) (or c (car req)))))
+           (cond
+             ((eq? h 'library)
+              (and (pair? (cdr req))
+                   (let ((name (cadr req)))
+                     (or (builtin-library? name)
+                         (and (paal-embedded-source name) #t)
+                         (and (find-library-file name) #t)))))
+             ((eq? h 'and) (feature-all? (cdr req)))
+             ((eq? h 'or)  (feature-any? (cdr req)))
+             ((eq? h 'not) (not (feature-req? (cadr req))))
+             (else #f))))))
 
     ;; ---------------------------------------------------------------
     ;; case-lambda helper
@@ -1803,6 +1849,15 @@
                    (if (eq? (car d) 'macro)
                        (expand-form ((paal-macro-get (cdr d)) form env) env)
                        (map (lambda (f) (expand-form f env)) form))))
+             ;; A global macro shadows the derived-form table: importing a
+             ;; library that exports `cond` (SRFI 61) or `let` (SRFI 5)
+             ;; rebinds the name at the use site, so the macro must win over
+             ;; dispatch-core's case arms.  Machinery-emitted keywords are
+             ;; immune — they arrive %core%-marked and took the cname arm
+             ;; above.  expand-body's head dispatch already orders it this
+             ;; way; this arm gives expression position the same rule.
+             ((paal-macro-get head)
+              => (lambda (t) (expand-form (t form env) env)))
              (else (dispatch-core form env)))))))
 
     (define (dispatch-core form env)
@@ -1825,10 +1880,21 @@
                           '()
                           (list (expand-form (caddr form) env))))))
             ((set!)
-             (let* ((name (cadr form))
-                    (r    (and (symbol? name)
-                               (cenv-variable-rename env name))))
-               `(set! ,(or r name) ,(expand-form (caddr form) env))))
+             (let ((name (cadr form)))
+               (if (pair? name)
+                   ;; SRFI 17 generalized set!: (set! (proc arg ...) val)
+                   ;; → ((setter proc) arg ... val), the same desugaring
+                   ;; kaappi does while lowering.  `setter` is named bare
+                   ;; on purpose: it resolves to the program's own binding,
+                   ;; so a program that never imported (srfi 17) gets an
+                   ;; unbound-variable error rather than silent machinery.
+                   (expand-form
+                     `((setter ,(car name)) ,@(cdr name) ,(caddr form))
+                     env)
+                   `(set! ,(or (and (symbol? name)
+                                    (cenv-variable-rename env name))
+                               name)
+                          ,(expand-form (caddr form) env)))))
             ((if)
              (if (null? (cdddr form))
                  `(if ,(expand-form (cadr form) env)
@@ -1877,8 +1943,13 @@
              ;; it in pkaappi-make-globals for the bytecode VM path.
              `(%paal-delay-impl (lambda () ,(expand-form (cadr form) env))))
             ((delay-force)
-             ;; delay-force (iterative): force inner promise when thunk returns a promise
-             `(%paal-delay-impl (lambda () (force ,(expand-form (cadr form) env)))))
+             ;; The promise the expression answers is handed *back* to
+             ;; force, which already chases a chain iteratively — rather
+             ;; than forced inside this thunk, which made a chain of N
+             ;; delay-forces recurse N deep and cost O(N) stack.  R7RS
+             ;; 4.2.5 requires the bounded-space behavior; SRFI 45's suite
+             ;; walks a 10000-link chain to check it.
+             `(%paal-delay-impl (lambda () ,(expand-form (cadr form) env))))
             ((include)
              (expand-form (expand-include (cdr form) #f) env))
             ((include-ci)
@@ -1936,7 +2007,7 @@
                ;; keeps the old begin, which expand-body would reject.
                (if (null? body)
                    '(begin)
-                   (expand-form `(let () ,@body) env*))))
+                   (expand-form `(,%c-let () ,@body) env*))))
             ;; --- Library forms ---
             ;; A define-library evaluated as a program form -- `paal file.sld`,
             ;; or pkaappi-load-file on a pipeline stage.  Its own imports are
@@ -2299,7 +2370,7 @@
             ;; letrec* rather than letrec: with a single binding the two are
             ;; equivalent, and letrec*'s expansion has no temporaries, which
             ;; keeps this — paal's hottest derived form — one layer shallower.
-            `(letrec* ((,name (lambda ,params ,@body)))
+            `(,%c-letrec* ((,name (,%c-lambda ,params ,@body)))
                (,name ,@inits)))
           (let* ((bindings (cadr form))
                  (body     (cddr form))
@@ -2307,7 +2378,7 @@
                  (ignore2  (check-body! body form "let"))
                  (params   (map car bindings))
                  (inits    (map cadr bindings)))
-            `((lambda ,params ,@body) ,@inits))))
+            `((,%c-lambda ,params ,@body) ,@inits))))
 
     ;; ---------------------------------------------------------------
     ;; let*
@@ -2325,9 +2396,9 @@
             ;; an enclosing expression as a begin it died at emission with
             ;; "ir:define in expression position".  let*-values already had
             ;; this right.
-            `(let () ,@body)
-            `(let (,(car bindings))
-               (let* ,(cdr bindings) ,@body)))))
+            `(,%c-let () ,@body)
+            `(,%c-let (,(car bindings))
+               (,%c-let* ,(cdr bindings) ,@body)))))
 
     ;; ---------------------------------------------------------------
     ;; letrec / letrec*
@@ -2343,8 +2414,8 @@
              (ignore2  (check-body! body form "letrec*"))
              (names    (map car bindings))
              (inits    (map cadr bindings)))
-        `(let ,(map (lambda (n) `(,n #f)) names)
-           ,@(map (lambda (n e) `(set! ,n ,e)) names inits)
+        `(,%c-let ,(map (lambda (n) `(,n #f)) names)
+           ,@(map (lambda (n e) `(,%c-set! ,n ,e)) names inits)
            ,@body)))
 
     ;; letrec evaluates every init before assigning any variable (R7RS 4.2.2),
@@ -2362,9 +2433,9 @@
              (names    (map car bindings))
              (inits    (map cadr bindings))
              (temps    (map (lambda (n) (fresh-name "__paal_rec")) names)))
-        `(let ,(map (lambda (n) `(,n #f)) names)
-           (let ,(map (lambda (t e) `(,t ,e)) temps inits)
-             ,@(map (lambda (n t) `(set! ,n ,t)) names temps)
+        `(,%c-let ,(map (lambda (n) `(,n #f)) names)
+           (,%c-let ,(map (lambda (t e) `(,t ,e)) temps inits)
+             ,@(map (lambda (n t) `(,%c-set! ,n ,t)) names temps)
              ,@body))))
 
     ;; ---------------------------------------------------------------
@@ -2375,7 +2446,7 @@
       (cond
         ((null? exprs)       '#t)
         ((null? (cdr exprs)) (car exprs))
-        (else `(if ,(car exprs) (and ,@(cdr exprs)) #f))))
+        (else `(,%c-if ,(car exprs) (,%c-and ,@(cdr exprs)) #f))))
 
     (define (expand-or exprs)
       (cond
@@ -2383,18 +2454,18 @@
         ((null? (cdr exprs)) (car exprs))
         (else
          (let ((t (fresh-name "__paal_t")))
-           `(let ((,t ,(car exprs)))
-              (if ,t ,t (or ,@(cdr exprs))))))))
+           `(,%c-let ((,t ,(car exprs)))
+              (,%c-if ,t ,t (,%c-or ,@(cdr exprs))))))))
 
     ;; ---------------------------------------------------------------
     ;; when / unless
     ;; ---------------------------------------------------------------
 
     (define (expand-when form)
-      `(if ,(cadr form) (begin ,@(cddr form))))
+      `(,%c-if ,(cadr form) (,%c-begin ,@(cddr form))))
 
     (define (expand-unless form)
-      `(if (%paal-base-not ,(cadr form)) (begin ,@(cddr form))))
+      `(,%c-if (%paal-base-not ,(cadr form)) (,%c-begin ,@(cddr form))))
 
     ;; ---------------------------------------------------------------
     ;; cond
@@ -2410,6 +2481,26 @@
 
     (define %core-else  (core-symbol 'else))
     (define %core-arrow (core-symbol '=>))
+
+    ;; The spellings the desugar helpers use for the keywords they emit:
+    ;; %core%-marked, so a global macro of the same name — an imported
+    ;; library exporting `let` (SRFI 5, 71), `cond` (SRFI 61), `case`
+    ;; (SRFI 87) or `set!` (SRFI 17) — cannot capture machinery output.
+    ;; The dispatcher strips the mark and its case arms rebuild plain
+    ;; heads, so nothing downstream of expansion ever sees one.  The
+    ;; value-name sibling of this rule is the %paal-base-* spellings.
+    (define %c-lambda      (core-symbol 'lambda))
+    (define %c-if          (core-symbol 'if))
+    (define %c-begin       (core-symbol 'begin))
+    (define %c-set!        (core-symbol 'set!))
+    (define %c-let         (core-symbol 'let))
+    (define %c-let*        (core-symbol 'let*))
+    (define %c-letrec*     (core-symbol 'letrec*))
+    (define %c-and         (core-symbol 'and))
+    (define %c-or          (core-symbol 'or))
+    (define %c-cond        (core-symbol 'cond))
+    (define %c-let-values  (core-symbol 'let-values))
+    (define %c-let*-values (core-symbol 'let*-values))
 
     (define (clause-else? x env)
       (or (eq? x %core-else)
@@ -2437,17 +2528,17 @@
                (syntax-error* "cond: else needs at least one expression" clause)))
             (cond
               ((and (pair? clause) (clause-else? (car clause) env))
-               `(begin ,@(cdr clause)))
+               `(,%c-begin ,@(cdr clause)))
               ((= (length clause) 1)
-               `(or ,(car clause) (cond ,@rest)))
+               `(,%c-or ,(car clause) (,%c-cond ,@rest)))
               ((and (= (length clause) 3) (clause-arrow? (cadr clause) env))
                (let ((v (fresh-name "__paal_cv")))
-                 `(let ((,v ,(car clause)))
-                    (if ,v (,(caddr clause) ,v) (cond ,@rest)))))
+                 `(,%c-let ((,v ,(car clause)))
+                    (,%c-if ,v (,(caddr clause) ,v) (,%c-cond ,@rest)))))
               (else
-               `(if ,(car clause)
-                    (begin ,@(cdr clause))
-                    (cond ,@rest)))))))
+               `(,%c-if ,(car clause)
+                    (,%c-begin ,@(cdr clause))
+                    (,%c-cond ,@rest)))))))
 
     ;; ---------------------------------------------------------------
     ;; case
@@ -2459,8 +2550,8 @@
       (let ((key     (cadr form))
             (clauses (cddr form))
             (k       (fresh-name "__paal_ck")))
-        `(let ((,k ,key))
-           (cond ,@(map (lambda (clause) (case-clause k clause env)) clauses)))))
+        `(,%c-let ((,k ,key))
+           (,%c-cond ,@(map (lambda (clause) (case-clause k clause env)) clauses)))))
 
     ;; `case` with `=>` hands the receiver **the key**, not the test value.
     ;; Splicing (cdr clause) into a cond clause got this wrong: cond's own `=>`
@@ -2543,10 +2634,10 @@
                                     (caddr spec)))
                               var-specs))
              (loop       (fresh-name "__paal_do")))
-        `(let ,loop ,(map list vars inits)
-           (if ,test
-               (begin ,@(if (null? results) '((if #f #f)) results))
-               (begin ,@commands (,loop ,@steps))))))
+        `(,%c-let ,loop ,(map list vars inits)
+           (,%c-if ,test
+               (,%c-begin ,@(if (null? results) '((if #f #f)) results))
+               (,%c-begin ,@commands (,loop ,@steps))))))
 
     ;; ---------------------------------------------------------------
     ;; case-lambda
@@ -2562,7 +2653,7 @@
     (define (expand-case-lambda form)
       (let ((clauses  (cdr form))
             (args-var (fresh-name "__paal_args")))
-        `(lambda ,args-var
+        `(,%c-lambda ,args-var
            ,(case-lambda-dispatch args-var clauses))))
 
     ;; Generate (list-ref args-var i) accessor form
@@ -2597,18 +2688,18 @@
             (cond
               ;; Pure rest parameter (symbol): matches any arity
               ((symbol? params)
-               `(let ((,params ,args-var)) ,@body))
+               `(,%c-let ((,params ,args-var)) ,@body))
               ;; Exact arity (proper list)
               ((list? params)
                (let ((n (length params)))
-                 `(if (%paal-base-= (%paal-base-length ,args-var) ,n)
-                      (let ,lets ,@body)
+                 `(,%c-if (%paal-base-= (%paal-base-length ,args-var) ,n)
+                      (,%c-let ,lets ,@body)
                       ,(case-lambda-dispatch args-var (cdr clauses)))))
               ;; At-least-n arity (improper list)
               (else
                (let ((n (proper-length params)))
-                 `(if (%paal-base->= (%paal-base-length ,args-var) ,n)
-                      (let ,lets ,@body)
+                 `(,%c-if (%paal-base->= (%paal-base-length ,args-var) ,n)
+                      (,%c-let ,lets ,@body)
                       ,(case-lambda-dispatch args-var (cdr clauses)))))))))
 
     ;; ---------------------------------------------------------------
@@ -2630,9 +2721,9 @@
         `(begin
            ,@(map (lambda (n) `(define ,n #f)) names)
            (call-with-values
-             (lambda () ,expr)
-             (lambda ,tmp-names
-               ,@(map (lambda (n t) `(set! ,n ,t)) names tmp-names))))))
+             (,%c-lambda () ,expr)
+             (,%c-lambda ,tmp-names
+               ,@(map (lambda (n t) `(,%c-set! ,n ,t)) names tmp-names))))))
 
     ;; ---------------------------------------------------------------
     ;; let-values / let*-values
@@ -2653,28 +2744,28 @@
       (let ((bindings (cadr form))
             (body     (cddr form)))
         (if (null? bindings)
-            `(let () ,@body)
+            `(,%c-let () ,@body)
             (let* ((b     (car bindings))
                    (names (car b))
                    (expr  (cadr b)))
               `(call-with-values
-                 (lambda () ,expr)
-                 (lambda ,names
-                   (let-values ,(cdr bindings) ,@body)))))))
+                 (,%c-lambda () ,expr)
+                 (,%c-lambda ,names
+                   (,%c-let-values ,(cdr bindings) ,@body)))))))
 
     (define (expand-let*-values form)
       ;; let*-values binds sequentially; same structure as let-values.
       (let ((bindings (cadr form))
             (body     (cddr form)))
         (if (null? bindings)
-            `(let () ,@body)
+            `(,%c-let () ,@body)
             (let* ((b     (car bindings))
                    (names (car b))
                    (expr  (cadr b)))
               `(call-with-values
-                 (lambda () ,expr)
-                 (lambda ,names
-                   (let*-values ,(cdr bindings) ,@body)))))))
+                 (,%c-lambda () ,expr)
+                 (,%c-lambda ,names
+                   (,%c-let*-values ,(cdr bindings) ,@body)))))))
 
     ;; ---------------------------------------------------------------
     ;; include / include-ci
@@ -2709,7 +2800,10 @@
     (define (cond-expand-select clauses)
       (cond
         ((null? clauses) '())    ; no matching clause and no else → nothing
-        ((eq? (caar clauses) 'else) (cdar clauses))
+        ;; A template-written else arrives %core%-marked.
+        ((let ((h (caar clauses)))
+           (or (eq? h 'else) (eq? h %core-else)))
+         (cdar clauses))
         ((feature-req? (caar clauses)) (cdar clauses))
         (else (cond-expand-select (cdr clauses)))))
 
@@ -2831,7 +2925,7 @@
                   (names     (cadr dvform))
                   (expr      (caddr dvform))
                   (remaining (cdr rest))
-                  (wrapped   `(let-values ((,names ,expr)) ,@remaining)))
+                  (wrapped   `(,%c-let-values ((,names ,expr)) ,@remaining)))
              (if (null? defs)
                  (list (expand-form wrapped env))
                  (list (expand-form
@@ -2930,8 +3024,8 @@
                                       (list (list %core-else
                                                   '%paal-guard-no-match))))))
         `(%paal-guard-run
-           (lambda () ,@body)
-           (lambda (,var) (cond ,@all-clauses)))))
+           (,%c-lambda () ,@body)
+           (,%c-lambda (,var) (,%c-cond ,@all-clauses)))))
 
     ;; ---------------------------------------------------------------
     ;; parameterize
@@ -2954,7 +3048,7 @@
         `(%paal-parameterize
            (list ,@(map car bindings))
            (list ,@(map cadr bindings))
-           (lambda () ,@body))))
+           (,%c-lambda () ,@body))))
 
     ;; ---------------------------------------------------------------
     ;; define-record-type desugaring
@@ -3056,7 +3150,7 @@
                                      (acc   (cadr spec))
                                      (mut   (and (pair? (cddr spec)) (caddr spec)))
                                      (check (lambda (who then)
-                                              `(if (and (%paal-base-vector? obj)
+                                              `(,%c-if (,%c-and (%paal-base-vector? obj)
                                                         (%paal-base-eq?
                                                           (%paal-base-vector-ref obj 0)
                                                           ,tag-var))
@@ -3078,12 +3172,12 @@
         `(begin
            (define ,tag-var (%paal-base-list (quote ,type-name)))
            (define (,ctor-name ,@ctor-fields)
-             (let ((,rec-var (%paal-base-make-vector ,(+ 1 n))))
+             (,%c-let ((,rec-var (%paal-base-make-vector ,(+ 1 n))))
                (%paal-base-vector-set! ,rec-var 0 ,tag-var)
                ,@ctor-sets
                ,rec-var))
            (define (,pred-name obj)
-             (and (%paal-base-vector? obj)
+             (,%c-and (%paal-base-vector? obj)
                   (%paal-base-= (%paal-base-vector-length obj) ,(+ 1 n))
                   (%paal-base-eq? (%paal-base-vector-ref obj 0) ,tag-var)))
            ,@field-defs)))

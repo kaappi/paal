@@ -504,8 +504,23 @@
              ;; File operations
              (file-exists? . ,file-exists?)
              (delete-file . ,delete-file)
-             (call-with-input-file . ,call-with-input-file)
-             (call-with-output-file . ,call-with-output-file)
+             ;; Paal-side too: the HOST versions call their procedure
+             ;; argument themselves, which skips the trampoline this VM's
+             ;; closures answer through — so the caller could receive a
+             ;; pending thunk instead of the value.  Same shape as the
+             ;; with-*-file pair below.
+             (call-with-input-file
+               . ,(lambda (path proc)
+                    (let* ((port (open-input-file path))
+                           (r    (trampoline (proc port))))
+                      (close-input-port port)
+                      r)))
+             (call-with-output-file
+               . ,(lambda (path proc)
+                    (let* ((port (open-output-file path))
+                           (r    (trampoline (proc port))))
+                      (close-output-port port)
+                      r)))
              ;; Paal-side, not the HOST versions: those parameterize the
              ;; HOST current ports, which nothing here reads any more.
              (with-input-from-file
