@@ -1185,6 +1185,34 @@
 ;;
 ;; Referential transparency is *not* provided — see the group's last test.
 
+;; Host-native SRFIs bound straight from the runtime: the procedures are Zig
+;; primitives, so the libraries resolve as builtins with identity aliases —
+;; there is no .sld to load — and the import-scope check grants exactly
+;; their export lists.
+(test-group "host-native libraries: srfi 27/258/260, kaappi diagnostics"
+  (test-equal "importable with working exports (bc)"
+    '(#t #t #t #t #t)
+    (pkaappi-run-bc-string
+      "(import (scheme base) (srfi 27) (srfi 258) (srfi 260) (kaappi diagnostics))
+       (list (integer? (random-integer 10))
+             (real? (random-real))
+             (symbol? (generate-symbol))
+             (not (symbol-interned? (string->uninterned-symbol \"q\")))
+             (procedure? error-object-code))"))
+  (test-equal "available on the tree-walking path too"
+    '(#t #t)
+    (pkaappi-run-string
+      "(list (integer? (random-integer 10)) (symbol? (generate-symbol)))"))
+  (test-equal "not granted without the import"
+    'rejected
+    (guard (e (#t 'rejected))
+      (pkaappi-run-bc-string
+        "(import (scheme base)) (random-integer 5)")))
+  (test-equal "cond-expand sees the host-native library"
+    'has-27
+    (pkaappi-run-bc-string
+      "(cond-expand ((library (srfi 27)) 'has-27) (else 'no))")))
+
 ;; Dispatch consults the lexical environment: a binding of a keyword's name
 ;; makes it a variable at that use site (R7RS 4.3), while a template's
 ;; keywords are %core%-marked at instantiation and survive any shadowing.

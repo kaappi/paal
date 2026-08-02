@@ -162,12 +162,20 @@
     ;;                       under lib/, which is on the default search path
     ;;                       for the bundled SRFIs, so this cannot be left to
     ;;                       the not-found fallback.
+    ;; A library whose names are already in the globals table, so importing
+    ;; it emits identity aliases rather than loading a file: every (scheme …)
+    ;; library, paal's own stages, and each library the exports table below
+    ;; names — (kaappi ffi), (srfi 27) and the rest of the host-native set,
+    ;; which have no .sld anywhere because their procedures are Zig.  A
+    ;; table entry therefore shadows any same-named file, so numbers used
+    ;; here must stay off the portable-SRFI shelf.
     (define (builtin-library? name)
       (and (pair? name)
            (or (eq? (car name) 'scheme)
                (and (eq? (car name) 'kaappi)
                     (pair? (cdr name))
-                    (eq? (cadr name) 'paal)))))
+                    (eq? (cadr name) 'paal))
+               (and (scheme-lib-exports name) #t))))
 
     ;; --- what each (scheme …) library exports -----------------------------
     ;;
@@ -223,6 +231,19 @@
         ((scheme r5rs)    exact->inexact inexact->exact)
         ((kaappi ffi)     ffi-open ffi-fn ffi-close ffi-callback
                           ffi-callback-release ffi-callback? ffi-bytevector-ptr)
+        ((kaappi diagnostics) error-object-code)
+        ;; Host-native SRFIs: the procedures are Zig primitives bound in
+        ;; paal-initial-env, so the libraries resolve as builtins — there is
+        ;; no .sld to load, on disk or embedded.
+        ((srfi 27)        default-random-source make-random-source
+                          random-integer random-real
+                          random-source-pseudo-randomize!
+                          random-source-randomize!
+                          random-source-state-ref random-source-state-set!
+                          random-source?)
+        ((srfi 258)       generate-uninterned-symbol string->uninterned-symbol
+                          symbol-interned?)
+        ((srfi 260)       generate-symbol)
         ((kaappi fibers)  spawn yield fiber-join fiber? make-channel
                           channel-send channel-receive channel? channel-close!
                           channel-closed? channel-timeout-exception?

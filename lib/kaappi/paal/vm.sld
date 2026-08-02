@@ -20,7 +20,8 @@
   (import (scheme base) (scheme read) (scheme complex)
           (kaappi paal ir) (kaappi paal expander)
           (kaappi paal bytecode) (kaappi paal frame)
-          (kaappi ffi) (kaappi fibers))
+          (kaappi ffi) (kaappi fibers) (kaappi diagnostics)
+          (srfi 27) (srfi 258) (srfi 260))
   (export paal-eval paal-eval-program paal-initial-env)
   (begin
 
@@ -546,6 +547,27 @@
              (channel-closed? . ,channel-closed?)
              (channel-timeout-exception? . ,channel-timeout-exception?)
              (processor-count . ,processor-count)
+
+             ;; --- (kaappi diagnostics) ---
+             (error-object-code . ,error-object-code)
+
+             ;; --- (srfi 27) random, (srfi 258)/(srfi 260) symbols ---
+             ;; Host-native SRFIs whose values are plain data (or, for
+             ;; default-random-source, an opaque host object handed back to
+             ;; the same host procedures), so binding the objects is enough.
+             (default-random-source . ,default-random-source)
+             (make-random-source . ,make-random-source)
+             (random-integer . ,random-integer)
+             (random-real . ,random-real)
+             (random-source-pseudo-randomize! . ,random-source-pseudo-randomize!)
+             (random-source-randomize! . ,random-source-randomize!)
+             (random-source-state-ref . ,random-source-state-ref)
+             (random-source-state-set! . ,random-source-state-set!)
+             (random-source? . ,random-source?)
+             (generate-uninterned-symbol . ,generate-uninterned-symbol)
+             (string->uninterned-symbol . ,string->uninterned-symbol)
+             (symbol-interned? . ,symbol-interned?)
+             (generate-symbol . ,generate-symbol)
 
              ;; Features
              ;; paal's own list, not the host's.  `features` used to answer
