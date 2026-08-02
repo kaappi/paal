@@ -1826,16 +1826,27 @@
            (symbol? (cadr form))
            (cadr form)))
 
+    ;; Sectioned the way kaappi's ,help is (Evaluation / Inspection /
+    ;; Debugging / System), so the two REPLs read the same; sections with
+    ;; no paal command yet are simply absent, and appear as their commands
+    ;; land.  Argument spelling stays <form> — these take the next *datum*,
+    ;; not the rest of the line, and the suite pins that word.
     (define (%repl-help)
-      (display "  ,help            this list\n")
-      (display "  ,quit  ,q        leave the REPL\n")
-      (display "  ,env             names defined in this session\n")
-      (display "  ,history [n]     the last n inputs (default 10)\n")
-      (display "  ,time <form>     evaluate, reporting elapsed seconds\n")
-      (display "  ,expand <form>   print the expansion\n")
-      (display "  ,ir <form>       print the IR nodes\n")
-      (display "  ,dis <form>      print the compiled bytecode\n")
-      (display "  _                the last value\n"))
+      (display "Commands:\n")
+      (display "  ,help            Show this message\n")
+      (display "  ,quit            Exit the REPL  (also ,q ,exit)\n")
+      (display "\n")
+      (display " -- Evaluation:\n")
+      (display "  ,time <form>     Measure execution time\n")
+      (display "  ,expand <form>   Show macro expansion\n")
+      (display "  ,ir <form>       Print the IR nodes\n")
+      (display "  ,dis <form>      Print the compiled bytecode\n")
+      (display "\n")
+      (display " -- Inspection:\n")
+      (display "  ,env             List names defined in this session\n")
+      (display "  ,history [n]     Show the last n inputs (default 10)\n")
+      (display "\n")
+      (display "The variable _ holds the last result.\n"))
 
     ;; Echo through the debugger's abbreviation, so a procedure prints as
     ;; #<procedure name> rather than pages of closure vectors.
