@@ -3351,11 +3351,19 @@
   ;; the full numeric tower, so complex works outright.  1+2i reads exact per
   ;; R7RS 6.2.5 — the reader parses complex literals itself — so its parts are
   ;; the exact 1 and 2, where the old string->number path gave 1.0 and 2.0.
+  ;;
+  ;; sqrt and * compare with `=` rather than equal?: their results' exactness
+  ;; is the host's business and mid-flight — kaappi v0.22 conflated exact
+  ;; with inexact complex in equal?, kaappi main (kaappi/kaappi#2170) does
+  ;; not, and CI builds main while dev machines run releases.  Numeric
+  ;; comparison is true on both.
   (test-equal "complex arithmetic"
-    '(1+2i 1 2 5.0 +i 4.0+6.0i)
+    '(1+2i 1 2 5.0 #t #t)
     (pkaappi-run-bc-string
       "(list (make-rectangular 1 2) (real-part 1+2i) (imag-part 1+2i)
-             (magnitude (make-rectangular 3 4)) (sqrt -1) (* 2+3i 2))"))
+             (magnitude (make-rectangular 3 4))
+             (= (sqrt -1) (make-rectangular 0 1))
+             (= (* 2+3i 2) (make-rectangular 4 6)))"))
   ;; (scheme r5rs)'s two environment constructors.  Same honest limitation as
   ;; `environment` -- paal has one flat table per program, so any spec yields a
   ;; full one -- but the version argument is checked, 5 being the only one R7RS
