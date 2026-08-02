@@ -10,7 +10,7 @@
   (export paal-run-bc paal-make-globals
           %paal-guard-run-marker %paal-apply-marker %paal-callcc-marker
           paal-vm-raise-escape!
-          paal-profile-start! paal-profile-report
+          paal-profile-start! paal-profile-report paal-profile-masked
           paal-coverage-start! paal-coverage-report
           paal-debug-start! paal-debug-stop!
           paal-debug-break! paal-debug-unbreak! paal-debug-breaks)
@@ -651,6 +651,21 @@
     ;; Unsorted: the caller decides presentation, and sorting here would need
     ;; a total order on names this VM has no reason to define.
     (define (paal-profile-report) %profile-counts)
+
+    ;; Run thunk with counting off, restoring the prior state on the way out.
+    ;; %make-globals-table wraps itself in this: the blob's load-time calls
+    ;; (the port blob calls make-parameter) are no more the user's code than
+    ;; the blob's definitions are — the same judgement the debugger's
+    ;; identity-snapshot skip and coverage's baseline snapshot already make —
+    ;; and a table built mid-run by eval or environment would otherwise leak
+    ;; those calls into the counts too, which no snapshot taken at start time
+    ;; can see coming.
+    (define (paal-profile-masked thunk)
+      (let ((was %profiling?))
+        (dynamic-wind
+          (lambda () (set! %profiling? #f))
+          thunk
+          (lambda () (set! %profiling? was)))))
 
     ;; --- coverage ------------------------------------------------------
     ;;

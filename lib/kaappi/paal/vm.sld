@@ -198,8 +198,49 @@
 
     ;; --- Initial environment seeded with host primitives ---
 
+    ;; A parameter object over a #(value converter) cell — the same shape the
+    ;; make-parameter binding below builds — extracted so the port parameters
+    ;; can be constructed before the alist that binds them.
+    (define (%paal-cell-parameter init)
+      (let ((cell (vector init (lambda (x) x))))
+        (lambda args
+          (cond
+            ((null? args) (vector-ref cell 0))
+            ((eq? (car args) %paal-param-key) cell)
+            (else (error "parameter: unexpected argument"))))))
+
+    ;; The parameterize machinery, extracted from the alist for the same
+    ;; reason: with-input-from-file / with-output-to-file rebind a port
+    ;; parameter around a thunk and must go through the wind stack like any
+    ;; other parameterize, or a guard could not restore the port on a raise.
+    (define (%paal-parameterize-impl params vals thunk)
+      (let* ((cells (map (lambda (p) (p %paal-param-key)) params))
+             (olds  (map (lambda (c) (vector-ref c 0)) cells))
+             (news  (map (lambda (c v)
+                           (trampoline ((vector-ref c 1) v)))
+                         cells vals))
+             (saved %paal-winds))
+        (set! %paal-winds
+              (cons (vector %paal-param-frame cells news olds)
+                    saved))
+        (paal-wind-write! cells news)
+        (let ((result (trampoline (thunk))))
+          (paal-wind-write! cells olds)
+          (set! %paal-winds saved)
+          result)))
+
     (define (paal-initial-env)
-      (map (lambda (pair) (cons (car pair) (vector (cdr pair))))
+      ;; The three port parameters are paal cell-parameters seeded with the
+      ;; host ports.  The HOST parameter objects cannot be kept: paal's
+      ;; parameterize rebinds a parameter by asking it for its cell with
+      ;; %paal-param-key, and a HOST parameter answers that with nonsense —
+      ;; (parameterize ((current-output-port p)) ...) crashed.  Every
+      ;; no-port-argument I/O binding below consults these instead of the
+      ;; host's dynamic state.
+      (let ((cur-in  (%paal-cell-parameter (current-input-port)))
+            (cur-out (%paal-cell-parameter (current-output-port)))
+            (cur-err (%paal-cell-parameter (current-error-port))))
+        (map (lambda (pair) (cons (car pair) (vector (cdr pair))))
            `(;; Arithmetic
              (+ . ,+) (- . ,-) (* . ,*) (/ . ,/)
              (= . ,=) (< . ,<) (> . ,>) (<= . ,<=) (>= . ,>=)
@@ -285,13 +326,31 @@
              (%paal-host-procedure? . ,procedure?)
 
              ;; I/O
-             (display . ,%paal-display) (newline . ,newline)
-             (write . ,%paal-write)
-             (read . ,read) (read-char . ,read-char) (peek-char . ,peek-char)
-             (write-char . ,write-char) (write-string . ,write-string)
-             (read-line . ,read-line) (read-string . ,read-string)
+             ;; Every no-port-argument form consults the paal port parameters
+             ;; bound above; an explicit port passes straight through.
+             (display . ,(lambda (x . p)
+                           (%paal-display x (if (null? p) (cur-out) (car p)))))
+             (newline . ,(lambda p (newline (if (null? p) (cur-out) (car p)))))
+             (write . ,(lambda (x . p)
+                         (%paal-write x (if (null? p) (cur-out) (car p)))))
+             (read . ,(lambda p (read (if (null? p) (cur-in) (car p)))))
+             (read-char . ,(lambda p
+                             (read-char (if (null? p) (cur-in) (car p)))))
+             (peek-char . ,(lambda p
+                             (peek-char (if (null? p) (cur-in) (car p)))))
+             (write-char . ,(lambda (c . p)
+                              (write-char c (if (null? p) (cur-out) (car p)))))
+             (write-string . ,(lambda (s . rest)
+                                (if (null? rest)
+                                    (write-string s (cur-out))
+                                    (apply write-string s rest))))
+             (read-line . ,(lambda p
+                             (read-line (if (null? p) (cur-in) (car p)))))
+             (read-string . ,(lambda (k . p)
+                               (read-string k (if (null? p) (cur-in) (car p)))))
              (eof-object? . ,eof-object?) (eof-object . ,eof-object)
-             (char-ready? . ,char-ready?)
+             (char-ready? . ,(lambda p
+                               (char-ready? (if (null? p) (cur-in) (car p)))))
              (open-input-string . ,open-input-string)
              (open-output-string . ,open-output-string)
              (get-output-string . ,get-output-string)
@@ -299,12 +358,14 @@
              (open-output-file . ,open-output-file)
              (close-input-port . ,close-input-port)
              (close-output-port . ,close-output-port)
-             (current-input-port . ,current-input-port)
-             (current-output-port . ,current-output-port)
-             (current-error-port . ,current-error-port)
+             (current-input-port . ,cur-in)
+             (current-output-port . ,cur-out)
+             (current-error-port . ,cur-err)
              (input-port? . ,input-port?) (output-port? . ,output-port?)
              (port? . ,port?)
-             (flush-output-port . ,flush-output-port)
+             (flush-output-port . ,(lambda p
+                                     (flush-output-port
+                                       (if (null? p) (cur-out) (car p)))))
              (call-with-port . ,call-with-port)
 
              ;; Control
@@ -432,16 +493,34 @@
              (input-port-open? . ,input-port-open?) (output-port-open? . ,output-port-open?)
 
              ;; Binary I/O
-             (read-u8 . ,read-u8) (peek-u8 . ,peek-u8)
-             (u8-ready? . ,u8-ready?) (write-u8 . ,write-u8)
+             (read-u8 . ,(lambda p (read-u8 (if (null? p) (cur-in) (car p)))))
+             (peek-u8 . ,(lambda p (peek-u8 (if (null? p) (cur-in) (car p)))))
+             (u8-ready? . ,(lambda p
+                             (u8-ready? (if (null? p) (cur-in) (car p)))))
+             (write-u8 . ,(lambda (b . p)
+                            (write-u8 b (if (null? p) (cur-out) (car p)))))
 
              ;; File operations
              (file-exists? . ,file-exists?)
              (delete-file . ,delete-file)
              (call-with-input-file . ,call-with-input-file)
              (call-with-output-file . ,call-with-output-file)
-             (with-input-from-file . ,with-input-from-file)
-             (with-output-to-file . ,with-output-to-file)
+             ;; Paal-side, not the HOST versions: those parameterize the
+             ;; HOST current ports, which nothing here reads any more.
+             (with-input-from-file
+               . ,(lambda (path thunk)
+                    (let* ((port (open-input-file path))
+                           (r (%paal-parameterize-impl
+                                (list cur-in) (list port) thunk)))
+                      (close-input-port port)
+                      r)))
+             (with-output-to-file
+               . ,(lambda (path thunk)
+                    (let* ((port (open-output-file path))
+                           (r (%paal-parameterize-impl
+                                (list cur-out) (list port) thunk)))
+                      (close-output-port port)
+                      r)))
              ;; Bytevector ports.  Plain data in, plain data out -- no
              ;; procedure arguments -- so paal-initial-env is the right home
              ;; and both pipelines get them.  kaappi implements all six,
@@ -485,22 +564,9 @@
              ;; between it and the raise in one pass.  Doing it here as well
              ;; would tear down the raise point before the guard could look at
              ;; it, which is exactly the environment R7RS re-raises in.
-             (%paal-parameterize
-               . ,(lambda (params vals thunk)
-                    (let* ((cells (map (lambda (p) (p %paal-param-key)) params))
-                           (olds  (map (lambda (c) (vector-ref c 0)) cells))
-                           (news  (map (lambda (c v)
-                                         (trampoline ((vector-ref c 1) v)))
-                                       cells vals))
-                           (saved %paal-winds))
-                      (set! %paal-winds
-                            (cons (vector %paal-param-frame cells news olds)
-                                  saved))
-                      (paal-wind-write! cells news)
-                      (let ((result (trampoline (thunk))))
-                        (paal-wind-write! cells olds)
-                        (set! %paal-winds saved)
-                        result))))
+             ;; The body now lives in %paal-parameterize-impl, which the
+             ;; with-*-file wrappers above the alist also call.
+             (%paal-parameterize . ,%paal-parameterize-impl)
 
              ;; (scheme r5rs) — the two names R7RS renamed.  Everything else
              ;; R5RS specifies is already here under an unchanged name.
@@ -577,7 +643,12 @@
              (features . ,(lambda () (paal-feature-list)))
 
              ;; Write extras
-             (write-shared . ,write-shared) (write-simple . ,write-simple)
+             (write-shared . ,(lambda (x . p)
+                                (write-shared
+                                  x (if (null? p) (cur-out) (car p)))))
+             (write-simple . ,(lambda (x . p)
+                                (write-simple
+                                  x (if (null? p) (cur-out) (car p)))))
 
              ;; Promises — custom vector-based implementation so that delay/force
              ;; work correctly in the tree-walking VM.  (The bytecode VM path in
@@ -642,7 +713,7 @@
 
              ;; Misc
              (void . ,(lambda () (if #f #f)))
-             (not . ,not))))
+             (not . ,not)))))
 
     ;; --- Trampoline machinery ---
     ;;

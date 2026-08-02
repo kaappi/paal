@@ -2402,6 +2402,47 @@
 ;; make-parameter / parameterize
 ;; ---------------------------------------------------------------
 
+;; The three current-port names are paal parameters seeded with the host
+;; ports — the HOST parameter objects answer %paal-param-key with nonsense,
+;; so paal's parameterize crashed on (parameterize ((current-output-port p))
+;; ...) — and every no-port-argument I/O procedure consults them.
+(test-group "port parameters"
+  (test-equal "parameterize redirects display (bc)" "42"
+    (pkaappi-run-bc-string
+      "(define p (open-output-string))
+       (parameterize ((current-output-port p)) (display 42))
+       (get-output-string p)"))
+  (test-equal "parameterize redirects display (tree-walk)" "42"
+    (pkaappi-run-string
+      "(define p (open-output-string))
+       (parameterize ((current-output-port p)) (display 42))
+       (get-output-string p)"))
+  (test-equal "the port is restored when a raise unwinds" 'ok
+    (pkaappi-run-bc-string
+      "(define p (open-output-string))
+       (guard (e (#t 'caught))
+         (parameterize ((current-output-port p)) (raise 'x)))
+       (display 'ok (open-output-string))
+       'ok"))
+  (test-equal "with-output-to-file and with-input-from-file round-trip"
+    "hello"
+    (pkaappi-run-bc-string
+      "(with-output-to-file \"paal-4d-tmp.txt\"
+         (lambda () (display 'hello) (newline)))
+       (let ((r (with-input-from-file \"paal-4d-tmp.txt\" read-line)))
+         (delete-file \"paal-4d-tmp.txt\")
+         r)"))
+  (test-equal "an explicit port argument still wins" "x"
+    (pkaappi-run-bc-string
+      "(define p (open-output-string))
+       (parameterize ((current-output-port (open-output-string)))
+         (write 'x p))
+       (get-output-string p)"))
+  (test-equal "reads follow current-input-port" '((a b) "tail")
+    (pkaappi-run-bc-string
+      "(parameterize ((current-input-port (open-input-string \"(a b)tail\")))
+         (list (read) (read-line)))")))
+
 (test-group "parameterize"
   (test-equal "parameter returns its default"
     10

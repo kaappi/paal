@@ -313,7 +313,16 @@
     ;; is how the R7RS conformance harness drives the suite, and how it was
     ;; found: `(environment '(scheme base))` in §6.12 took out `(chibi test)`'s
     ;; `test` macro and darkened the remaining 292 forms of the suite.
+    ;; Table construction runs five blobs through the VM, and since the port
+    ;; blob those make paal-level calls at load time (make-parameter, its
+    ;; converter).  They are setup, not the program: mask the profiler for the
+    ;; duration, or `--profile` and a mid-run (environment ...) would report
+    ;; them.  The eval/environment entries below call this same name, so
+    ;; nested tables mask themselves.
     (define (%make-globals-table . opts)
+      (paal-profile-masked (lambda () (apply %make-globals-table-raw opts))))
+
+    (define (%make-globals-table-raw . opts)
       (let* ((cmd-args  (if (null? opts) '() (car opts)))
              ; cmd-cell is a HOST mutable pair; (car cmd-cell) = current command-line list.
              ; command-line is a HOST lambda closing over cmd-cell — safe to call from
@@ -338,6 +347,11 @@
                       ; command-line HOST lambda closes over cmd-cell (safe across pipelines).
                       (command-line               . ,(lambda () (car cmd-cell)))
                       (%paal-cmd-cell             . ,cmd-cell)
+                      ; Seeds for the blob's port parameters: the host port
+                      ; objects, plain data both copies can hold.
+                      (%paal-init-in              . ,(current-input-port))
+                      (%paal-init-out             . ,(current-output-port))
+                      (%paal-init-err             . ,(current-error-port))
 
                       ;; --- Exceptions (bytecode path) ---
                       ; %paal-vm-raise escapes to the nearest guard, wrapping the
@@ -844,6 +858,96 @@
                            (set! %paal-winds w-guard)
                            v))
                        result))))")
+          g)
+
+        ; Port parameters and the I/O wrappers that consult them.  The three
+        ; current-port names become paal parameters — the tree-walking path
+        ; made the same move in paal-initial-env, and for the same reason: a
+        ; HOST parameter answers %paal-param-key with nonsense, so paal's
+        ; parameterize could not rebind the ports at all.  Each wrapper
+        ; captures the raw procedure out of the table *before* overriding the
+        ; name — a blob define reads the table at that moment — and always
+        ; hands it an explicit port, so the raw layer's own defaulting never
+        ; runs.  Runs after the parameterize blob: make-parameter and
+        ; parameterize must exist.
+        (paal-run-bc
+          (pkaappi-compile
+            "(define %paal-raw-display display)
+             (define %paal-raw-write write)
+             (define %paal-raw-write-shared write-shared)
+             (define %paal-raw-write-simple write-simple)
+             (define %paal-raw-newline newline)
+             (define %paal-raw-write-char write-char)
+             (define %paal-raw-write-string write-string)
+             (define %paal-raw-write-u8 write-u8)
+             (define %paal-raw-read read)
+             (define %paal-raw-read-char read-char)
+             (define %paal-raw-peek-char peek-char)
+             (define %paal-raw-read-line read-line)
+             (define %paal-raw-read-string read-string)
+             (define %paal-raw-read-u8 read-u8)
+             (define %paal-raw-peek-u8 peek-u8)
+             (define %paal-raw-char-ready? char-ready?)
+             (define %paal-raw-u8-ready? u8-ready?)
+             (define %paal-raw-flush flush-output-port)
+             (define current-input-port  (make-parameter %paal-init-in))
+             (define current-output-port (make-parameter %paal-init-out))
+             (define current-error-port  (make-parameter %paal-init-err))
+             (define (display x . p)
+               (%paal-raw-display x (if (null? p) (current-output-port) (car p))))
+             (define (write x . p)
+               (%paal-raw-write x (if (null? p) (current-output-port) (car p))))
+             (define (write-shared x . p)
+               (%paal-raw-write-shared
+                 x (if (null? p) (current-output-port) (car p))))
+             (define (write-simple x . p)
+               (%paal-raw-write-simple
+                 x (if (null? p) (current-output-port) (car p))))
+             (define (newline . p)
+               (%paal-raw-newline (if (null? p) (current-output-port) (car p))))
+             (define (write-char c . p)
+               (%paal-raw-write-char
+                 c (if (null? p) (current-output-port) (car p))))
+             (define (write-string s . rest)
+               (if (null? rest)
+                   (%paal-raw-write-string s (current-output-port))
+                   (apply %paal-raw-write-string s rest)))
+             (define (write-u8 b . p)
+               (%paal-raw-write-u8 b (if (null? p) (current-output-port) (car p))))
+             (define (read . p)
+               (%paal-raw-read (if (null? p) (current-input-port) (car p))))
+             (define (read-char . p)
+               (%paal-raw-read-char (if (null? p) (current-input-port) (car p))))
+             (define (peek-char . p)
+               (%paal-raw-peek-char (if (null? p) (current-input-port) (car p))))
+             (define (read-line . p)
+               (%paal-raw-read-line (if (null? p) (current-input-port) (car p))))
+             (define (read-string k . p)
+               (%paal-raw-read-string
+                 k (if (null? p) (current-input-port) (car p))))
+             (define (read-u8 . p)
+               (%paal-raw-read-u8 (if (null? p) (current-input-port) (car p))))
+             (define (peek-u8 . p)
+               (%paal-raw-peek-u8 (if (null? p) (current-input-port) (car p))))
+             (define (char-ready? . p)
+               (%paal-raw-char-ready?
+                 (if (null? p) (current-input-port) (car p))))
+             (define (u8-ready? . p)
+               (%paal-raw-u8-ready? (if (null? p) (current-input-port) (car p))))
+             (define (flush-output-port . p)
+               (%paal-raw-flush (if (null? p) (current-output-port) (car p))))
+             ; Paal-side, so the rebinding is this table's parameters, not
+             ; the host dynamic state nothing here reads any more.
+             (define (with-input-from-file path thunk)
+               (let ((port (open-input-file path)))
+                 (let ((r (parameterize ((current-input-port port)) (thunk))))
+                   (close-input-port port)
+                   r)))
+             (define (with-output-to-file path thunk)
+               (let ((port (open-output-file path)))
+                 (let ((r (parameterize ((current-output-port port)) (thunk))))
+                   (close-output-port port)
+                   r)))")
           g)
         g))
 
