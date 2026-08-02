@@ -9,7 +9,10 @@ import re, sys, pathlib
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 TARGET = ROOT / "lib/kaappi/paal/embedded.sld"
 # Bundled because a standalone binary should resolve these with no filesystem.
-SRFIS = [1, 9, 13, 23, 28, 39, 48, 64, 69, 133]
+# Everything under lib/srfi/, which since the vendoring sweep is paal's own
+# ten plus the portable shelf vendored from kaappi.
+SRFIS = [1, 2, 8, 9, 11, 13, 14, 23, 26, 28, 31, 35, 39, 41, 42, 48, 60,
+         64, 69, 78, 95, 111, 113, 117, 125, 128, 132, 133, 141, 151, 158]
 
 
 def scheme_string(text):

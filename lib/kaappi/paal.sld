@@ -552,15 +552,21 @@
                      (vector-set! v 1 #t)
                      (vector-set! v 2 x)
                      v)))
+             ; Iterative through chained promises, as R7RS 7.3's reference
+             ; force is: forcing a promise whose thunk answers another
+             ; promise forces that one too, so (delay (delay x)) forces to
+             ; x.  kaappi behaves this way, and SRFI 41 leans on it -- its
+             ; stream-lambda wraps a body that is itself a stream in one
+             ; more delay.  Each link is still memoised individually.
              (define (force p)
                (if (not (promise? p))
                    p
                    (if (vector-ref p 1)
-                       (vector-ref p 2)
+                       (force (vector-ref p 2))
                        (let ((r ((vector-ref p 2))))
                          (vector-set! p 1 #t)
                          (vector-set! p 2 r)
-                         r))))")
+                         (force r)))))")
           g)
 
         ; Install paal-native HOFs and multiple-values support,

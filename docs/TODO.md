@@ -927,6 +927,34 @@ no value representation and no cross-copy protocol — so they can land in any o
       chased across an interleaving is untested territory — the episode
       identity a fiber restores on exit is the one from its entry, which
       another fiber may have replaced since.
+- [x] **The portable-SRFI shelf is vendored** — twenty-one libraries copied
+      from kaappi's lib/srfi (2, 8, 11, 14, 26, 31, 35, 41, 42, 60, 64, 78,
+      95, 111, 113, 117, 125, 128, 132, 141, 151, 158), each verified
+      behaviourally against host kaappi, all embedded for standalone
+      binaries.  The reference (srfi 64) replaced paal's subset — the count
+      readers take the runner now, and the final test-end retires it.  Three
+      files carry adaptations, recorded in their headers: 158's include is
+      inlined (an embedded library cannot reach a filesystem), 125 unpacks
+      its comparator (kaappi's native 69 absorbs one; paal's portable 69
+      must be handed procedures), and 26 is rebuilt on a runtime parts list.
+
+      Running real library code flushed out four paal bugs, each fixed and
+      pinned in tests/test-paal.scm ("fixes flushed out by vendoring"):
+      the emitter dropped the rest parameter from must-box-vars, so a
+      captured and mutated one silently lost its set! (SRFI 158's
+      generators); `force` stopped after one promise, where R7RS 7.3's
+      reference chases chains (SRFI 41's stream-lambda); define-record-type
+      rejected fields absent from the constructor, which R7RS 5.5 permits
+      (Bothner's test-runner record); and rename-core did not follow a
+      %gref% mark through a library rename, so a macro naming a library
+      value broke when used inside its own library (SRFI 35's
+      define-condition-type).
+
+      One expander limitation surfaced with no in-scope fix: an identifier a
+      template *introduces* in one expansion step and *binds* only in a
+      later step — the reference cut threads its slot variable that way —
+      needs per-identifier provenance.  Same boundary as the deferred §4.3
+      torture cases below; the adapted (srfi 26) sidesteps it.
 
 Deferred with reasons: R7RS §4.3's keyword-shadowing torture cases (variables
 named `let`, `if`) need an environment threaded through every `expand-*`; and

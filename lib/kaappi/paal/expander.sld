@@ -674,7 +674,23 @@
       (cond
         ((null? renames) form)
         ((symbol? form)
-         (let ((hit (assq form renames))) (if hit (cdr hit) form)))
+         (let ((hit (assq form renames)))
+           (cond
+             (hit (cdr hit))
+             ;; A %gref%-marked reference — a macro template's free
+             ;; identifier, instantiated into this body by a use of the
+             ;; macro inside its own library.  The mark said "resolve at
+             ;; top level"; the name it carries is being renamed, so the
+             ;; mark must follow the rename or the reference resolves to
+             ;; a global that no longer exists.  SRFI 35 is the shape:
+             ;; define-condition-type's template names
+             ;; make-condition-type, and the library itself uses the
+             ;; macro.
+             ((gref-name form)
+              => (lambda (bare)
+                   (let ((h2 (assq bare renames)))
+                     (if h2 (gref-symbol (cdr h2)) form))))
+             (else form))))
         ((not (pair? form)) form)
         ((eq? (car form) 'quote) form)
         ((and (eq? (car form) 'lambda) (pair? (cdr form)))
@@ -2743,21 +2759,25 @@
              (field-specs (cddddr form))
              (ctor-name   (car ctor-spec))
              (ctor-fields (cdr ctor-spec))
-             (n           (length ctor-fields))
+             ;; The record's slots cover every field spec — R7RS 5.5 lets a
+             ;; field stay out of the constructor, unspecified until its
+             ;; modifier runs (SRFI 64's test-runner is that shape) — so
+             ;; indexing goes by the spec list, and the constructor names
+             ;; must each appear in it.
+             (all-fields  (map car field-specs))
+             (n           (length all-fields))
              (tag-var     (string->symbol
                             (string-append "%" (symbol->string type-name) "-tag")))
              (field-idx   (lambda (fname)
-                            (let loop ((fs ctor-fields) (i 1))
+                            (let loop ((fs all-fields) (i 1))
                               (cond
                                 ((null? fs)
-                                 (error "paal: define-record-type: field not in constructor" fname))
+                                 (error "paal: define-record-type: constructor field not among the field names" fname))
                                 ((eq? (car fs) fname) i)
                                 (else (loop (cdr fs) (+ i 1)))))))
-             (ctor-sets   (let lp ((fs ctor-fields) (i 1) (acc '()))
-                            (if (null? fs)
-                                (reverse acc)
-                                (lp (cdr fs) (+ i 1)
-                                    (cons `(vector-set! v ,i ,(car fs)) acc)))))
+             (ctor-sets   (map (lambda (f)
+                                 `(vector-set! v ,(field-idx f) ,f))
+                               ctor-fields))
              (field-defs  (append-map
                             (lambda (spec)
                               (let* ((fname (car spec))

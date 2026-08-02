@@ -673,16 +673,24 @@
                      (vector-set! v 1 #t)
                      (vector-set! v 2 x)
                      v))))
-             (force . ,(lambda (p)
-               (if (not (and (vector? p) (= (vector-length p) 3)
-                             (eq? (vector-ref p 0) %paal-promise-tag)))
-                   p
-                   (if (vector-ref p 1)
-                       (vector-ref p 2)
-                       (let ((r ((vector-ref p 2))))
-                         (vector-set! p 1 #t)
-                         (vector-set! p 2 r)
-                         r)))))
+             ;; Iterative through chained promises, like the bytecode blob's
+             ;; force and R7RS 7.3's reference one: (delay (delay x)) forces
+             ;; to x, each link memoised individually.  The thunk is a paal
+             ;; lambda answering a trampoline thunk, and the loop inspects
+             ;; the value — so it must run the trampoline itself rather than
+             ;; leave it to the caller's call boundary as single-level force
+             ;; could.
+             (force . ,(lambda (p0)
+               (let loop ((p p0))
+                 (if (not (and (vector? p) (= (vector-length p) 3)
+                               (eq? (vector-ref p 0) %paal-promise-tag)))
+                     p
+                     (if (vector-ref p 1)
+                         (loop (vector-ref p 2))
+                         (let ((r (trampoline ((vector-ref p 2)))))
+                           (vector-set! p 1 #t)
+                           (vector-set! p 2 r)
+                           (loop r)))))))
 
              ;; Inexact math — (scheme inexact)
              (sin . ,sin) (cos . ,cos) (tan . ,tan)

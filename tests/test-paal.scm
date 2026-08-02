@@ -3986,42 +3986,268 @@
 ;; raise escapes before the framework sees it and takes the rest of the group
 ;; with it.  Thunking inside the macro is what makes a raise a failed test.
 
+;; The vendored (srfi 64) is kaappi's copy of Per Bothner's reference
+;; implementation, so the API is the reference one: the count readers take
+;; the runner, test-runner-get answers it, and the final test-end retires
+;; it — so a program reads the runner *before* closing the outermost group.
+;; test-log-to-file is #t there, hence the log deletions.
 (test-group "srfi 64"
   ;; 5 pass (a c d e g), 3 fail (b, f which does not raise, j which raises),
   ;; 1 skip, 1 expected failure.
   (test-equal "counts passes, failures, skips and expected failures"
     '(5 3 1 1)
-    (pkaappi-run-bc-string
-      "(import (scheme base) (srfi 64))
-       (test-begin \"demo\")
-       (test-equal \"a\" 4 (+ 2 2))
-       (test-equal \"b\" 5 (+ 2 2))
-       (test-assert \"c\" (= 1 1))
-       (test-eqv \"d\" 'a 'a)
-       (test-error \"e\" (car '()))
-       (test-error \"f\" 1)
-       (test-approximate \"g\" 1.0 1.05 0.1)
-       (test-skip \"h\") (test-equal \"h\" 1 2)
-       (test-expect-fail \"i\") (test-equal \"i\" 1 2)
-       (test-equal \"j\" 1 (car '()))
-       (test-end \"demo\")
-       (list (test-runner-pass-count) (test-runner-fail-count)
-             (test-runner-skip-count) (test-runner-xfail-count))"))
+    (let ((r (pkaappi-run-bc-string
+               "(import (scheme base) (srfi 64))
+                (test-begin \"demo\")
+                (test-equal \"a\" 4 (+ 2 2))
+                (test-equal \"b\" 5 (+ 2 2))
+                (test-assert \"c\" (= 1 1))
+                (test-eqv \"d\" 'a 'a)
+                (test-error \"e\" (car '()))
+                (test-error \"f\" 1)
+                (test-approximate \"g\" 1.0 1.05 0.1)
+                (test-skip \"h\") (test-equal \"h\" 1 2)
+                (test-expect-fail \"i\") (test-equal \"i\" 1 2)
+                (test-equal \"j\" 1 (car '()))
+                (let ((r (test-runner-get)))
+                  (test-end \"demo\")
+                  (list (test-runner-pass-count r) (test-runner-fail-count r)
+                        (test-runner-skip-count r) (test-runner-xfail-count r)))")))
+      (when (file-exists? "demo.log") (delete-file "demo.log"))
+      r))
   ;; The property the whole design exists for.
   (test-equal "a raising test fails that test and the run continues"
     '(1 1)
-    (pkaappi-run-bc-string
-      "(import (scheme base) (srfi 64))
-       (test-equal \"raises\" 1 (car '()))
-       (test-equal \"after\" 2 2)
-       (list (test-runner-pass-count) (test-runner-fail-count))"))
+    (let ((r (pkaappi-run-bc-string
+               "(import (scheme base) (srfi 64))
+                (test-begin \"d2\")
+                (test-equal \"raises\" 1 (car '()))
+                (test-equal \"after\" 2 2)
+                (let ((r (test-runner-get)))
+                  (test-end \"d2\")
+                  (list (test-runner-pass-count r) (test-runner-fail-count r)))")))
+      (when (file-exists? "d2.log") (delete-file "d2.log"))
+      r))
   (test-equal "groups nest"
     2
+    (let ((r (pkaappi-run-bc-string
+               "(import (scheme base) (srfi 64))
+                (test-begin \"outer\")
+                (test-group \"inner\" (test-assert \"x\" #t))
+                (test-assert \"y\" #t)
+                (let ((r (test-runner-get)))
+                  (test-end \"outer\")
+                  (test-runner-pass-count r))")))
+      (when (file-exists? "outer.log") (delete-file "outer.log"))
+      r))
+  ;; Reference surface the old subset lacked, spot-checked.
+  (test-equal "test-runner-current and result access answer"
+    '(#t pass)
+    (let ((r (pkaappi-run-bc-string
+               "(import (scheme base) (srfi 64))
+                (test-begin \"t3\")
+                (test-assert \"a\" #t)
+                (let ((r (test-runner-get)))
+                  (let ((kind (test-result-kind r)))
+                    (test-end \"t3\")
+                    (list (test-runner? r) kind)))")))
+      (when (file-exists? "t3.log") (delete-file "t3.log"))
+      r)))
+
+;; ---------------------------------------------------------------
+;; The vendored portable-SRFI shelf
+;; ---------------------------------------------------------------
+;;
+;; Twenty-one libraries copied from kaappi's lib/srfi (35 and 64 arrived as
+;; the pair, since the reference 64 imports 35), plus adaptations recorded
+;; in each file's header: 158's include is inlined for embedding, 26 is
+;; rebuilt on a runtime parts list (the reference implementation needs
+;; per-identifier hygiene), and 125 unpacks its comparator (kaappi's native
+;; 69 absorbs one; paal's portable 69 must be handed procedures).  One
+;; behavioural check per library; values verified against host kaappi.
+
+(test-group "vendored srfis"
+  (test-equal "2: and-let*" 10
     (pkaappi-run-bc-string
-      "(import (scheme base) (srfi 64))
-       (test-group \"outer\" (test-group \"inner\" (test-assert \"x\" #t))
-                            (test-assert \"y\" #t))
-       (test-runner-pass-count)")))
+      "(import (scheme base) (srfi 2))
+       (and-let* ((x 5) ((odd? x)) (y (* x 2))) y)"))
+  (test-equal "8: receive" 3
+    (pkaappi-run-bc-string
+      "(import (scheme base) (srfi 8))
+       (receive (a b) (values 1 2) (+ a b))"))
+  (test-equal "11: let-values import path" 3
+    (pkaappi-run-bc-string
+      "(import (scheme base) (srfi 11))
+       (let-values (((a b) (values 1 2))) (+ a b))"))
+  (test-equal "14: char-sets" '(#t #f 2)
+    (pkaappi-run-bc-string
+      "(import (scheme base) (srfi 14))
+       (list (char-set-contains? char-set:digit #\\7)
+             (char-set-contains? char-set:digit #\\x)
+             (char-set-size (char-set #\\a #\\b)))"))
+  (test-equal "26: cut and cute" '((2 4 6) 31 (1 5))
+    (pkaappi-run-bc-string
+      "(import (scheme base) (srfi 26))
+       (define n 1)
+       (define f (cute list n <>))
+       (set! n 5)
+       (list (map (cut * 2 <>) '(1 2 3))
+             ((cut + <> <> 1) 10 20)
+             (f 5))"))
+  (test-equal "31: rec" 120
+    (pkaappi-run-bc-string
+      "(import (scheme base) (srfi 31))
+       ((rec (fact n) (if (= n 0) 1 (* n (fact (- n 1))))) 5)"))
+  (test-equal "35: condition types" '(#t #t "hi" #t)
+    (pkaappi-run-bc-string
+      "(import (scheme base) (srfi 35))
+       (define ct (make-condition-type 'my &condition '(msg)))
+       (define c (make-condition ct 'msg \"hi\"))
+       (list (condition-type? ct) (condition-has-type? c ct)
+             (condition-ref c 'msg)
+             (condition-subtype? &error &condition))"))
+  (test-equal "41: streams" '(1 4 9 16 25)
+    (pkaappi-run-bc-string
+      "(import (scheme base) (srfi 41))
+       (stream->list (stream-take 5 (stream-map (lambda (x) (* x x))
+                                                (stream-from 1))))"))
+  (test-equal "42: eager comprehensions" '((0 1 4 9 16) 10)
+    (pkaappi-run-bc-string
+      "(import (scheme base) (srfi 42))
+       (list (list-ec (:range i 5) (* i i)) (sum-ec (:range i 1 5) i))"))
+  (test-equal "60: log-name bitwise" '(8 14 6 -1)
+    (pkaappi-run-bc-string
+      "(import (scheme base) (srfi 60))
+       (list (logand 12 10) (logior 12 10) (logxor 12 10) (lognot 0))"))
+  (test-equal "78: check" #t
+    (pkaappi-run-bc-string
+      "(import (scheme base) (srfi 78))
+       (check-set-mode! 'summary)
+       (check (+ 1 1) => 2)
+       (check-passed? 1)"))
+  (test-equal "95: sort" '((1 2 3) #t (1 2 3 4))
+    (pkaappi-run-bc-string
+      "(import (scheme base) (srfi 95))
+       (list (sort '(3 1 2) <) (sorted? '(1 2 3) <) (merge '(1 3) '(2 4) <))"))
+  (test-equal "111: boxes" '(#t 7)
+    (pkaappi-run-bc-string
+      "(import (scheme base) (srfi 111))
+       (let ((b (box 1))) (set-box! b 7) (list (box? b) (unbox b)))"))
+  (test-equal "113: sets" '(#t #f 3)
+    (pkaappi-run-bc-string
+      "(import (scheme base) (srfi 113) (srfi 128))
+       (let ((s (set (make-equal-comparator) 1 2 3)))
+         (list (set-contains? s 2) (set-contains? s 9) (set-size s)))"))
+  (test-equal "117: list queues" '(0 2 (0 1 2))
+    (pkaappi-run-bc-string
+      "(import (scheme base) (srfi 117))
+       (let ((q (make-list-queue '())))
+         (list-queue-add-back! q 1)
+         (list-queue-add-back! q 2)
+         (list-queue-add-front! q 0)
+         (list (list-queue-front q) (list-queue-back q) (list-queue-list q)))"))
+  (test-equal "125: hash tables over comparators" '(1 1)
+    (pkaappi-run-bc-string
+      "(import (scheme base) (srfi 125) (except (srfi 128) string-hash string-ci-hash))
+       (let ((t (make-hash-table (make-equal-comparator))))
+         (hash-table-set! t 'a 1)
+         (list (hash-table-ref/default t 'a 0) (hash-table-size t)))"))
+  (test-equal "128: comparators" '(#t #t #t)
+    (pkaappi-run-bc-string
+      "(import (scheme base) (srfi 128))
+       (let ((c (make-default-comparator)))
+         (list (=? c 1 1) (<? c 1 2) (>? c \"b\" \"a\")))"))
+  (test-equal "132: sort" '((1 2 3) #(1 2 3) #t)
+    (pkaappi-run-bc-string
+      "(import (scheme base) (srfi 132))
+       (list (list-sort < '(3 1 2)) (vector-sort < (vector 3 1 2))
+             (vector-sorted? < #(1 2 3)))"))
+  (test-equal "141: integer division" '((3 1) (4 -1) -4)
+    (pkaappi-run-bc-string
+      "(import (scheme base) (srfi 141))
+       (list (call-with-values (lambda () (floor/ 7 2)) list)
+             (call-with-values (lambda () (ceiling/ 7 2)) list)
+             (euclidean-quotient -7 2))"))
+  (test-equal "151: bitwise" '(8 16 3 4)
+    (pkaappi-run-bc-string
+      "(import (scheme base) (srfi 151))
+       (list (bitwise-and 12 10) (arithmetic-shift 1 4) (bit-count 7)
+             (integer-length 8))"))
+  (test-equal "158: generators" '((10 20 30) (0 1 2 3))
+    (pkaappi-run-bc-string
+      "(import (scheme base) (srfi 158))
+       (list (generator->list (gmap (lambda (x) (* x 10)) (generator 1 2 3)))
+             (generator->list (gtake (make-range-generator 0) 4)))")))
+
+;; ---------------------------------------------------------------
+;; Fixes the vendoring sweep flushed out
+;; ---------------------------------------------------------------
+;;
+;; Four paal bugs surfaced by running real library code, each pinned by its
+;; minimal reproduction.  Natural homes: closures/set! (the emitter fix),
+;; lazy (force), records (define-record-type), module system (rename-core).
+
+(test-group "fixes flushed out by vendoring"
+  ;; emitter.sld: the rest parameter was dropped from must-box-vars, so a
+  ;; captured and mutated one compiled against an unboxed capture and the
+  ;; set! never stuck — SRFI 158's generators are that shape.
+  (test-equal "a captured rest parameter boxes when mutated" '(1 2 3 done)
+    (pkaappi-run-bc-string
+      "(define (mk . args)
+         (lambda ()
+           (if (null? args)
+               'done
+               (let ((n (car args))) (set! args (cdr args)) n))))
+       (define g (mk 1 2 3))
+       (list (g) (g) (g) (g))"))
+  (test-equal "the dotted-tail shape boxes too" '(1 2 done)
+    (pkaappi-run-bc-string
+      "(define (mk a . rest)
+         (lambda ()
+           (cond ((not (null? rest)) (let ((n (car rest))) (set! rest (cdr rest)) n))
+                 (a (let ((n a)) (set! a #f) n))
+                 (else 'done))))
+       (define g (mk 2 1))
+       (list (g) (g) (g))"))
+  ;; force is iterative through chained promises, as R7RS 7.3's reference
+  ;; implementation is — SRFI 41's stream-lambda wraps a stream in one more
+  ;; delay and leans on it.  Both pipelines.
+  (test-equal "force chases chained promises" 42
+    (pkaappi-run-bc-string "(force (delay (delay (delay 42))))"))
+  (test-equal "force chases them on the tree-walking path" 42
+    (pkaappi-run-string "(force (delay (delay (delay 42))))"))
+  ;; R7RS 5.5: a field need not appear in the constructor; it is unspecified
+  ;; until its modifier runs.  Bothner's test-runner record is that shape.
+  (test-equal "a record field may stay out of the constructor" '(1 9)
+    (pkaappi-run-bc-string
+      "(define-record-type <r> (mk a) r? (a get-a) (b get-b set-b!))
+       (define r (mk 1))
+       (set-b! r 9)
+       (list (get-a r) (get-b r))"))
+  (test-equal "a constructor field must still be a declared field" 'error
+    (guard (e (#t 'error))
+      (pkaappi-run-bc-string
+        "(define-record-type <r2> (mk a zz) r2? (a get-a))
+         (mk 1 2)")))
+  ;; rename-core follows a %gref% mark through a library rename: a macro
+  ;; whose template names a library-defined value, used inside the library
+  ;; itself, splices a %gref%-marked reference into the body being renamed.
+  ;; SRFI 35's define-condition-type uses at its own bottom are the shape.
+  (test-equal "a library may use its own value-naming macro" 7
+    (let ((p "paal-tmp-gref.sld"))
+      (let ((port (open-output-file p)))
+        (display "(define-library (paal-tmp-gref)
+                    (import (scheme base))
+                    (export result)
+                    (begin
+                      (define (helper x) (+ x 2))
+                      (define-syntax use-helper
+                        (syntax-rules () ((_ v) (helper v))))
+                      (define result (use-helper 5))))" port)
+        (close-output-port port))
+      (let ((r (pkaappi-run-bc-string "(import (paal-tmp-gref)) result")))
+        (delete-file p)
+        r))))
 
 ;; ---------------------------------------------------------------
 ;; Bytecode cache for user programs

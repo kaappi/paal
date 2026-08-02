@@ -421,8 +421,19 @@
              (body      (ir:lambda-body   node))
              (variadic? (ir:lambda-rest?  node))
              (child-e   (make-emitter e params variadic?))
-             (flat-params (if (list? params) params
-                              (if (pair? params) (proper-list params) '())))
+             ;; Every name the lambda binds, the rest parameter included —
+             ;; it lives in a register like the fixed ones, so a captured
+             ;; and mutated rest parameter needs a box exactly as they do.
+             ;; It used to be dropped here, so (define (mk . args)
+             ;; (lambda () ... (set! args ...))) compiled the set! against
+             ;; an unboxed capture and the mutation never stuck — SRFI
+             ;; 158's generators are that shape.
+             (flat-params (cond
+                            ((symbol? params) (list params))
+                            ((list? params)   params)
+                            ((pair? params)   (append (proper-list params)
+                                                      (list (last-pair-cdr params))))
+                            (else '())))
              (to-box    (must-box-vars flat-params body)))
         ; Box mutable-captured params before allocating body-dst so boxes
         ; sit between params and scratch registers in the register layout.
