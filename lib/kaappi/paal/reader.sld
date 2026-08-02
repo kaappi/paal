@@ -22,12 +22,14 @@
 ;;;   #e #i              — exactness prefixes
 ;;;   |...|              — bar-quoted symbols
 ;;;   #N= #N#            — datum labels (shared and circular structure)
+;;;   1+2i -3/2-i 1@2    — complex literals (rectangular and polar)
 ;;;
-;;; Not yet supported: bignum/rational/complex literals beyond what the host's
-;;; string->number accepts.
+;;; Bignums and rationals come via the host's string->number; complex literals
+;;; are split and reassembled here because the host's string->number mishandles
+;;; them (kaappi/kaappi#1911).
 
 (define-library (kaappi paal reader)
-  (import (scheme base) (scheme char) (scheme file))
+  (import (scheme base) (scheme char) (scheme complex) (scheme file))
   (export paal-read paal-read-string paal-read-all paal-read-file)
   (begin
 
@@ -108,11 +110,82 @@
     ;; reset point.
     (define %fold-case? #f)
 
+    ;; Complex literals.  The host's string->number rejects several <complex>
+    ;; spellings its own reader accepts (-3/2-i, 1/2+1/2i, 3.0+inf.0i) and
+    ;; reads 1+2i inexactly where R7RS 6.2.5 requires it exact — both halves
+    ;; of kaappi/kaappi#1911.  So a token shaped like a complex number is
+    ;; split into its real and imaginary parts here, each part — a plain real,
+    ;; where string->number is reliable and exactness survives — is parsed on
+    ;; its own, and make-rectangular / make-polar reassemble the value.  This
+    ;; runs before string->number in read-atom: no real ever ends in i or
+    ;; contains @, so nothing valid is shadowed, and running after would keep
+    ;; the host's inexact 1+2i.
+
+    ;; A real (never complex) from string->number, or #f.
+    (define (%real-of s)
+      (let ((n (string->number s)))
+        (and n (real? n) n)))
+
+    ;; The imaginary part carries its sign: "+" and "-" alone are the a+i and
+    ;; a-i spellings, everything else parses as a signed real.
+    (define (%imag-of s)
+      (cond
+        ((string=? s "+") 1)
+        ((string=? s "-") -1)
+        (else (%real-of s))))
+
+    ;; Index of the sign separating real from imaginary part: the last +/-
+    ;; past position 0 whose predecessor is not an exponent marker, so the
+    ;; sign inside 1e+5 never splits.  #f when the token has no interior sign.
+    (define (%complex-split s)
+      (let loop ((k (- (string-length s) 1)))
+        (cond
+          ((<= k 0) #f)
+          ((and (memv (string-ref s k) '(#\+ #\-))
+                (not (memv (string-ref s (- k 1)) '(#\e #\E))))
+           k)
+          (else (loop (- k 1))))))
+
+    ;; Parse s as a complex literal, or #f if it is not one.
+    (define (parse-complex-token s)
+      (let ((n (string-length s)))
+        (cond
+          ;; Polar: <real> @ <real>.  Both halves must parse, so foo@bar
+          ;; falls through to the symbol branch.
+          ((let at ((k 1))
+             (cond ((>= k (- n 1)) #f)
+                   ((char=? (string-ref s k) #\@) k)
+                   (else (at (+ k 1)))))
+           => (lambda (k)
+                (let ((mag (%real-of (substring s 0 k)))
+                      (ang (%real-of (substring s (+ k 1) n))))
+                  (and mag ang (make-polar mag ang)))))
+          ;; Rectangular: anything ending in i (case-insensitive, per R7RS
+          ;; numeric syntax).  Symbols like pi land here too and fall out as
+          ;; #f when no part parses.
+          ((and (> n 1) (char-ci=? (string-ref s (- n 1)) #\i))
+           (let* ((body (substring s 0 (- n 1)))
+                  (blen (string-length body)))
+             (cond
+               ((= blen 0) #f)
+               ;; a+bi a-i 1e+5+2i — interior sign splits the parts.
+               ((let ((k (%complex-split body)))
+                  (and k
+                       (let ((re (%real-of (substring body 0 k)))
+                             (im (%imag-of (substring body k blen))))
+                         (and re im (make-rectangular re im))))))
+               ;; +bi -i +inf.0i — pure imaginary, sign required by R7RS.
+               ((memv (string-ref body 0) '(#\+ #\-))
+                (let ((im (%imag-of body)))
+                  (and im (make-rectangular 0 im))))
+               (else #f))))
+          (else #f))))
+
     (define (read-atom port first-ch)
       (let* ((rest (read-until-delimiter port))
              (chars (cons first-ch rest))
              (s    (list->string chars))
-             (n    (string->number s)))
+             (n    (or (parse-complex-token s) (string->number s))))
         ;; Fold the symbol branch only.  Numbers are unaffected by case beyond
         ;; what string->number already handles, and folding before the numeric
         ;; test would turn #xFF into a different token.

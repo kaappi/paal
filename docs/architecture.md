@@ -100,7 +100,9 @@ needed for paal's own source and most R7RS programs.
 
 **Supported:** `( )` lists, dotted pairs, `#( )` vectors, `' ` \` , ,@` abbreviations,
 booleans (`#t` `#f` `#true` `#false`), characters (`#\space` `#\newline` `#\xHH` etc.),
-strings with `\n \t \r \a \b \" \\ \xHH;` escapes, numbers (via `string->number`),
+strings with `\n \t \r \a \b \" \\ \xHH;` escapes, numbers (via `string->number`,
+except complex literals, which the reader splits into real and imaginary parts
+itself — the host's `string->number` mishandles them, kaappi/kaappi#1911),
 symbols, line comments (`;`), block comments (`#| … |#` nested), datum comments (`#;`),
 radix prefixes (`#b` `#o` `#x` `#d`), exactness prefixes (`#e` `#i`),
 bytevectors (`#u8( … )`), `|…|` bar-quoted symbols.
@@ -142,10 +144,11 @@ structural — it transforms S-expressions to S-expressions with no semantic ana
 | Form | Desugars to |
 |------|-------------|
 | `(let ((v e)…) body…)` | `((lambda (v…) body…) e…)` |
-| `(let name ((v e)…) body…)` | `(letrec ((name (lambda (v…) body…))) (name e…))` |
+| `(let name ((v e)…) body…)` | `(letrec* ((name (lambda (v…) body…))) (name e…))` |
 | `(let* () body…)` | `(begin body…)` |
 | `(let* ((v e) rest…) body…)` | `(let ((v e)) (let* rest… body…))` |
-| `(letrec ((v e)…) body…)` | `(let ((v #f)…) (set! v e)… body…)` |
+| `(letrec* ((v e)…) body…)` | `(let ((v #f)…) (set! v e)… body…)` |
+| `(letrec ((v e)…) body…)` | `(let ((v #f)…) (let ((t e)…) (set! v t)… body…))` — inits before any assignment, R7RS 4.2.2 |
 | `(and)` | `#t` |
 | `(and e)` | `e` |
 | `(and e rest…)` | `(if e (and rest…) #f)` |

@@ -13,7 +13,7 @@
         ("4.3 Macros" 12 8)
         ("5 Program structure" 14 0)
         ("6.1 Equivalence Predicates" 25 0)
-        ("6.2 Numbers" 202 8)
+        ("6.2 Numbers" 210 1)
         ("6.3 Booleans" 18 0)
         ("6.4 Lists" 65 0)
         ("6.5 Symbols" 17 0)
@@ -31,4 +31,4 @@
 
     ;; Top-level forms that raise before any test inside them runs.
     (define expected-errors
-      '(65 118 127 148 152 154 161 307 878 879 880))))
+      '(65 118 127 148 152 154 161 878 879 880))))

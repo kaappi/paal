@@ -287,6 +287,11 @@
     (define (read-forms-from path)
       (paal-read-forms-from-string (read-file-as-string path)))
 
+    ;; The include-ci variant: see the comment above expand-include.
+    (define (read-forms-from-ci path)
+      (paal-read-forms-from-string
+        (string-append "#!fold-case\n" (read-file-as-string path))))
+
     ;; string-append per chunk rather than collecting and applying: this file
     ;; is compiled by paal for the self-hosted path, and paal's own `apply`
     ;; would be handed one argument per chunk.
@@ -1217,8 +1222,8 @@
             ;; --- Derived forms: desugar then re-expand ---
             ((let)         (paal-expand (expand-let form)))
             ((let*)        (paal-expand (expand-let* form)))
-            ((letrec letrec*)
-                           (paal-expand (expand-letrec form)))
+            ((letrec)      (paal-expand (expand-letrec form)))
+            ((letrec*)     (paal-expand (expand-letrec* form)))
             ((and)         (paal-expand (expand-and (cdr form))))
             ((or)          (paal-expand (expand-or  (cdr form))))
             ((when)        (paal-expand (expand-when form)))
@@ -1579,7 +1584,10 @@
                  (ignore2  (check-body! body form "named let"))
                  (params   (map car bindings))
                  (inits    (map cadr bindings)))
-            `(letrec ((,name (lambda ,params ,@body)))
+            ;; letrec* rather than letrec: with a single binding the two are
+            ;; equivalent, and letrec*'s expansion has no temporaries, which
+            ;; keeps this — paal's hottest derived form — one layer shallower.
+            `(letrec* ((,name (lambda ,params ,@body)))
                (,name ,@inits)))
           (let* ((bindings (cadr form))
                  (body     (cddr form))
@@ -1608,6 +1616,26 @@
     ;; letrec / letrec*
     ;; ---------------------------------------------------------------
 
+    ;; letrec* assigns each variable as its init is evaluated, left to right,
+    ;; so a later init sees the values of earlier ones.
+    (define (expand-letrec* form)
+      (check-shape! form "letrec*" 3)
+      (let* ((bindings (cadr form))
+             (body     (cddr form))
+             (ignore1  (check-bindings! bindings form "letrec*"))
+             (ignore2  (check-body! body form "letrec*"))
+             (names    (map car bindings))
+             (inits    (map cadr bindings)))
+        `(let ,(map (lambda (n) `(,n #f)) names)
+           ,@(map (lambda (n e) `(set! ,n ,e)) names inits)
+           ,@body)))
+
+    ;; letrec evaluates every init before assigning any variable (R7RS 4.2.2),
+    ;; so the inits land in fresh temporaries first.  An init that reads a
+    ;; sibling's *value* is an error under R7RS; here it sees the #f
+    ;; placeholder and fails wherever #f is unwelcome, rather than quietly
+    ;; getting letrec* semantics.  Mutual recursion is unaffected — lambda
+    ;; inits only close over the bindings, which exist from the outer let on.
     (define (expand-letrec form)
       (check-shape! form "letrec" 3)
       (let* ((bindings (cadr form))
@@ -1615,10 +1643,12 @@
              (ignore1  (check-bindings! bindings form "letrec"))
              (ignore2  (check-body! body form "letrec"))
              (names    (map car bindings))
-             (inits    (map cadr bindings)))
+             (inits    (map cadr bindings))
+             (temps    (map (lambda (n) (fresh-name "__paal_rec")) names)))
         `(let ,(map (lambda (n) `(,n #f)) names)
-           ,@(map (lambda (n e) `(set! ,n ,e)) names inits)
-           ,@body)))
+           (let ,(map (lambda (t e) `(,t ,e)) temps inits)
+             ,@(map (lambda (n t) `(set! ,n ,t)) names temps)
+             ,@body))))
 
     ;; ---------------------------------------------------------------
     ;; and / or
@@ -1894,13 +1924,22 @@
     ;; ---------------------------------------------------------------
     ;;
     ;; Read and splice all forms from each named file.
-    ;; include-ci folds case (not yet implemented: treated same as include).
+    ;;
+    ;; R7RS 4.1.7 has include-ci read its files as if they began with
+    ;; #!fold-case — and since read-forms-from slurps the file into a string
+    ;; port, that is implemented literally: the directive is prepended to the
+    ;; text, the host read honours it, and a #!no-fold-case inside the file
+    ;; overrides it from that point on, exactly as it would in a file that
+    ;; really started with the directive.
 
     ;; Reads through read-forms-from for the reason given there: passing a
     ;; paal closure to HOST call-with-input-file cannot work under
     ;; self-hosting.
     (define (expand-include paths case-fold?)
-      (cons 'begin (apply append (map read-forms-from paths))))
+      (cons 'begin
+            (apply append
+                   (map (if case-fold? read-forms-from-ci read-forms-from)
+                        paths))))
 
     ;; ---------------------------------------------------------------
     ;; cond-expand

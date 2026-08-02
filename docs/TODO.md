@@ -26,8 +26,9 @@ they should.
 
 Three R7RS gaps remain, recorded here rather than as checkboxes because each is a
 decision rather than an oversight — see the end of Phase 7 for the reasons: §4.3's
-keyword-shadowing cases, the `(scheme …)` libraries being one flat table, and the §6.2
-complex literals, which are a host bug.
+keyword-shadowing cases, the `(scheme …)` libraries being one flat table, and §6.2's
+one residual failure, `(real? -2.5+0.0i)`, which needs a value the host runtime
+cannot represent.
 
 ---
 
@@ -212,8 +213,9 @@ together now.
       the assumption that paal would need its own complex type. It does not:
       paal runs on kaappi's runtime, which carries the full numeric tower.
       `(make-rectangular 1 2)` is `1+2i`, `(sqrt -1)` is `+i`, `(* 2+3i 2)`
-      works, and `1+2i` literals read because paal's reader defers to
-      `string->number`.
+      works, and complex literals read because paal's reader parses them
+      itself — see the §6.2 note at the end of Phase 7 for why
+      `string->number` could not be deferred to here.
 - [x] `(scheme r5rs)` — `exact->inexact` and `inexact->exact`, the only two
       names R7RS renamed. Everything else R5RS specifies is already present
       under an unchanged name.
@@ -893,13 +895,18 @@ no value representation and no cross-copy protocol — so they can land in any o
       are read by HOST kaappi's `read`, which already honours both.
 
 Deferred with reasons: R7RS §4.3's keyword-shadowing torture cases (variables
-named `let`, `if`) need an environment threaded through every `expand-*`; and the §6.2 complex-literal failures are a host bug, reported to
-kaappi/kaappi#1911. kaappi's `read` accepts `-3/2-i`, `1/2+1/2i` and
-`3.0+inf.0i` while its `string->number` returns `#f` for all three, and the two
-disagree on exactness even for `1+2i` — `read` gives the exact value R7RS 6.2.5
-requires, `string->number` gives `1.0+2.0i`. paal's reader defers to
-`string->number` for atoms, so those literals come back as *symbols* and fail
-later as unbound variables rather than failing to parse.
+named `let`, `if`) need an environment threaded through every `expand-*`; and
+§6.2 keeps exactly one failure, `(real? -2.5+0.0i)`, which R7RS says is `#f`
+because the imaginary part is *inexact* zero. The host's `make-rectangular`
+normalizes an inexact-zero imaginary part away — `(make-rectangular -2.5 0.0)`
+*is* `-2.5` — so the value the test needs cannot exist in the runtime paal
+delegates its numbers to. Same family as kaappi/kaappi#1911, whose main effect
+is closed: the reader now parses complex literals itself, splitting the token
+into real and imaginary parts — each a plain real, where `string->number` is
+reliable and exactness survives — and reassembling with `make-rectangular`.
+That is what `string->number` could not be trusted to do: it rejects `-3/2-i`,
+`1/2+1/2i` and `3.0+inf.0i` outright and reads `1+2i` inexactly, where R7RS
+6.2.5 requires the exact value.
 
 ---
 

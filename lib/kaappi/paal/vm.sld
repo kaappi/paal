@@ -409,6 +409,7 @@
              (truncate/ . ,truncate/) (truncate-quotient . ,truncate-quotient) (truncate-remainder . ,truncate-remainder)
              (numerator . ,numerator) (denominator . ,denominator)
              (exact-integer-sqrt . ,exact-integer-sqrt)
+             (rationalize . ,rationalize)
 
              ;; Lists — R7RS extras
              (make-list . ,make-list) (list-set! . ,list-set!)

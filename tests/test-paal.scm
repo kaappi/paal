@@ -97,7 +97,26 @@
   (test-equal "self-recursive" 120
     (pkaappi-run-string
       "(letrec ((fact (lambda (n) (if (= n 0) 1 (* n (fact (- n 1)))))))
-         (fact 5))")))
+         (fact 5))"))
+  ;; R7RS 4.2.2: letrec evaluates every init before assigning any variable, so
+  ;; an init that reads a sibling's *value* is an error — here the placeholder
+  ;; #f reaches (+ ...) and raises.  letrec* assigns left to right, so the same
+  ;; program is well-defined there.  This pins the two expansions apart.
+  (test-equal "letrec* init sees the previous binding's value" 2
+    (pkaappi-run-string "(letrec* ((a 1) (b (+ a 1))) b)"))
+  (test-equal "letrec* init sees the previous binding's value (bc)" 2
+    (pkaappi-run-bc-string "(letrec* ((a 1) (b (+ a 1))) b)"))
+  (test-equal "letrec init cannot read a sibling's value" 'error
+    (guard (e (#t 'error))
+      (pkaappi-run-string "(letrec ((a 1) (b (+ a 1))) b)")))
+  (test-equal "letrec init cannot read a sibling's value (bc)" 'error
+    (guard (e (#t 'error))
+      (pkaappi-run-bc-string "(letrec ((a 1) (b (+ a 1))) b)")))
+  (test-equal "letrec mutual recursion still works (bc)" #t
+    (pkaappi-run-bc-string
+      "(letrec ((even? (lambda (n) (if (= n 0) #t (odd?  (- n 1)))))
+                (odd?  (lambda (n) (if (= n 0) #f (even? (- n 1))))))
+         (even? 100))")))
 
 (test-group "named-let"
   (test-equal "sum loop" 10
@@ -862,7 +881,9 @@
   (test-equal "floor-quotient"  3 (pkaappi-run-string "(floor-quotient 10 3)"))
   (test-equal "floor-remainder" 1 (pkaappi-run-string "(floor-remainder 10 3)"))
   (test-equal "truncate-quotient"  3 (pkaappi-run-string "(truncate-quotient 10 3)"))
-  (test-equal "truncate-remainder" 1 (pkaappi-run-string "(truncate-remainder 10 3)")))
+  (test-equal "truncate-remainder" 1 (pkaappi-run-string "(truncate-remainder 10 3)"))
+  (test-equal "rationalize"      1/3 (pkaappi-run-string "(rationalize (exact .3) 1/10)"))
+  (test-equal "rationalize (bc)" 1/3 (pkaappi-run-bc-string "(rationalize (exact .3) 1/10)")))
 
 ;; ---------------------------------------------------------------
 ;; The R7RS procedures that return two values
@@ -2394,6 +2415,41 @@
       (paal-run-bc (paal-read-bc (open-input-string (get-output-string buf)))
                    (pkaappi-make-globals)))))
 
+;; The host's string->number rejects several complex spellings its reader
+;; accepts and reads 1+2i inexactly (kaappi/kaappi#1911), so the reader splits
+;; the parts and reassembles the value itself.
+(test-group "reader: complex literals"
+  (test-equal "rectangular, both parts"
+    (make-rectangular 1 2) (car (paal-read-string "1+2i")))
+  (test-equal "an exact literal stays exact"
+    #t (exact? (car (paal-read-string "1+2i"))))
+  (test-equal "rational parts"
+    (make-rectangular 1/2 1/2) (car (paal-read-string "1/2+1/2i")))
+  (test-equal "negative real, unit imaginary"
+    (make-rectangular -3/2 -1) (car (paal-read-string "-3/2-i")))
+  (test-equal "infinite imaginary part"
+    (make-rectangular 3.0 +inf.0) (car (paal-read-string "3.0+inf.0i")))
+  (test-equal "bare +i"
+    (make-rectangular 0 1) (car (paal-read-string "+i")))
+  (test-equal "bare -i"
+    (make-rectangular 0 -1) (car (paal-read-string "-i")))
+  (test-equal "a sign inside an exponent does not split"
+    (make-rectangular 1e5 2) (car (paal-read-string "1e+5+2i")))
+  (test-equal "polar"
+    (make-polar 1 2) (car (paal-read-string "1@2")))
+  (test-equal "symbols ending in i stay symbols"
+    '(hi pi ascii) (car (paal-read-string "(hi pi ascii)")))
+  (test-equal "@ inside a symbol stays a symbol"
+    'foo@bar (car (paal-read-string "foo@bar")))
+  ;; The literal itself, not arithmetic over it: kaappi's `-` drops exactness
+  ;; on complex operands, real-part turns an exact rational part inexact, and
+  ;; eqv? conflates exact with inexact complex — so anything beyond integer
+  ;; parts would test the host's quirks rather than the reader.
+  (test-equal "a complex literal evaluates through the pipeline"
+    '(1 2 #t)
+    (pkaappi-run-bc-string
+      "(list (real-part 1+2i) (imag-part 1+2i) (exact? 3/2+i))")))
+
 ;; ---------------------------------------------------------------
 ;; check — compile without running
 ;; ---------------------------------------------------------------
@@ -2499,6 +2555,39 @@
         (display "(define total 99)\n" port)
         (close-output-port port))
       (let ((r (pkaappi-run-bc-string "(include \"paal-include-tmp.scm\") total")))
+        (delete-file p)
+        r))))
+
+;; R7RS 4.1.7: include-ci reads its files as if they began with #!fold-case.
+;; The host `read` honours the directive on a string port, and included files
+;; are slurped into one, so folding is literally prepending the directive.
+(test-group "include-ci folds case"
+  (test-equal "identifiers fold to lower case" 7
+    (let ((p "paal-include-ci-tmp.scm"))
+      (let ((port (open-output-file p)))
+        (display "(DEFINE Folded 7)\n" port)
+        (close-output-port port))
+      (let ((r (pkaappi-run-bc-string
+                 "(include-ci \"paal-include-ci-tmp.scm\") folded")))
+        (delete-file p)
+        r)))
+  (test-equal "plain include keeps case" 'error
+    (let ((p "paal-include-ci-tmp2.scm"))
+      (let ((port (open-output-file p)))
+        (display "(DEFINE Folded 7)\n" port)
+        (close-output-port port))
+      (let ((r (guard (e (#t 'error))
+                 (pkaappi-run-bc-string
+                   "(include \"paal-include-ci-tmp2.scm\") folded"))))
+        (delete-file p)
+        r)))
+  (test-equal "#!no-fold-case inside the file overrides" 'MiXeD
+    (let ((p "paal-include-ci-tmp3.scm"))
+      (let ((port (open-output-file p)))
+        (display "(define folded '(#!no-fold-case MiXeD))\n" port)
+        (close-output-port port))
+      (let ((r (pkaappi-run-bc-string
+                 "(include-ci \"paal-include-ci-tmp3.scm\") (car folded)")))
         (delete-file p)
         r))))
 
@@ -2908,10 +2997,11 @@
     '(1.0 2)
     (pkaappi-run-bc-string "(list (exact->inexact 1) (inexact->exact 2.0))"))
   ;; Not a restriction to the reals: paal runs on kaappi's runtime, which has
-  ;; the full numeric tower, so complex works outright.  1+2i literals read
-  ;; because paal's reader defers to string->number.
+  ;; the full numeric tower, so complex works outright.  1+2i reads exact per
+  ;; R7RS 6.2.5 — the reader parses complex literals itself — so its parts are
+  ;; the exact 1 and 2, where the old string->number path gave 1.0 and 2.0.
   (test-equal "complex arithmetic"
-    '(1+2i 1.0 2.0 5.0 +i 4.0+6.0i)
+    '(1+2i 1 2 5.0 +i 4.0+6.0i)
     (pkaappi-run-bc-string
       "(list (make-rectangular 1 2) (real-part 1+2i) (imag-part 1+2i)
              (magnitude (make-rectangular 3 4)) (sqrt -1) (* 2+3i 2))"))
