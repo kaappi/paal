@@ -233,23 +233,50 @@
     ;; and boxes live in heap objects rather than registers, so values shared
     ;; across the boundary stay intact.
 
+    (define (paal-call-setup! regs base callee args)
+      (let* ((fn        (closure-function callee))
+             (arity     (bytecode-function-arity fn))
+             (variadic? (bytecode-function-variadic? fn)))
+        (let loop ((i 0) (as args))
+          (cond
+            ((< i arity)
+             (when (null? as)
+               (error "paal-bc: too few arguments" (bytecode-function-name fn)))
+             (vector-set! regs (+ base i) (car as))
+             (loop (+ i 1) (cdr as)))
+            (variadic?
+             (vector-set! regs (+ base arity) as))
+            ((not (null? as))
+             (error "paal-bc: too many arguments" (bytecode-function-name fn)))))))
+
+    ;; The re-entry door minus the retry guard, for the spawn and
+    ;; ffi-callback trampolines only.  A spawned fiber's stack cannot carry
+    ;; a host guard across its suspension points: kaappi's own scheduler
+    ;; deadlocks when a guard wraps channel operations inside a spawned
+    ;; fiber's body (verified with a kaappi-only repro, no paal involved),
+    ;; and the retry guard below is exactly such a guard.  The main fiber is
+    ;; the scheduler's root and tolerates one, which is why paal-run-bc's
+    ;; retry guard never bothered fibers.  The price is recorded: inside a
+    ;; spawned fiber, a primitive error does not visit
+    ;; with-exception-handler entries — paal `raise` still does.
+    (define (paal-call-value-unguarded regs globals base callee args)
+      (cond
+        ((closure? callee)
+         (paal-call-setup! regs base callee args)
+         (let ((outer-id (globals-ref-default globals '%paal-vm-loop #f)))
+           (globals-define! globals '%paal-vm-loop (list 'loop))
+           (let ((result (run! regs globals
+                               (list (make-frame callee base base)))))
+             (globals-define! globals '%paal-vm-loop outer-id)
+             result)))
+        ((procedure? callee) (apply callee args))
+        (else (error "paal-bc: not a callable" callee))))
+
     (define (paal-call-value regs globals base callee args)
       (cond
         ((closure? callee)
-         (let* ((fn        (closure-function callee))
-                (arity     (bytecode-function-arity fn))
-                (variadic? (bytecode-function-variadic? fn)))
-           (let loop ((i 0) (as args))
-             (cond
-               ((< i arity)
-                (when (null? as)
-                  (error "paal-bc: too few arguments" (bytecode-function-name fn)))
-                (vector-set! regs (+ base i) (car as))
-                (loop (+ i 1) (cdr as)))
-               (variadic?
-                (vector-set! regs (+ base arity) as))
-               ((not (null? as))
-                (error "paal-bc: too many arguments" (bytecode-function-name fn)))))
+         (paal-call-setup! regs base callee args)
+         (let ()
            ; A fresh loop identity for the nested episode: a continuation
            ; captured inside it must not be replayable once this run! has
            ; returned.  On an escape the restore below is skipped — every
@@ -1133,9 +1160,13 @@
              (let ((f   (vector-ref regs (+ abs-base 1)))
                    (raw (globals-ref! globals '%paal-host-spawn)))
                (deliver-result! regs globals frames frame abs-base
+                                ; Unguarded: a spawned fiber's stack cannot
+                                ; carry a host guard across its suspension
+                                ; points — see paal-call-value-unguarded.
                                 (raw (lambda ()
                                        (let ((fregs (make-vector REGS-SIZE #f)))
-                                         (paal-call-value fregs globals 0 f '()))))
+                                         (paal-call-value-unguarded
+                                           fregs globals 0 f '()))))
                                 tail?))))
 
         ; ffi-callback — (ffi-callback proc arg-types ret-type).  Same shape:
@@ -1149,10 +1180,13 @@
                     (f     (car given))
                     (raw   (globals-ref! globals '%paal-host-ffi-callback)))
                (deliver-result! regs globals frames frame abs-base
+                                ; Unguarded, as for spawn: the callback runs
+                                ; on whatever stack C is on.
                                 (apply raw
                                        (lambda args
                                          (let ((fregs (make-vector REGS-SIZE #f)))
-                                           (paal-call-value fregs globals 0 f args)))
+                                           (paal-call-value-unguarded
+                                             fregs globals 0 f args)))
                                        (cdr given))
                                 tail?))))
 

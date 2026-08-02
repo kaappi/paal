@@ -580,6 +580,15 @@ itself. A condition that exhausts the pending handlers (or finds a guard's escap
 on top) re-raises outward, so guard-only programs never enter the arm, and
 whatever reaches `run-guard!`'s catch belongs to the clauses.
 
+One entry point stays unguarded: the `spawn`/`ffi-callback` trampolines go
+through `paal-call-value-unguarded`, because a spawned fiber's stack cannot
+carry a host guard across its suspension points — kaappi's own scheduler
+deadlocks when a `guard` wraps channel operations inside a spawned fiber's
+body (a kaappi-only repro, no paal involved). The main fiber is the
+scheduler's root and tolerates `paal-run-bc`'s guard. The recorded price:
+inside a spawned fiber, a primitive error does not visit
+`with-exception-handler` entries — paal `raise` still does.
+
 The tree-walking VM keeps HOST `with-exception-handler` and inherits the host's own
 handler stack — which is why it needed none of the routing above. It only needs the trampoline forced on both the thunk and the handler
 result: an unforced `(raise-continuable x)` in tail position would otherwise happen
