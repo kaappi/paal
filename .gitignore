@@ -1,4 +1,8 @@
 coverage.xml
+# The vendored SRFI 64 runner writes <group>.log beside the process; the
+# suite deletes the ones it creates, but interrupted or ad-hoc runs leave
+# strays.
+*.log
 # Anchored: an unanchored `paal` would also ignore lib/kaappi/paal/, so any new
 # pipeline stage added there would be silently untracked.
 /paal
