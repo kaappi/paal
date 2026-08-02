@@ -3336,7 +3336,32 @@
       "(import (except (scheme base) list) (shadow relist)) (first-of (cons 1 '()))"))
   (test-equal "full-base rename on the tree-walking pipeline" '(mine (3))
     (pkaappi-run-string
-      "(import (except (scheme base) list) (shadow relist)) (list 3)")))
+      "(import (except (scheme base) list) (shadow relist)) (list 3)"))
+  ;; The third mechanism SRFI 101 exposed: the expander's own desugarings
+  ;; (quasiquote, case-lambda, define-record-type) emitted bare base names,
+  ;; so a library defining `list` or `car` had the machinery renamed into
+  ;; its own shadows — and evaluated them as data builders.  The emissions
+  ;; go through %paal-base- spellings now, which no library can utter.
+  (test-equal "quasiquote machinery survives shadowed list/car" '(1 2 tail)
+    (pkaappi-run-bc-string
+      "(import (except (scheme base) list car length vector-ref)
+               (shadow machinery))
+       (qq-pair 1 2)"))
+  (test-equal "case-lambda machinery survives shadowed length/car" 'two
+    (pkaappi-run-bc-string
+      "(import (except (scheme base) list car length vector-ref)
+               (shadow machinery))
+       (arity 1 2)"))
+  (test-equal "record machinery survives shadowed vector-ref/list" 42
+    (pkaappi-run-bc-string
+      "(import (except (scheme base) list car length vector-ref)
+               (shadow machinery))
+       (record-roundtrip 42)"))
+  (test-equal "machinery shadows on the tree-walking pipeline" '(9 8 tail)
+    (pkaappi-run-string
+      "(import (except (scheme base) list car length vector-ref)
+               (shadow machinery))
+       (qq-pair 9 8)")))
 
 ;; ---------------------------------------------------------------
 ;; Library declarations beyond import/export/begin/include

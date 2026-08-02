@@ -2269,7 +2269,7 @@
       `(if ,(cadr form) (begin ,@(cddr form))))
 
     (define (expand-unless form)
-      `(if (not ,(cadr form)) (begin ,@(cddr form))))
+      `(if (%paal-base-not ,(cadr form)) (begin ,@(cddr form))))
 
     ;; ---------------------------------------------------------------
     ;; cond
@@ -2354,38 +2354,45 @@
         ((clause-else? (car clause) env)
          `(,%core-else ,@(cdr clause)))
         ((and (pair? (cdr clause)) (clause-arrow? (cadr clause) env))
-         `((memv ,k ',(car clause)) (,(caddr clause) ,k)))
-        (else `((memv ,k ',(car clause)) ,@(cdr clause)))))
+         `((%paal-base-memv ,k ',(car clause)) (,(caddr clause) ,k)))
+        (else `((%paal-base-memv ,k ',(car clause)) ,@(cdr clause)))))
 
     ;; ---------------------------------------------------------------
     ;; quasiquote
     ;; ---------------------------------------------------------------
 
+    ;; Emits the construction calls under %paal-base- spellings: a library
+    ;; that defines `list`, `cons` or `append` (SRFI 101 defines all three)
+    ;; must not capture the machinery's own emissions when install-library!
+    ;; renames its definitions.  Same for case's memv, unless's not,
+    ;; case-lambda's destructuring and the record-type layout below.
     (define (expand-qq form depth)
       (cond
         ((vector? form)
-         (list 'list->vector (expand-qq (vector->list form) depth)))
+         (list '%paal-base-list->vector (expand-qq (vector->list form) depth)))
         ((not (pair? form))
          (list 'quote form))
         ((eq? (car form) 'unquote)
          (if (= depth 0)
              (cadr form)
-             (list 'list
+             (list '%paal-base-list
                    (list 'quote 'unquote)
                    (expand-qq (cadr form) (- depth 1)))))
         ((eq? (car form) 'quasiquote)
-         (list 'list
+         (list '%paal-base-list
                (list 'quote 'quasiquote)
                (expand-qq (cadr form) (+ depth 1))))
         ((and (pair? (car form)) (eq? (caar form) 'unquote-splicing))
          (if (= depth 0)
-             (list 'append (cadar form) (expand-qq (cdr form) depth))
-             (list 'cons
-                   (list 'list (list 'quote 'unquote-splicing)
+             (list '%paal-base-append (cadar form) (expand-qq (cdr form) depth))
+             (list '%paal-base-cons
+                   (list '%paal-base-list (list 'quote 'unquote-splicing)
                                (expand-qq (cadar form) (- depth 1)))
                    (expand-qq (cdr form) depth))))
         (else
-         (list 'cons (expand-qq (car form) depth) (expand-qq (cdr form) depth)))))
+         (list '%paal-base-cons
+               (expand-qq (car form) depth)
+               (expand-qq (cdr form) depth)))))
 
     ;; ---------------------------------------------------------------
     ;; do
@@ -2436,11 +2443,11 @@
     ;; Generate (list-ref args-var i) accessor form
     (define (args-ref args-var i)
       (case i
-        ((0) `(car ,args-var))
-        ((1) `(cadr ,args-var))
-        ((2) `(caddr ,args-var))
-        ((3) `(cadddr ,args-var))
-        (else `(list-ref ,args-var ,i))))
+        ((0) `(%paal-base-car ,args-var))
+        ((1) `(%paal-base-cadr ,args-var))
+        ((2) `(%paal-base-caddr ,args-var))
+        ((3) `(%paal-base-cadddr ,args-var))
+        (else `(%paal-base-list-ref ,args-var ,i))))
 
     ;; Generate let-bindings that destructure args-var into params
     (define (params->lets args-var params)
@@ -2452,11 +2459,12 @@
                  (cons (list (car p) (args-ref args-var i)) acc)))
           ;; Rest variable (improper list tail)
           ((symbol? p)
-           (reverse (cons (list p `(list-tail ,args-var ,i)) acc))))))
+           (reverse (cons (list p `(%paal-base-list-tail ,args-var ,i)) acc))))))
 
     (define (case-lambda-dispatch args-var clauses)
       (if (null? clauses)
-          `(error "case-lambda: no matching arity" (length ,args-var))
+          `(%paal-base-error "case-lambda: no matching arity"
+                             (%paal-base-length ,args-var))
           (let* ((clause (car clauses))
                  (params (car clause))
                  (body   (cdr clause))
@@ -2468,13 +2476,13 @@
               ;; Exact arity (proper list)
               ((list? params)
                (let ((n (length params)))
-                 `(if (= (length ,args-var) ,n)
+                 `(if (%paal-base-= (%paal-base-length ,args-var) ,n)
                       (let ,lets ,@body)
                       ,(case-lambda-dispatch args-var (cdr clauses)))))
               ;; At-least-n arity (improper list)
               (else
                (let ((n (proper-length params)))
-                 `(if (>= (length ,args-var) ,n)
+                 `(if (%paal-base->= (%paal-base-length ,args-var) ,n)
                       (let ,lets ,@body)
                       ,(case-lambda-dispatch args-var (cdr clauses)))))))))
 
@@ -2894,8 +2902,14 @@
                                  (error "paal: define-record-type: constructor field not among the field names" fname))
                                 ((eq? (car fs) fname) i)
                                 (else (loop (cdr fs) (+ i 1)))))))
+             ;; Fresh, not `v`: the constructor's formals are the user's
+             ;; field names, and a field named v captured the machinery's
+             ;; vector variable — (make-box2 42) stored the vector into
+             ;; itself and answered a circular record.
+             (rec-var     (fresh-name "__paal_rec"))
              (ctor-sets   (map (lambda (f)
-                                 `(vector-set! v ,(field-idx f) ,f))
+                                 `(%paal-base-vector-set! ,rec-var
+                                                          ,(field-idx f) ,f))
                                ctor-fields))
              (field-defs  (append-map
                             (lambda (spec)
@@ -2904,21 +2918,24 @@
                                      (acc   (cadr spec))
                                      (mut   (and (pair? (cddr spec)) (caddr spec))))
                                 (if mut
-                                    `((define (,acc obj) (vector-ref obj ,idx))
-                                      (define (,mut obj val) (vector-set! obj ,idx val)))
-                                    `((define (,acc obj) (vector-ref obj ,idx))))))
+                                    `((define (,acc obj)
+                                        (%paal-base-vector-ref obj ,idx))
+                                      (define (,mut obj val)
+                                        (%paal-base-vector-set! obj ,idx val)))
+                                    `((define (,acc obj)
+                                        (%paal-base-vector-ref obj ,idx))))))
                             field-specs)))
         `(begin
-           (define ,tag-var (list (quote ,type-name)))
+           (define ,tag-var (%paal-base-list (quote ,type-name)))
            (define (,ctor-name ,@ctor-fields)
-             (let ((v (make-vector ,(+ 1 n))))
-               (vector-set! v 0 ,tag-var)
+             (let ((,rec-var (%paal-base-make-vector ,(+ 1 n))))
+               (%paal-base-vector-set! ,rec-var 0 ,tag-var)
                ,@ctor-sets
-               v))
+               ,rec-var))
            (define (,pred-name obj)
-             (and (vector? obj)
-                  (= (vector-length obj) ,(+ 1 n))
-                  (eq? (vector-ref obj 0) ,tag-var)))
+             (and (%paal-base-vector? obj)
+                  (%paal-base-= (%paal-base-vector-length obj) ,(+ 1 n))
+                  (%paal-base-eq? (%paal-base-vector-ref obj 0) ,tag-var)))
            ,@field-defs)))
 
     ))

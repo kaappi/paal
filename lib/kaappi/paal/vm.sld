@@ -637,6 +637,37 @@
              (symbol-interned? . ,symbol-interned?)
              (generate-symbol . ,generate-symbol)
 
+             ;; --- Machinery-introduced base references ---
+             ;; The expander's own desugarings — quasiquote's list/cons/
+             ;; append, case's memv, case-lambda's destructuring, the
+             ;; record-type layout — emit references under these unstealable
+             ;; spellings, so a library that defines `list` or `vector-ref`
+             ;; (SRFI 101 defines both, plus car, cdr and length) cannot
+             ;; capture an expansion's own emissions when install-library!
+             ;; renames its definitions.  call-with-values is the deliberate
+             ;; exception: it is multiple-values machinery with a
+             ;; paal-compiled copy in the globals blob, so define-values and
+             ;; let-values keep the bare spelling — nothing on the shelf
+             ;; shadows it.
+             (%paal-base-cons . ,cons) (%paal-base-car . ,car)
+             (%paal-base-list . ,list)
+             (%paal-base-append . ,append)
+             (%paal-base-list->vector . ,list->vector)
+             (%paal-base-memv . ,memv) (%paal-base-not . ,not)
+             (%paal-base-cadr . ,cadr) (%paal-base-caddr . ,caddr)
+             (%paal-base-cadddr . ,cadddr)
+             (%paal-base-list-ref . ,list-ref)
+             (%paal-base-list-tail . ,list-tail)
+             (%paal-base-length . ,length)
+             (%paal-base-= . ,=) (%paal-base->= . ,>=)
+             (%paal-base-error . ,error)
+             (%paal-base-eq? . ,eq?)
+             (%paal-base-make-vector . ,make-vector)
+             (%paal-base-vector-ref . ,vector-ref)
+             (%paal-base-vector-set! . ,vector-set!)
+             (%paal-base-vector? . ,vector?)
+             (%paal-base-vector-length . ,vector-length)
+
              ;; Features
              ;; paal's own list, not the host's.  `features` used to answer
              ;; with kaappi's -- which does not contain `paal` -- while
