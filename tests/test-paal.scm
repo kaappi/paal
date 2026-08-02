@@ -4704,4 +4704,69 @@
         (delete-file p)
         r))))
 
+;; Substring search for asserting on rendered reports; (scheme base) has no
+;; string-contains and pulling SRFI 13 in for one probe is not worth it.
+(define (%has-substring? hay needle)
+  (let ((hl (string-length hay)) (nl (string-length needle)))
+    (let loop ((i 0))
+      (cond ((> (+ i nl) hl) #f)
+            ((string=? (substring hay i (+ i nl)) needle) #t)
+            (else (loop (+ i 1)))))))
+
+(test-group "capability report"
+  (let ((report (paal-features)))
+    (test-equal "version is the exported constant"
+      paal-version (cdr (assq 'version report)))
+    (test-assert "features include paal, kaappi and r7rs"
+      (let ((fs (cdr (assq 'features report))))
+        (and (memq 'paal fs) (memq 'kaappi fs) (memq 'r7rs fs) #t)))
+    (test-assert "embedded libraries include (srfi 1)"
+      (and (member '(srfi 1) (cdr (assq 'embedded-libraries report))) #t))
+    (test-equal "embedded names and the report agree"
+      (paal-embedded-names) (cdr (assq 'embedded-libraries report)))
+    (test-equal "pipeline cache lists all nine stage files"
+      9 (length (cdr (assq 'pipeline-cache report)))))
+  (test-assert "the text rendering opens with name and version"
+    (%has-substring? (paal-features-text)
+                     (string-append "paal " paal-version)))
+  (test-assert "the json rendering carries the version"
+    (%has-substring? (paal-features-json)
+                     (string-append "\"version\": \"" paal-version "\"")))
+  (test-assert "the json rendering names the embedded libraries"
+    (%has-substring? (paal-features-json) "\"(srfi 1)\"")))
+
+(test-group "cache management"
+  (let ((src "paal-cache-mgmt-tmp.scm"))
+    (let ((port (open-output-file src)))
+      (display "(+ 20 22)\n" port)
+      (close-output-port port))
+    (test-equal "a cached run still answers the program's value"
+      42 (pkaappi-run-file-cached src))
+    (test-equal "status finds the entry the run wrote, marked current"
+      (list (cons (pkaappi-cache-path src) #t))
+      (pkaappi-cache-entries src))
+    ;; Strand a fake stale entry, plus a near-miss that must be left alone —
+    ;; a non-decimal middle part is not a cache entry name, it is a user's.
+    (let ((port (open-output-file (string-append src ".99999.pbc"))))
+      (display "stale" port)
+      (close-output-port port))
+    (let ((port (open-output-file (string-append src ".notes.pbc"))))
+      (display "not ours" port)
+      (close-output-port port))
+    (test-equal "a stranded entry reads stale beside the current one"
+      '(1 1)
+      (let ((entries (pkaappi-cache-entries src)))
+        (list (length (filter cdr entries))
+              (length (filter (lambda (e) (not (cdr e))) entries)))))
+    (test-equal "clear removes both entries and answers their names"
+      2 (length (pkaappi-cache-clear! src)))
+    (test-equal "after clear nothing matches"
+      '() (pkaappi-cache-entries src))
+    (test-assert "the near-miss .pbc survived the clear"
+      (file-exists? (string-append src ".notes.pbc")))
+    (delete-file (string-append src ".notes.pbc"))
+    (delete-file src)
+    (test-equal "entries for a missing source are all stale"
+      '() (pkaappi-cache-entries src))))
+
 (test-exit)

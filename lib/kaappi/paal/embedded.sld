@@ -17,7 +17,7 @@
 
 (define-library (kaappi paal embedded)
   (import (scheme base))
-  (export paal-embedded-source)
+  (export paal-embedded-source paal-embedded-names)
   (begin
 
     ;; BEGIN GENERATED — do not edit by hand
@@ -7109,4 +7109,9 @@
     ;; Source text for a bundled library, or #f.
     (define (paal-embedded-source name)
       (let ((hit (assoc name %paal-embedded)))
-        (and hit (cdr hit))))))
+        (and hit (cdr hit))))
+
+    ;; The bundled library names, for `paal features` — which otherwise
+    ;; could not enumerate them without carrying a second list to drift.
+    (define (paal-embedded-names)
+      (map car %paal-embedded))))

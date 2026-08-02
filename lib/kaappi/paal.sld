@@ -8,6 +8,7 @@
           (scheme file)
           (scheme write)
           (scheme process-context)
+          (srfi 170)
           (kaappi ffi)
           (kaappi fibers)
           (kaappi paal bytecode)
@@ -51,6 +52,10 @@
     pkaappi-check-file pkaappi-check-files
     ;; Opt-in bytecode cache for user programs
     pkaappi-run-file-cached pkaappi-cache-path
+    ;; CLI queries: capability report, cache inspection
+    paal-version paal-features paal-features-text paal-features-json
+    paal-embedded-names
+    paal-pipeline-cache-status pkaappi-cache-entries pkaappi-cache-clear!
     ;; Formatter
     paal-format-string paal-format-file paal-format-file!
     paal-format-check-file
@@ -1083,6 +1088,191 @@
             (if (eof-object? chunk)
                 (begin (close-input-port port) acc)
                 (loop (string-append acc chunk)))))))
+
+    ;; --- cache inspection: paal cache status|clear ---
+    ;;
+    ;; The user-program entries are the <file>.<hash>.pbc files
+    ;; pkaappi-run-file-cached writes beside sources.  The hash is in the
+    ;; name, so a source edit strands the old entry, and the note above says
+    ;; a *run* can never clean them up — it cannot tell its own leavings from
+    ;; a .pbc the user compiled on purpose.  An explicit `cache` subcommand
+    ;; can: the naming scheme (base, a dot, decimal digits, ".pbc") is this
+    ;; file's own, so anything matching it beside the source is paal's.
+    ;; Finding them takes the one operation R7RS lacks, directory listing,
+    ;; which the host's (srfi 170) supplies; this library is HOST-side API
+    ;; and is never compiled by paal itself, so the import is safe.
+
+    ;; The directory and basename halves of a path.
+    ;; "a/b/c.scm" -> ("a/b" . "c.scm"); a bare name lists ".".
+    (define (%paal-path-split path)
+      (let loop ((i (- (string-length path) 1)))
+        (cond ((< i 0) (cons "." path))
+              ((char=? (string-ref path i) #\/)
+               (cons (if (= i 0) "/" (substring path 0 i))
+                     (substring path (+ i 1) (string-length path))))
+              (else (loop (- i 1))))))
+
+    (define (%paal-all-digits? s start end)
+      (and (> end start)
+           (let loop ((i start))
+             (or (= i end)
+                 (and (char<=? #\0 (string-ref s i))
+                      (char<=? (string-ref s i) #\9)
+                      (loop (+ i 1)))))))
+
+    ;; #t exactly for <base>.<digits>.pbc — the shape %paal-cache-path writes.
+    (define (%paal-cache-entry-name? name base)
+      (let ((nl (string-length name)) (bl (string-length base)))
+        (and (> nl (+ bl 5))
+             (string=? (substring name 0 bl) base)
+             (char=? (string-ref name bl) #\.)
+             (string=? (substring name (- nl 4) nl) ".pbc")
+             (%paal-all-digits? name (+ bl 1) (- nl 4)))))
+
+    ;; Every cache entry beside `path`, as (entry-path . current?).  current?
+    ;; marks the entry the present source text hits; the rest are stale.  A
+    ;; missing source has no current hash, so everything found reads stale.
+    ;; Compared by *name*: the current path carries the caller's spelling of
+    ;; the directory ("./f.scm" vs "f.scm"), the listing does not.
+    (define (pkaappi-cache-entries path)
+      (let* ((split   (%paal-path-split path))
+             (dir     (car split))
+             (base    (cdr split))
+             (current (and (file-exists? path)
+                           (cdr (%paal-path-split (pkaappi-cache-path path)))))
+             (names   (guard (e (#t '())) (directory-files dir))))
+        (map (lambda (name)
+               (cons (if (string=? dir ".")
+                         name
+                         (string-append dir "/" name))
+                     (and current (string=? name current) #t)))
+             (filter (lambda (n) (%paal-cache-entry-name? n base)) names))))
+
+    ;; Delete every entry for `path`, current included — a clear that kept
+    ;; the current entry would not be a clear.  Answers the deleted paths so
+    ;; the caller can say what happened.
+    (define (pkaappi-cache-clear! path)
+      (let ((entries (map car (pkaappi-cache-entries path))))
+        (for-each delete-file entries)
+        entries))
+
+    ;; The pipeline cache under cache/, one (path . exists?) per stage file.
+    ;; make pbc-pipeline is what builds it; this is the status a user can get
+    ;; without reading the Makefile.
+    (define (paal-pipeline-cache-status)
+      (map (lambda (f) (cons f (file-exists? f)))
+           (append %paal-cache-files (list %paal-serializer-cache))))
+
+    ;; --- capability report: paal features ---
+    ;;
+    ;; The facts as data, apart from the two renderings, so the suite can
+    ;; assert on the report without parsing either.
+
+    (define paal-version "0.1.0")
+
+    (define (paal-features)
+      `((name . "paal")
+        (version . ,paal-version)
+        (features . ,(paal-feature-list))
+        (embedded-libraries . ,(paal-embedded-names))
+        (pipeline-cache . ,(paal-pipeline-cache-status))))
+
+    (define (%paal-count-true alist)
+      (length (filter cdr alist)))
+
+    (define (paal-features-text)
+      (let* ((report  (paal-features))
+             (cache   (cdr (assq 'pipeline-cache report)))
+             (present (%paal-count-true cache))
+             (out     (open-output-string)))
+        (display "paal " out)
+        (display (cdr (assq 'version report)) out)
+        (newline out)
+        (display "\nFeatures (cond-expand / (features) identifiers):\n " out)
+        (for-each (lambda (f) (display " " out) (display f out))
+                  (cdr (assq 'features report)))
+        (newline out)
+        (display "\nEmbedded libraries (" out)
+        (display (length (cdr (assq 'embedded-libraries report))) out)
+        (display "):\n " out)
+        (for-each (lambda (n) (display " " out) (write n out))
+                  (cdr (assq 'embedded-libraries report)))
+        (newline out)
+        (display "\nPipeline cache: " out)
+        (display present out)
+        (display "/" out)
+        (display (length cache) out)
+        (display (if (= present (length cache))
+                     " (complete; self-hosted run and compile use it)"
+                     " (incomplete; runs fall back to .sld sources -- run `make pbc-pipeline`)")
+                 out)
+        (newline out)
+        (get-output-string out)))
+
+    ;; JSON by hand: the report's strings are paths and identifiers, but the
+    ;; escaper is complete anyway — a path with a quote in it should bend the
+    ;; output, not break it.
+    (define (%paal-json-string s)
+      (let ((out (open-output-string)))
+        (display "\"" out)
+        (string-for-each
+          (lambda (c)
+            (cond ((char=? c #\")       (display "\\\"" out))
+                  ((char=? c #\\)       (display "\\\\" out))
+                  ((char=? c #\newline) (display "\\n" out))
+                  ((char=? c #\tab)     (display "\\t" out))
+                  ((char=? c #\return)  (display "\\r" out))
+                  (else (write-char c out))))
+          s)
+        (display "\"" out)
+        (get-output-string out)))
+
+    ;; Symbols and library names render as their written text.
+    (define (%paal-json-text x)
+      (if (string? x)
+          x
+          (let ((out (open-output-string)))
+            (write x out)
+            (get-output-string out))))
+
+    (define (%paal-json-string-array items)
+      (let ((out (open-output-string)))
+        (display "[" out)
+        (let loop ((is items) (first #t))
+          (unless (null? is)
+            (unless first (display ", " out))
+            (display (%paal-json-string (%paal-json-text (car is))) out)
+            (loop (cdr is) #f)))
+        (display "]" out)
+        (get-output-string out)))
+
+    (define (paal-features-json)
+      (let* ((report  (paal-features))
+             (cache   (cdr (assq 'pipeline-cache report)))
+             (present (%paal-count-true cache))
+             (out     (open-output-string)))
+        (display "{\n" out)
+        (display "  \"name\": \"paal\",\n" out)
+        (display "  \"version\": " out)
+        (display (%paal-json-string (cdr (assq 'version report))) out)
+        (display ",\n  \"features\": " out)
+        (display (%paal-json-string-array (cdr (assq 'features report))) out)
+        (display ",\n  \"embedded_libraries\": " out)
+        (display (%paal-json-string-array
+                   (cdr (assq 'embedded-libraries report))) out)
+        (display ",\n  \"pipeline_cache\": {\n    \"complete\": " out)
+        (display (if (= present (length cache)) "true" "false") out)
+        (display ",\n    \"files\": {\n" out)
+        (let loop ((cs cache))
+          (unless (null? cs)
+            (display "      " out)
+            (display (%paal-json-string (car (car cs))) out)
+            (display ": " out)
+            (display (if (cdr (car cs)) "true" "false") out)
+            (display (if (null? (cdr cs)) "\n" ",\n") out)
+            (loop (cdr cs))))
+        (display "    }\n  }\n}\n" out)
+        (get-output-string out)))
 
     ;; --- check: compile without running ---
 

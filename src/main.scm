@@ -10,7 +10,7 @@
         (kaappi paal))
 
 (define (usage)
-  (display "Paal Kaappi v0.1.0\n")
+  (display "Paal Kaappi v") (display paal-version) (newline)
   (display "\nUsage: paal [file] [args...]\n")
   (display "       paal check <file>...\n")
   (display "       paal compile <file.scm> -o <output.pbc>\n")
@@ -21,8 +21,11 @@
   (display "  debug <file> [args...]  Run under the stepping debugger\n")
   (display "  fmt [--check] <file>... Reprint with canonical 2-space indentation\n")
   (display "  compile <f> -o <out>    Compile to .pbc bytecode\n")
+  (display "  ast <file>              Print post-read datums (read plus write)\n")
   (display "  expand <file>           Print expanded forms\n")
   (display "  ir <file>               Print IR nodes\n")
+  (display "  features [--json]       Report the capabilities of this paal\n")
+  (display "  cache status|clear [f]  Inspect or remove bytecode caches\n")
   (display "  repl                    Start interactive REPL\n")
   (display "  eval <expr>             Evaluate an expression\n")
   (display "\nOptions:\n")
@@ -110,6 +113,65 @@
       (for-each (lambda (n) (display " ") (display n)) uncalled)
       (newline))))
 
+;; paal cache status|clear [file...]
+;;
+;; With no files the subject is the pipeline cache under cache/; with files,
+;; the <file>.<hash>.pbc entries `--cache` writes beside sources — including
+;; the stale ones earlier source revisions stranded, which nothing else can
+;; clean up (a run cannot tell its own leavings from a user's .pbc; an
+;; explicit clear can, by the naming scheme).
+(define (run-cache-command args)
+  (define (show-file-status f)
+    (display f) (display ":\n")
+    (let ((entries (pkaappi-cache-entries f)))
+      (if (null? entries)
+          (display "  no cache entries\n")
+          (for-each (lambda (e)
+                      (display (if (cdr e) "  current  " "  stale    "))
+                      (display (car e))
+                      (newline))
+                    entries))))
+  (define (clear-file f)
+    (let ((removed (pkaappi-cache-clear! f)))
+      (if (null? removed)
+          (begin (display f) (display ": no cache entries\n"))
+          (for-each (lambda (p)
+                      (display "removed ") (display p) (newline))
+                    removed))))
+  (cond
+    ((null? args)
+     (display "error: cache: usage: paal cache status|clear [file...]\n")
+     (exit 2))
+    ((string=? (car args) "status")
+     (if (null? (cdr args))
+         (let* ((entries (paal-pipeline-cache-status))
+                (present (length (filter cdr entries))))
+           (display "Pipeline cache (cache/, built by `make pbc-pipeline`):\n")
+           (for-each (lambda (e)
+                       (display "  ")
+                       (display (car e))
+                       (unless (cdr e) (display "   MISSING"))
+                       (newline))
+                     entries)
+           (display (if (= present (length entries))
+                        "complete: self-hosted run and compile use it\n"
+                        "incomplete: self-hosted runs fall back to .sld sources\n")))
+         (for-each show-file-status (cdr args))))
+    ((string=? (car args) "clear")
+     (if (null? (cdr args))
+         (let ((present (filter cdr (paal-pipeline-cache-status))))
+           (for-each (lambda (e)
+                       (delete-file (car e))
+                       (display "removed ") (display (car e)) (newline))
+                     present)
+           (when (null? present)
+             (display "pipeline cache already empty\n")))
+         (for-each clear-file (cdr args))))
+    (else
+     (display "error: cache: unknown action: ") (display (car args)) (newline)
+     (display "usage: paal cache status|clear [file...]\n")
+     (exit 2))))
+
 (define (main raw-args)
   (define args (strip-lib-paths raw-args))
   (cond
@@ -143,7 +205,7 @@
      (usage))
     ; Version
     ((or (string=? (car args) "--version") (string=? (car args) "version"))
-     (display "paal 0.1.0") (newline))
+     (display "paal ") (display paal-version) (newline))
     ; run <file> [args...] — explicit subcommand (kept for compatibility)
     ((string=? (car args) "run")
      (if (null? (cdr args))
@@ -205,6 +267,26 @@
          (begin (display "error: eval: missing expression\n") (exit 1))
          (let ((result (pkaappi-run-bc-string (cadr args))))
            (write result) (newline))))
+    ; ast <file> — print post-read datums (read plus write).  What the reader
+    ; produced and nothing later: the stage before `expand` the diagnostics
+    ; had no window onto.
+    ((string=? (car args) "ast")
+     (if (null? (cdr args))
+         (begin (display "error: ast: missing file\n") (exit 1))
+         (for-each (lambda (d) (write d) (newline))
+                   (paal-read-file (cadr args)))))
+    ; features [--json] — capability report
+    ((string=? (car args) "features")
+     (cond
+       ((null? (cdr args)) (display (paal-features-text)))
+       ((and (null? (cddr args)) (string=? (cadr args) "--json"))
+        (display (paal-features-json)))
+       (else
+        (display "error: features: usage: paal features [--json]\n")
+        (exit 2))))
+    ; cache status|clear [file...] — inspect or remove bytecode caches
+    ((string=? (car args) "cache")
+     (run-cache-command (cdr args)))
     ; expand <file> — print expanded forms (diagnostic)
     ((string=? (car args) "expand")
      (if (null? (cdr args))

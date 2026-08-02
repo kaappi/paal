@@ -21,6 +21,9 @@ make run ARGS="compile f.scm -o f.pbc" # compile to .pbc bytecode
 make run ARGS="eval '(+ 1 2)'"         # evaluate an expression
 make run ARGS="expand file.scm"        # print expanded forms (diagnostic)
 make run ARGS="ir file.scm"            # print IR nodes (diagnostic)
+make run ARGS="ast file.scm"           # print post-read datums (diagnostic)
+make run ARGS="features --json"        # capability report
+make run ARGS="cache status"           # inspect the bytecode caches
 make run ARGS="debug file.scm"         # run under the stepping debugger
 make pbc-pipeline                      # build pipeline cache (speeds up self-hosted path)
 ```
@@ -29,18 +32,21 @@ make pbc-pipeline                      # build pipeline cache (speeds up self-ho
 
 `paal` follows the same interpreter-style conventions as `kaappi`: no args starts
 the REPL, a positional file runs it, and subcommands (`check`, `fmt`, `compile`,
-`expand`, `ir`, `eval`, `repl`, `run`) and flags (`--lib-path`, `--help`,
-`--version`) work the same way. Paal-only: `debug`, `--cache`, `--profile`,
-`--coverage`.
+`ast`, `expand`, `ir`, `features`, `cache`, `eval`, `repl`, `run`) and flags
+(`--lib-path`, `--help`, `--version`) work the same way. Paal-only: `debug`,
+`--cache`, `--profile`, `--coverage`.
 
-**Exceptions:** `compile` outputs `.pbc` text bytecode (not a native binary).
+**Exceptions:** `compile` outputs `.pbc` text bytecode (not a native binary);
+`cache` manages paal's two caches (the `<file>.<hash>.pbc` entries `--cache`
+writes beside sources — stale ones included — and the pipeline cache under
+`cache/`), not kaappi's `~/.kaappi/cache`.
 
 In a `make binary` build, kaappi's own CLI claims the first argument whenever it
-recognizes it — `check`, `fmt`, `compile`, `expand`, `ir`, `--lib-path`, `--help`
-(kaappi/kaappi#2010). It only inspects the first, so **prefix the command with
-`do`** and the rest arrives intact: `paal do check f.scm`, `paal do --lib-path lib
-f.scm`. Bare `help` works too, since `--help` answers as kaappi. `do` is a no-op in
-bootstrap mode.
+recognizes it — `check`, `fmt`, `compile`, `ast`, `expand`, `ir`, `features`,
+`cache`, `--lib-path`, `--help` (kaappi/kaappi#2010). It only inspects the first,
+so **prefix the command with `do`** and the rest arrives intact: `paal do check
+f.scm`, `paal do features --json`, `paal do --lib-path lib f.scm`. Bare `help`
+works too, since `--help` answers as kaappi. `do` is a no-op in bootstrap mode.
 
 `paal debug <file>` stops at each call and return: `s`/`n`/`f`/`c` to step, step
 over, finish the frame and continue; `b <name>` to break on a procedure, `bt` for
