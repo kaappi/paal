@@ -1244,10 +1244,52 @@
             (loop (cdr l) (+ n 1)))))
 
     ;; ---------------------------------------------------------------
+    ;; Compile-time lexical environment (cenv)
+    ;; ---------------------------------------------------------------
+    ;;
+    ;; An immutable alist of (name . denotation) threaded through expansion:
+    ;;
+    ;;   (variable . #f)      lexically bound value, spelling kept
+    ;;   (variable . rename)  lexically bound value under a rename
+    ;;   (macro . alias)      local macro; transformer lives in %paal-macros
+    ;;                        under the alias
+    ;;
+    ;; The single place value bindings enter is the lambda case of the
+    ;; dispatcher — every derived binder desugars to a lambda before its body
+    ;; is expanded, so threading one case covers let, do, named let and all
+    ;; the rest.  Top level is the empty environment, which paal's own
+    ;; define-heavy sources fast-path through.
+
+    (define (cenv-lookup env name)
+      (let ((hit (assq name env)))
+        (and hit (cdr hit))))
+
+    (define (cenv-extend-var env name)
+      (cons (cons name (cons 'variable #f)) env))
+
+    (define (cenv-extend-formals env formals)
+      (cond
+        ((symbol? formals) (cenv-extend-var env formals))
+        ((pair? formals)
+         (cenv-extend-formals
+           (if (symbol? (car formals))
+               (cenv-extend-var env (car formals))
+               env)
+           (cdr formals)))
+        (else env)))
+
+    (define (cenv-bind-macro env name alias)
+      (cons (cons name (cons 'macro alias)) env))
+
+    ;; ---------------------------------------------------------------
     ;; Main dispatch
     ;; ---------------------------------------------------------------
 
+    ;; The exported entry point: one top-level form, empty environment.
     (define (paal-expand form)
+      (expand-form form '()))
+
+    (define (expand-form form env)
       (if (not (pair? form))
           form
           (case (car form)
@@ -1255,69 +1297,77 @@
             ((quote)
              form)
             ((lambda)
-             `(lambda ,(cadr form) ,@(expand-body (cddr form))))
+             `(lambda ,(cadr form)
+                ,@(expand-body (cddr form)
+                               (cenv-extend-formals env (cadr form)))))
             ((define)
              (if (pair? (cadr form))
                  `(define ,(caadr form)
-                    (lambda ,(cdadr form) ,@(expand-body (cddr form))))
+                    (lambda ,(cdadr form)
+                      ,@(expand-body (cddr form)
+                                     (cenv-extend-formals env (cdadr form)))))
                  `(define ,(cadr form)
                     ,@(if (null? (cddr form))
                           '()
-                          (list (paal-expand (caddr form)))))))
+                          (list (expand-form (caddr form) env))))))
             ((set!)
-             `(set! ,(cadr form) ,(paal-expand (caddr form))))
+             `(set! ,(cadr form) ,(expand-form (caddr form) env)))
             ((if)
              (if (null? (cdddr form))
-                 `(if ,(paal-expand (cadr form))
-                      ,(paal-expand (caddr form)))
-                 `(if ,(paal-expand (cadr form))
-                      ,(paal-expand (caddr form))
-                      ,(paal-expand (cadddr form)))))
+                 `(if ,(expand-form (cadr form) env)
+                      ,(expand-form (caddr form) env))
+                 `(if ,(expand-form (cadr form) env)
+                      ,(expand-form (caddr form) env)
+                      ,(expand-form (cadddr form) env))))
             ((begin)
-             `(begin ,@(map paal-expand (cdr form))))
+             `(begin ,@(map (lambda (f) (expand-form f env)) (cdr form))))
             ;; --- Derived forms: desugar then re-expand ---
-            ((let)         (paal-expand (expand-let form)))
-            ((let*)        (paal-expand (expand-let* form)))
-            ((letrec)      (paal-expand (expand-letrec form)))
-            ((letrec*)     (paal-expand (expand-letrec* form)))
-            ((and)         (paal-expand (expand-and (cdr form))))
-            ((or)          (paal-expand (expand-or  (cdr form))))
-            ((when)        (paal-expand (expand-when form)))
-            ((unless)      (paal-expand (expand-unless form)))
-            ((cond)        (paal-expand (expand-cond (cdr form))))
-            ((case)        (paal-expand (expand-case form)))
-            ((quasiquote)  (paal-expand (expand-qq (cadr form) 0)))
-            ((do)          (paal-expand (expand-do form)))
+            ;; env passes through unchanged: any binding a derived form
+            ;; introduces surfaces as a lambda in its desugaring, and the
+            ;; lambda case above extends the environment when the re-expansion
+            ;; reaches it.
+            ((let)         (expand-form (expand-let form) env))
+            ((let*)        (expand-form (expand-let* form) env))
+            ((letrec)      (expand-form (expand-letrec form) env))
+            ((letrec*)     (expand-form (expand-letrec* form) env))
+            ((and)         (expand-form (expand-and (cdr form)) env))
+            ((or)          (expand-form (expand-or  (cdr form)) env))
+            ((when)        (expand-form (expand-when form) env))
+            ((unless)      (expand-form (expand-unless form) env))
+            ((cond)        (expand-form (expand-cond (cdr form)) env))
+            ((case)        (expand-form (expand-case form) env))
+            ((quasiquote)  (expand-form (expand-qq (cadr form) 0) env))
+            ((do)          (expand-form (expand-do form) env))
             ((define-record-type)
-             (paal-expand (expand-define-record-type form)))
+             (expand-form (expand-define-record-type form) env))
             ((guard)
-             (paal-expand (expand-guard form)))
+             (expand-form (expand-guard form) env))
             ((parameterize)
-             (paal-expand (expand-parameterize form)))
+             (expand-form (expand-parameterize form) env))
             ;; --- New derived forms ---
             ((case-lambda)
-             (paal-expand (expand-case-lambda form)))
+             (expand-form (expand-case-lambda form) env))
             ((define-values)
-             (paal-expand (expand-define-values form)))
+             (expand-form (expand-define-values form) env))
             ((let-values)
-             (paal-expand (expand-let-values form)))
+             (expand-form (expand-let-values form) env))
             ((let*-values)
-             (paal-expand (expand-let*-values form)))
+             (expand-form (expand-let*-values form) env))
             ((delay)
              ;; (delay expr) → (%paal-delay-impl (lambda () expr))
              ;; %paal-delay-impl creates a lazy promise (not forced until (force p)).
              ;; HOST version is in paal-initial-env; paal-compiled version overrides
              ;; it in pkaappi-make-globals for the bytecode VM path.
-             `(%paal-delay-impl (lambda () ,(paal-expand (cadr form)))))
+             `(%paal-delay-impl (lambda () ,(expand-form (cadr form) env))))
             ((delay-force)
              ;; delay-force (iterative): force inner promise when thunk returns a promise
-             `(%paal-delay-impl (lambda () (force ,(paal-expand (cadr form))))))
+             `(%paal-delay-impl (lambda () (force ,(expand-form (cadr form) env)))))
             ((include)
-             (paal-expand (expand-include (cdr form) #f)))
+             (expand-form (expand-include (cdr form) #f) env))
             ((include-ci)
-             (paal-expand (expand-include (cdr form) #t)))
+             (expand-form (expand-include (cdr form) #t) env))
             ((cond-expand)
-             (paal-expand (expand-cond-expand form)))
+             (expand-form (expand-cond-expand form) env))
             ((syntax-error)
              ;; (syntax-error message irritant ...)
              (apply error (cdr form)))
@@ -1341,7 +1391,7 @@
                            (paal-macro-set! (car b)
                                             (make-scoped-transformer (cadr b) saved)))
                          bindings)
-               (let ((result (paal-expand `(begin ,@body))))
+               (let ((result (expand-form `(begin ,@body) env)))
                  (set! %paal-macros saved)
                  result)))
             ((letrec-syntax)
@@ -1355,7 +1405,7 @@
                (for-each (lambda (b)
                            (paal-macro-set! (car b) (make-transformer (cadr b))))
                          bindings)
-               (let ((result (paal-expand `(begin ,@body))))
+               (let ((result (expand-form `(begin ,@body) env)))
                  (set! %paal-macros saved)
                  result)))
             ;; --- Library forms ---
@@ -1384,15 +1434,15 @@
              (let ((macro (paal-macro-get (car form))))
                (cond
                  ((and (symbol? (car form)) macro)
-                  (paal-expand (macro form)))
+                  (expand-form (macro form) env))
                  ;; A template's free identifier was marked %gref% before we knew
                  ;; whether it named a macro — it may name one defined after the
                  ;; macro that referenced it.  Unmark and expand as a macro use.
                  ((and (symbol? (car form))
                        (gref-name (car form))
                        (paal-macro-get (gref-name (car form))))
-                  (paal-expand (cons (gref-name (car form)) (cdr form))))
-                 (else (map paal-expand form))))))))
+                  (expand-form (cons (gref-name (car form)) (cdr form)) env))
+                 (else (map (lambda (f) (expand-form f env)) form))))))))
 
     ;; Strip the %gref% marker, or #f when the symbol does not carry one.
     ;; Shared with the emitter and the tree-walking VM, which resolve a marked
@@ -2055,7 +2105,7 @@
              ((include-ci)  (cdr (expand-include (cdr form) #t)))
              (else          #f))))
 
-    (define (expand-body forms)
+    (define (expand-body forms env)
       (let loop ((rest forms) (defs '()))
         (cond
           ((null? rest)
@@ -2070,11 +2120,12 @@
                   (remaining (cdr rest))
                   (wrapped   `(let-values ((,names ,expr)) ,@remaining)))
              (if (null? defs)
-                 (list (paal-expand wrapped))
-                 (list (paal-expand
+                 (list (expand-form wrapped env))
+                 (list (expand-form
                          (cons 'letrec*
                            (cons (map define->binding (reverse defs))
-                                 (list wrapped))))))))
+                                 (list wrapped)))
+                         env)))))
           ((and (pair? (car rest)) (eq? (caar rest) 'define))
            (loop (cdr rest) (cons (car rest) defs)))
           ;; Splice and re-examine, so definitions inside reach the `define`
@@ -2083,11 +2134,12 @@
            => (lambda (spliced) (loop (append spliced (cdr rest)) defs)))
           (else
            (if (null? defs)
-               (map paal-expand rest)
-               (list (paal-expand
+               (map (lambda (f) (expand-form f env)) rest)
+               (list (expand-form
                        (cons 'letrec*
                          (cons (map define->binding (reverse defs))
-                               rest)))))))))
+                               rest))
+                       env)))))))
 
     ;; ---------------------------------------------------------------
     ;; guard
