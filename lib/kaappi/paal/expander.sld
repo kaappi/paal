@@ -2320,7 +2320,12 @@
         (check-bindings! bindings form "let*")
         (check-body! body form "let*")
         (if (null? bindings)
-            `(begin ,@body)
+            ;; (let () …), not (begin …): a let* body is a BODY, and a
+            ;; definition at its head must reach expand-body — spliced into
+            ;; an enclosing expression as a begin it died at emission with
+            ;; "ir:define in expression position".  let*-values already had
+            ;; this right.
+            `(let () ,@body)
             `(let (,(car bindings))
                (let* ,(cdr bindings) ,@body)))))
 
@@ -2762,6 +2767,12 @@
              ((cond-expand) (cdr (expand-cond-expand form)))
              ((include)     (cdr (expand-include (cdr form) #f)))
              ((include-ci)  (cdr (expand-include (cdr form) #t)))
+             ;; R7RS 5.3 counts define-record-type among the definitions a
+             ;; body may open with.  Without this arm it fell to the
+             ;; expression default, and its (begin (define …) …) desugar
+             ;; died at emission with "ir:define in expression position".
+             ((define-record-type)
+              (cdr (expand-define-record-type form)))
              (else          #f))))
 
     ;; The value names a body defines, from a cheap structural scan — enough
@@ -3033,19 +3044,36 @@
                                  `(%paal-base-vector-set! ,rec-var
                                                           ,(field-idx f) ,f))
                                ctor-fields))
+             ;; Accessors and mutators check the tag: R7RS 5.5 says use on
+             ;; the wrong record type "is an error", kaappi's native records
+             ;; signal it, and SRFI 9's suite asserts the signal.  The cost
+             ;; is one eq? per access, and paal's own hot path (the IR
+             ;; nodes) is hand-built vectors, not records.
              (field-defs  (append-map
                             (lambda (spec)
                               (let* ((fname (car spec))
                                      (idx   (field-idx fname))
                                      (acc   (cadr spec))
-                                     (mut   (and (pair? (cddr spec)) (caddr spec))))
+                                     (mut   (and (pair? (cddr spec)) (caddr spec)))
+                                     (check (lambda (who then)
+                                              `(if (and (%paal-base-vector? obj)
+                                                        (%paal-base-eq?
+                                                          (%paal-base-vector-ref obj 0)
+                                                          ,tag-var))
+                                                   ,then
+                                                   (%paal-base-error
+                                                     ,(string-append
+                                                        (symbol->string who)
+                                                        ": not a "
+                                                        (symbol->string type-name))
+                                                     obj)))))
                                 (if mut
                                     `((define (,acc obj)
-                                        (%paal-base-vector-ref obj ,idx))
+                                        ,(check acc `(%paal-base-vector-ref obj ,idx)))
                                       (define (,mut obj val)
-                                        (%paal-base-vector-set! obj ,idx val)))
+                                        ,(check mut `(%paal-base-vector-set! obj ,idx val))))
                                     `((define (,acc obj)
-                                        (%paal-base-vector-ref obj ,idx))))))
+                                        ,(check acc `(%paal-base-vector-ref obj ,idx)))))))
                             field-specs)))
         `(begin
            (define ,tag-var (%paal-base-list (quote ,type-name)))

@@ -1623,6 +1623,29 @@
            h))
        (trip 10)")))
 
+;; Body definition contexts flushed out by the shelf harness: a let* body
+;; is a BODY even with zero bindings (its define died in expression
+;; position via the old (begin …) desugar), and define-record-type is
+;; R7RS 5.3 definition syntax a body may open with.  Record accessors
+;; signal on the wrong record type per R7RS 5.5, matching kaappi and the
+;; SRFI 9 suite.
+(test-group "body definitions: let*, define-record-type, accessor checks"
+  (test-equal "empty-binding let* body may open with a define" 3
+    (pkaappi-run-bc-string "(let* () (define x 2) (+ x 1))"))
+  (test-equal "tree-walking agrees" 3
+    (pkaappi-run-string "(let* () (define x 2) (+ x 1))"))
+  (test-equal "define-record-type opens a body" 7
+    (pkaappi-run-bc-string
+      "(let () (define-record-type <p> (mk a) p? (a pa)) (pa (mk 7)))"))
+  (test-equal "record accessor signals on the wrong record type" 'signalled
+    (pkaappi-run-bc-string
+      "(define-record-type <a> (mk-a x) a? (x ax))
+       (define-record-type <b> (mk-b y) b? (y by))
+       (guard (e (#t 'signalled)) (ax (mk-b 5)))"))
+  (test-equal "record accessor still answers its own type" 5
+    (pkaappi-run-bc-string
+      "(define-record-type <a> (mk-a x) a? (x ax)) (ax (mk-a 5))")))
+
 (test-group "define-syntax: hygiene"
   (test-equal "introduced let binding does not capture the user's variable"
     '(2 1)

@@ -25,7 +25,7 @@
         ("srfi141.scm" pass)
         ("srfi151.scm" pass)
         ("srfi158.scm" pass)
-        ("srfi2.scm" fail) ; paal-emitter: ir:define in expression position
+        ("srfi2.scm" pass)
         ("srfi23.scm" pass)
         ("srfi26.scm" pass)
         ("srfi260.scm" pass)
@@ -42,6 +42,6 @@
         ("srfi69-ext.scm" pass)
         ("srfi69.scm" pass)
         ("srfi78.scm" pass)
-        ("srfi9.scm" fail) ; paal-emitter: ir:define in expression position
+        ("srfi9.scm" fail) ; exit 1
         ("srfi95.scm" pass)
         ))))
