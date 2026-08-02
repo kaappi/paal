@@ -534,34 +534,40 @@
     ;; helper breaks at the use site: the helper is renamed and the template
     ;; still names the original.  SRFI 64's assertions are exactly this shape.
     ;;
-    ;; A template's pattern variables and the clause's literals are left
-    ;; alone -- those names come from the use site, not from here.
-    (define (rename-template tmpl renames pvars literals)
+    ;; A template's pattern variables, the clause's literals, and the ellipsis
+    ;; are left alone -- those names come from the use site, not from here.
+    (define (rename-template tmpl renames pvars literals ell)
       (cond
         ((symbol? tmpl)
-         (if (or (eq? tmpl '...) (memq tmpl pvars) (memq tmpl literals))
+         (if (or (eq? tmpl '...) (eq? tmpl ell)
+                 (memq tmpl pvars) (memq tmpl literals))
              tmpl
              (let ((hit (assq tmpl renames))) (if hit (cdr hit) tmpl))))
         ((pair? tmpl)
-         (cons (rename-template (car tmpl) renames pvars literals)
-               (rename-template (cdr tmpl) renames pvars literals)))
+         (cons (rename-template (car tmpl) renames pvars literals ell)
+               (rename-template (cdr tmpl) renames pvars literals ell)))
         ((vector? tmpl)
          (list->vector
-           (map (lambda (x) (rename-template x renames pvars literals))
+           (map (lambda (x) (rename-template x renames pvars literals ell))
                 (vector->list tmpl))))
         (else tmpl)))
 
     (define (rename-syntax-rules spec renames)
-      (let ((literals (cadr spec))
-            (clauses  (cddr spec)))
-        (cons 'syntax-rules
-              (cons literals
-                    (map (lambda (clause)
-                           (let ((pvars (pattern-vars (car clause) literals)))
-                             (list (car clause)
-                                   (rename-template (cadr clause) renames
-                                                    pvars literals))))
-                         clauses)))))
+      (let* ((ell      (spec-ellipsis spec))
+             (literals (spec-literals spec))
+             (clauses  (spec-clauses spec))
+             ;; Preserve the spec's shape: a custom ellipsis identifier stays
+             ;; in second position.
+             (head     (if (symbol? (cadr spec))
+                           (list 'syntax-rules ell literals)
+                           (list 'syntax-rules literals))))
+        (append head
+                (map (lambda (clause)
+                       (let ((pvars (pattern-vars (car clause) literals ell)))
+                         (list (car clause)
+                               (rename-template (cadr clause) renames
+                                                pvars literals ell))))
+                     clauses))))
 
     ;; Rebuild every macro `names` covers from its stored spec, with `renames`
     ;; applied.  A macro whose own name is in `renames` is reinstalled under
@@ -706,6 +712,24 @@
     (define (ellipsis? x)        (and (pair? x) (eq? (car x) %ellipsis-tag)))
     (define (ellipsis-vals x)    (cdr x))
 
+    ;; A syntax-rules spec is (syntax-rules (lit ...) clause ...) or, with a
+    ;; custom ellipsis identifier, (syntax-rules ell (lit ...) clause ...).
+    ;; The three readers below accept both shapes; everything downstream asks
+    ;; them rather than assuming cadr is the literals list.
+    (define (spec-ellipsis spec)
+      (if (symbol? (cadr spec)) (cadr spec) '...))
+    (define (spec-literals spec)
+      (if (symbol? (cadr spec)) (caddr spec) (cadr spec)))
+    (define (spec-clauses spec)
+      (if (symbol? (cadr spec)) (cdddr spec) (cddr spec)))
+
+    ;; Is x the ellipsis, *acting* as one?  R7RS 4.3.2 gives the literals list
+    ;; priority: an identifier that is both the ellipsis and a literal is a
+    ;; literal everywhere — which is how (syntax-rules ... (...) ...) writes
+    ;; rules about a literal `...` with no working ellipsis at all.
+    (define (ellipsis-mark? x ell lits)
+      (and (eq? x ell) (not (memq x lits))))
+
     ;; List utilities used by syntax-rules
 
     (define (list-take lst n)
@@ -726,43 +750,46 @@
       (and (pair? lst)
            (or (eq? (car lst) #f) (has-false? (cdr lst)))))
 
-    ;; Collect all pattern variables from a pattern
-    (define (pattern-vars pat lits)
+    ;; Collect all pattern variables from a pattern.  The literals check comes
+    ;; first: a literal is a literal even when spelled _ or like the ellipsis.
+    (define (pattern-vars pat lits ell)
       (cond
-        ((eq? pat '_)   '())
-        ((eq? pat '...) '())
         ((and (symbol? pat) (memq pat lits)) '())
+        ((eq? pat '_)   '())
+        ((ellipsis-mark? pat ell lits) '())
         ((symbol? pat)  (list pat))
         ((not (pair? pat)) '())
-        ((and (pair? (cdr pat)) (eq? (cadr pat) '...))
-         (append (pattern-vars (car pat) lits)
-                 (pattern-vars (cddr pat) lits)))
+        ((and (pair? (cdr pat)) (ellipsis-mark? (cadr pat) ell lits))
+         (append (pattern-vars (car pat) lits ell)
+                 (pattern-vars (cddr pat) lits ell)))
         (else
-         (append (pattern-vars (car pat) lits)
-                 (pattern-vars (cdr pat) lits)))))
+         (append (pattern-vars (car pat) lits ell)
+                 (pattern-vars (cdr pat) lits ell)))))
 
     ;; Count how many non-ellipsis elements rest-pat requires
-    (define (count-required rest-pat)
+    (define (count-required rest-pat ell lits)
       (cond
         ((null? rest-pat) 0)
         ((and (pair? rest-pat)
               (pair? (cdr rest-pat))
-              (eq? (cadr rest-pat) '...))
-         (count-required (cddr rest-pat)))
+              (ellipsis-mark? (cadr rest-pat) ell lits))
+         (count-required (cddr rest-pat) ell lits))
         ((pair? rest-pat)
-         (+ 1 (count-required (cdr rest-pat))))
+         (+ 1 (count-required (cdr rest-pat) ell lits)))
         (else 0)))
 
     ;; Match pattern against form.
     ;; Returns an alist of (var . value) on success, #f on failure.
     ;; Ellipsis-bound vars have value (make-ellipsis list-of-values).
-    (define (match-syntax pat frm lits)
+    (define (match-syntax pat frm lits ell)
       (cond
-        ;; Underscore: match anything, no binding
-        ((eq? pat '_) '())
-        ;; Literal: must be the same symbol
+        ;; Literal: must be the same identifier.  Checked before _ and before
+        ;; the variable case — the literals list wins (R7RS 4.3.2), so a
+        ;; pattern may treat _ or the ellipsis itself as a literal.
         ((and (symbol? pat) (memq pat lits))
          (if (and (symbol? frm) (eq? pat frm)) '() #f))
+        ;; Underscore: match anything, no binding
+        ((eq? pat '_) '())
         ;; Pattern variable: bind to form
         ((symbol? pat)
          (list (cons pat frm)))
@@ -772,53 +799,58 @@
         ;; Non-pair datum: must be equal
         ((not (pair? pat))
          (if (equal? pat frm) '() #f))
-        ;; Ellipsis: (subpat ...) [rest-pat...]
-        ((and (pair? (cdr pat)) (eq? (cadr pat) '...))
+        ;; Ellipsis: (subpat <ell> rest-pat ... [. tail-pat])
+        ;;
+        ;; The form may be improper — R7RS allows (P1 ... Pe <ellipsis> . Px)
+        ;; — so the walk is over the proper prefix, and a dotted tail is the
+        ;; rest pattern's to match.  list-take/list-drop already stop at the
+        ;; prefix boundary.
+        ((and (pair? (cdr pat)) (ellipsis-mark? (cadr pat) ell lits))
          (let* ((subpat    (car pat))
                 (rest-pat  (cddr pat))
-                (pvars     (pattern-vars subpat lits))
-                (n-req     (count-required rest-pat)))
-           (if (not (list? frm))
+                (pvars     (pattern-vars subpat lits ell))
+                (n-req     (count-required rest-pat ell lits))
+                (n-total   (proper-length frm)))
+           (if (< n-total n-req)
                #f
-               (let ((n-total (length frm)))
-                 (if (< n-total n-req)
+               (let* ((n-ell     (- n-total n-req))
+                      (ell-frms  (list-take frm n-ell))
+                      (rest-frms (list-drop frm n-ell))
+                      (sub-envs  (map (lambda (f) (match-syntax subpat f lits ell))
+                                      ell-frms)))
+                 (if (has-false? sub-envs)
                      #f
-                     (let* ((n-ell     (- n-total n-req))
-                            (ell-frms  (list-take frm n-ell))
-                            (rest-frms (list-drop frm n-ell))
-                            (sub-envs  (map (lambda (f) (match-syntax subpat f lits))
-                                            ell-frms)))
-                       (if (has-false? sub-envs)
-                           #f
-                           (let* ((merged
-                                   (map (lambda (v)
-                                          (cons v
-                                                (make-ellipsis
-                                                  (map (lambda (e)
-                                                         (let ((b (assq v e)))
-                                                           (if b (cdr b) #f)))
-                                                       sub-envs))))
-                                        pvars))
-                                  (rest-env
-                                   (if (null? rest-pat)
-                                       '()
-                                       (match-syntax rest-pat rest-frms lits))))
-                             (if rest-env
-                                 (append merged rest-env)
-                                 #f)))))))))
+                     (let* ((merged
+                             (map (lambda (v)
+                                    (cons v
+                                          (make-ellipsis
+                                            (map (lambda (e)
+                                                   (let ((b (assq v e)))
+                                                     (if b (cdr b) #f)))
+                                                 sub-envs))))
+                                  pvars))
+                            (rest-env
+                             (if (null? rest-pat)
+                                 ;; No rest pattern: the whole form must have
+                                 ;; been consumed, tail included.
+                                 (if (null? rest-frms) '() #f)
+                                 (match-syntax rest-pat rest-frms lits ell))))
+                       (if rest-env
+                           (append merged rest-env)
+                           #f)))))))
         ;; Pair: match recursively
         ((pair? pat)
          (if (pair? frm)
-             (let ((e1 (match-syntax (car pat) (car frm) lits)))
+             (let ((e1 (match-syntax (car pat) (car frm) lits ell)))
                (and e1
-                    (let ((e2 (match-syntax (cdr pat) (cdr frm) lits)))
+                    (let ((e2 (match-syntax (cdr pat) (cdr frm) lits ell)))
                       (and e2 (append e1 e2)))))
              #f))
         ;; Anything else: must be equal
         (else (and (equal? pat frm) '()))))
 
     ;; Find variables in template that are bound to ellipsis values in env
-    (define (find-ellipsis-vars tmpl env)
+    (define (find-ellipsis-vars tmpl env ell lits)
       (cond
         ((symbol? tmpl)
          (let ((b (assq tmpl env)))
@@ -830,11 +862,11 @@
          ;; outside ellipsis template a".  The tail belongs to the same
          ;; iteration as `sub`, so its variables count too — with the ellipses
          ;; themselves dropped first, since a run of them is depth, not content.
-         (if (and (pair? (cdr tmpl)) (eq? (cadr tmpl) '...))
-             (append (find-ellipsis-vars (car tmpl) env)
-                     (find-ellipsis-vars (drop-ellipses (cdr tmpl)) env))
-             (append (find-ellipsis-vars (car tmpl) env)
-                     (find-ellipsis-vars (cdr tmpl) env))))
+         (if (and (pair? (cdr tmpl)) (ellipsis-mark? (cadr tmpl) ell lits))
+             (append (find-ellipsis-vars (car tmpl) env ell lits)
+                     (find-ellipsis-vars (drop-ellipses (cdr tmpl) ell lits) env ell lits))
+             (append (find-ellipsis-vars (car tmpl) env ell lits)
+                     (find-ellipsis-vars (cdr tmpl) env ell lits))))
         (else '())))
 
     (define (concat-lists ls)
@@ -843,14 +875,14 @@
     ;; How many ellipses a template element is followed by.  One is the ordinary
     ;; case; each extra one splices a further level, so (x ... ...) flattens what
     ;; ((x ...) ...) would have nested.
-    (define (count-ellipses l)
-      (if (and (pair? l) (eq? (car l) '...))
-          (+ 1 (count-ellipses (cdr l)))
+    (define (count-ellipses l ell lits)
+      (if (and (pair? l) (ellipsis-mark? (car l) ell lits))
+          (+ 1 (count-ellipses (cdr l) ell lits))
           0))
 
-    (define (drop-ellipses l)
-      (if (and (pair? l) (eq? (car l) '...))
-          (drop-ellipses (cdr l))
+    (define (drop-ellipses l ell lits)
+      (if (and (pair? l) (ellipsis-mark? (car l) ell lits))
+          (drop-ellipses (cdr l) ell lits)
           l))
 
     ;; Expand `subtempl` across `depth` levels of ellipsis, returning a flat list
@@ -858,8 +890,8 @@
     ;; down each contributes a list, and those are concatenated — which is what
     ;; makes the extra ellipses splice rather than nest.  Only penv is sliced
     ;; per iteration — ellipsis values are pattern bindings; subst rides along.
-    (define (expand-ellipsis subtempl depth penv subst)
-      (let* ((evars (find-ellipsis-vars subtempl penv))
+    (define (expand-ellipsis subtempl depth penv subst ell lits)
+      (let* ((evars (find-ellipsis-vars subtempl penv ell lits))
              (n     (if (null? evars)
                         0
                         (length (ellipsis-vals (cdr (assq (car evars) penv)))))))
@@ -871,8 +903,8 @@
                               evars))
                         (local-env (append point-env penv)))
                    (if (= depth 1)
-                       (list (instantiate-template subtempl local-env subst))
-                       (expand-ellipsis subtempl (- depth 1) local-env subst))))
+                       (list (instantiate-template subtempl local-env subst ell lits))
+                       (expand-ellipsis subtempl (- depth 1) local-env subst ell lits))))
                (iota n)))))
 
     ;; (<ellipsis> <template>) — R7RS ellipsis escape: the template is used with
@@ -909,7 +941,7 @@
     ;;          returned (1 %h-tmp-3): the rename leaked into the datum.
     ;;
     ;; Ellipsis variables have (ellipsis-vals ...) values in penv.
-    (define (instantiate-template tmpl penv subst)
+    (define (instantiate-template tmpl penv subst ell lits)
       (cond
         ;; Symbol: pattern variables first, then renames
         ((symbol? tmpl)
@@ -925,23 +957,24 @@
         ((not (pair? tmpl)) tmpl)
         ;; Ellipsis escape — must precede the ellipsis-template case, since
         ;; (... ...) also looks like "subtemplate followed by ellipsis".
-        ((and (eq? (car tmpl) '...) (pair? (cdr tmpl)) (null? (cddr tmpl)))
+        ((and (ellipsis-mark? (car tmpl) ell lits)
+              (pair? (cdr tmpl)) (null? (cddr tmpl)))
          (instantiate-escaped (cadr tmpl) penv subst))
         ;; Quoted data: pattern variables substitute, renames do not.
         ((and (eq? (car tmpl) 'quote) (pair? (cdr tmpl)) (null? (cddr tmpl)))
-         (list 'quote (instantiate-template (cadr tmpl) penv '())))
-        ;; Ellipsis template: (subtempl ... [... ...]) rest
-        ((and (pair? (cdr tmpl)) (eq? (cadr tmpl) '...))
+         (list 'quote (instantiate-template (cadr tmpl) penv '() ell lits)))
+        ;; Ellipsis template: (subtempl <ell> [<ell> ...]) rest
+        ((and (pair? (cdr tmpl)) (ellipsis-mark? (cadr tmpl) ell lits))
          (let* ((subtempl  (car tmpl))
-                (depth     (count-ellipses (cdr tmpl)))
-                (rest-tmpl (drop-ellipses (cdr tmpl))))
+                (depth     (count-ellipses (cdr tmpl) ell lits))
+                (rest-tmpl (drop-ellipses (cdr tmpl) ell lits)))
            (append
-             (expand-ellipsis subtempl depth penv subst)
-             (instantiate-template rest-tmpl penv subst))))
+             (expand-ellipsis subtempl depth penv subst ell lits)
+             (instantiate-template rest-tmpl penv subst ell lits))))
         ;; Regular pair
         (else
-         (cons (instantiate-template (car tmpl) penv subst)
-               (instantiate-template (cdr tmpl) penv subst)))))
+         (cons (instantiate-template (car tmpl) penv subst ell lits)
+               (instantiate-template (cdr tmpl) penv subst ell lits)))))
 
     ;; A transformer whose output is expanded in `env` rather than in whatever
     ;; macro environment is current where the macro is used.  let-syntax needs
@@ -988,11 +1021,11 @@
     ;; definition environment, which this purely structural design has no place
     ;; to put.
 
-    (define (template-bound-ids tmpl pattern-vars literals)
+    (define (template-bound-ids tmpl pattern-vars literals ell)
       (let ((acc '()))
         (define (note! s)
           (when (and (symbol? s)
-                     (not (eq? s '...))
+                     (not (ellipsis-mark? s ell literals))
                      (not (memq s pattern-vars))
                      (not (memq s literals))
                      (not (memq s acc)))
@@ -1036,11 +1069,6 @@
         (walk tmpl)
         acc))
 
-    ;; (old . fresh) for each identifier the template binds.
-    (define (hygiene-renames tmpl pattern-vars literals)
-      (map (lambda (s)
-             (cons s (fresh-name (string-append "%h-" (symbol->string s) "-"))))
-           (template-bound-ids tmpl pattern-vars literals)))
 
     ;; ---------------------------------------------------------------
     ;; Referential transparency: free identifiers resolve at the macro's
@@ -1083,12 +1111,13 @@
       (string->symbol (string-append %gref-prefix (symbol->string name))))
 
     ;; Free identifiers of a template: symbols that are not pattern variables,
-    ;; not bound by the template, not literals, not keywords, and not currently
-    ;; macros.
-    (define (template-free-ids tmpl pattern-vars bound literals)
+    ;; not bound by the template, not literals, not keywords, not the ellipsis,
+    ;; and not currently macros.
+    (define (template-free-ids tmpl pattern-vars bound literals ell)
       (let ((acc '()))
         (define (note! s)
           (when (and (symbol? s)
+                     (not (eq? s ell))
                      (not (memq s pattern-vars))
                      (not (memq s bound))
                      (not (memq s literals))
@@ -1117,16 +1146,20 @@
         (walk tmpl)
         acc))
 
-    (define (referential-renames tmpl pattern-vars bound literals)
+    (define (referential-renames tmpl pattern-vars bound literals ell)
       (map (lambda (s) (cons s (gref-symbol s)))
-           (template-free-ids tmpl pattern-vars bound literals)))
+           (template-free-ids tmpl pattern-vars bound literals ell)))
 
-    ;; Build a transformer from a syntax-rules spec.
+    ;; Build a transformer from a syntax-rules spec — either shape, with or
+    ;; without the custom ellipsis identifier (see spec-ellipsis above).
     (define (make-transformer spec)
-      (if (not (and (pair? spec) (eq? (car spec) 'syntax-rules)))
+      (if (not (and (pair? spec) (eq? (car spec) 'syntax-rules)
+                    (pair? (cdr spec))
+                    (list? (spec-literals spec))))
           (error "define-syntax: expected (syntax-rules ...) form" spec)
-          (let ((literals (cadr spec))
-                (clauses  (cddr spec)))
+          (let ((ell      (spec-ellipsis spec))
+                (literals (spec-literals spec))
+                (clauses  (spec-clauses spec)))
             (lambda (form)
               (let loop ((cls clauses))
                 (if (null? cls)
@@ -1135,7 +1168,7 @@
                     (let* ((clause   (car cls))
                            (pat-args (cdr (car clause)))
                            (template (cadr clause))
-                           (env      (match-syntax pat-args (cdr form) literals)))
+                           (env      (match-syntax pat-args (cdr form) literals ell)))
                       (if env
                           ;; Fresh renames per expansion, so two uses of the same
                           ;; macro never share an introduced name.  Pattern
@@ -1143,16 +1176,16 @@
                           ;; variables substitute even inside quoted data,
                           ;; renames never do — see instantiate-template.
                           (let* ((pvars   (map car env))
-                                 (bound   (template-bound-ids template pvars literals))
+                                 (bound   (template-bound-ids template pvars literals ell))
                                  (renames (map (lambda (s)
                                                  (cons s (fresh-name
                                                            (string-append
                                                              "%h-" (symbol->string s) "-"))))
                                                bound))
                                  (frees   (referential-renames
-                                            template pvars bound literals)))
+                                            template pvars bound literals ell)))
                             (instantiate-template
-                              template env (append renames frees)))
+                              template env (append renames frees) ell literals))
                           (loop (cdr cls))))))))))
 
     ;; ---------------------------------------------------------------

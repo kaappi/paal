@@ -1182,6 +1182,46 @@
 ;;
 ;; Referential transparency is *not* provided — see the group's last test.
 
+;; syntax-rules accepts the custom-ellipsis shape (syntax-rules ell (lits)
+;; clause ...), and the literals list has priority over both the ellipsis and
+;; the _ wildcard (R7RS 4.3.2).  Ellipsis patterns may close over a dotted
+;; tail.
+(test-group "define-syntax: custom ellipsis and literal priority"
+  (test-equal "a macro-defined macro uses its own ellipsis identifier" 5
+    (pkaappi-run-bc-string
+      "(define-syntax be-like-begin3
+         (syntax-rules ()
+           ((be-like-begin3 name)
+            (define-syntax name
+              (syntax-rules dots ()
+                ((name expr dots) (begin expr dots)))))))
+       (be-like-begin3 sequence3)
+       (sequence3 2 3 4 5)"))
+  (test-equal "an ellipsis that is also a literal is a literal"
+    '(y ...)
+    (pkaappi-run-bc-string
+      "(define-syntax elli-lit-1
+         (syntax-rules ... (...)
+           ((_ x) '(x ...))))
+       (elli-lit-1 y)"))
+  (test-equal "underscore in the literals list matches literally"
+    '(0 1 2 fail)
+    (pkaappi-run-bc-string
+      "(define-syntax count-to-2_
+         (syntax-rules (_)
+           ((_) 0)
+           ((_ _) 1)
+           ((_ _ _) 2)
+           ((x . y) 'fail)))
+       (list (count-to-2_) (count-to-2_ _) (count-to-2_ _ _) (count-to-2_ x))"))
+  (test-equal "an ellipsis pattern with a dotted tail"
+    #((10 43) (31 41) "tail")
+    (pkaappi-run-bc-string
+      "(define-syntax part-2x
+         (syntax-rules ()
+           ((_ (a b) ... . c) (vector '(a b) ... 'c))))
+       (part-2x (10 43) (31 41) . \"tail\")")))
+
 ;; Quoted data in a template takes pattern variables but not the expander's
 ;; renames: hygiene names exist to steer resolution, and quoted data resolves
 ;; nothing.  Before the penv/subst split a template binding tmp and also
