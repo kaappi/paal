@@ -21,8 +21,8 @@
         ("6.7 Strings" 130 0)
         ("6.8 Vectors" 43 0)
         ("6.9 Bytevectors" 39 0)
-        ("6.10 Control Features" 29 5)
-        ("6.11 Exceptions" 21 3)
+        ("6.10 Control Features" 34 0)
+        ("6.11 Exceptions" 30 0)
         ("6.12 Environments and evaluation" 4 0)
         ("6.13 Input and output" 63 0)
         ("Read syntax" 93 0)
@@ -31,4 +31,4 @@
 
     ;; Top-level forms that raise before any test inside them runs.
     (define expected-errors
-      '(65 118 127 148 152 154 161 878 879 880))))
+      '(65 118 127 148 152 154 161))))

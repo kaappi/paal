@@ -358,6 +358,13 @@
                       ; list into real argument registers.  No arity ceiling, and
                       ; a tail-position (apply f args) stays a tail call.
                       (apply                      . ,%paal-apply-marker)
+                      ; call/cc and its long spelling are VM markers like
+                      ; apply: capture and invoke both live in do-call!, the
+                      ; only place the frame list and register file are
+                      ; visible.  These replace the HOST call/cc that
+                      ; %without-host-only strips from base-alist below.
+                      (call/cc                    . ,%paal-callcc-marker)
+                      (call-with-current-continuation . ,%paal-callcc-marker)
                       ; Target of the expander's `guard` desugaring.  Only a marker:
                       ; do-call! implements the operation, so whichever copy of the
                       ; VM is running supplies the catch and the closure callbacks
@@ -603,7 +610,13 @@
                    (if (vector? x)
                        (if (= (vector-length x) 3)
                            (eq? (vector-ref x 0) '%paal-closure)
-                           #f)
+                           ; A continuation is a 7-slot tagged vector from
+                           ; frame.sld, and R7RS calls it a procedure --
+                           ; (call-with-current-continuation procedure?) is
+                           ; a suite assertion.
+                           (if (= (vector-length x) 7)
+                               (eq? (vector-ref x 0) '%paal-continuation)
+                               #f))
                        #f)))
              ; map/for-each take any number of lists and stop at the shortest,
              ; per R7RS.  They used to accept two and silently ignore the rest,
@@ -1030,29 +1043,26 @@
       ;; own %paal-lib-paths and has never heard of it.
       (%propagate-lib-paths! g))
 
-    ;; Names paal-initial-env binds that cannot work on the bytecode path.
+    ;; Names paal-initial-env binds whose HOST values cannot work on the
+    ;; bytecode path.
     ;;
     ;; Only `call/cc` and its long spelling, and only because they are HOST
     ;; procedures taking a procedure argument: a paal closure there is a tagged
     ;; vector the host cannot enter, so calling one raised
     ;; `type error in 'call/cc': expected procedure, got #<vector>`.
     ;;
-    ;; Unbound is the honest answer, and strictly better than what was there.
-    ;; `(procedure? call/cc)` used to be #t while calling it type-errored, so
-    ;; feature-detecting code took the wrong branch and got a confusing error
-    ;; deep inside; now it takes the other branch, correctly. The tree-walking
-    ;; path keeps them, and they genuinely work there — closures are HOST
-    ;; procedures, so the host can enter them.
-    ;;
-    ;; An escape-only replacement in paal source was written and reverted. It
-    ;; raises a tagged escape and catches its own tag in a `guard`, which is
-    ;; sound in isolation, but `%paal-guard-catch` has to intercept escapes
-    ;; before the clauses run — otherwise any intervening
-    ;; `(guard (e (#t ...)) ...)` swallows them — and once it does, it also
-    ;; intercepts the escape belonging to `call/cc`'s *own* guard, which it
-    ;; cannot recognize because a clauses procedure carries no identity. Making
-    ;; that work needs the VM to know about continuations, which is the
-    ;; re-entrant design that is deliberately out of scope.
+    ;; The names are no longer unbound, though: %make-globals-table strips the
+    ;; HOST procedures here and binds both spellings to %paal-callcc-marker,
+    ;; the VM's own capture/invoke in do-call! (see vm-bc.sld).  The VM now
+    ;; knows about continuations — the re-entrant design an earlier note here
+    ;; called out of scope — which is also what dissolved the reason the
+    ;; escape-only replacement was reverted: its escapes had to pass through
+    ;; %paal-guard-catch, which could not tell them from its own.  Capture and
+    ;; invoke living in the dispatch loop never meet a guard's clauses at all;
+    ;; the one escape the design still uses, %paal-vm-cont-invoke, is
+    ;; recognized and passed through by run-guard! itself.  The tree-walking
+    ;; path keeps the HOST pair, which genuinely work there — closures on that
+    ;; path are HOST procedures.
     (define %paal-host-only-names
       '(call/cc call-with-current-continuation))
 

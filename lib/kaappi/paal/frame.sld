@@ -13,6 +13,9 @@
 (define-library (kaappi paal frame)
   (import (scheme base) (kaappi paal bytecode))
   (export make-closure closure? closure-function closure-upvalues
+          make-continuation continuation?
+          continuation-regs continuation-frames continuation-target
+          continuation-winds continuation-handlers continuation-loop
           make-frame   frame?
           frame-closure frame-set-closure!
           frame-code    frame-set-code!
@@ -49,6 +52,38 @@
 
     (define (closure-function cl) (vector-ref cl 1))
     (define (closure-upvalues cl) (vector-ref cl 2))
+
+    ;; --- Continuation ---
+    ;;
+    ;; A first-class continuation for the bytecode VM: the copied live prefix
+    ;; of the register file, the frame list as plain data, where the resumed
+    ;; value lands, and the wind stack, handler stack and dispatch-loop
+    ;; identity at capture.  A tagged vector for the same reason as <closure>
+    ;; above — a continuation is a value user programs hold and pass, so both
+    ;; self-hosting copies of the pipeline must recognize one.
+    ;;
+    ;; frames holds plain 4-vectors #(closure ip base dst), never <frame>
+    ;; records: records do not cross the copy boundary, and the invoke side
+    ;; rebuilds fresh frames anyway, so one snapshot can be entered any number
+    ;; of times without sharing mutable ip state between entries.
+
+    (define %continuation-tag '%paal-continuation)
+
+    (define (make-continuation regs-snapshot frames-data target winds handlers loop-id)
+      (vector %continuation-tag regs-snapshot frames-data target
+              winds handlers loop-id))
+
+    (define (continuation? x)
+      (and (vector? x)
+           (= (vector-length x) 7)
+           (eq? (vector-ref x 0) %continuation-tag)))
+
+    (define (continuation-regs c)     (vector-ref c 1))
+    (define (continuation-frames c)   (vector-ref c 2))
+    (define (continuation-target c)   (vector-ref c 3))
+    (define (continuation-winds c)    (vector-ref c 4))
+    (define (continuation-handlers c) (vector-ref c 5))
+    (define (continuation-loop c)     (vector-ref c 6))
 
     ;; --- Call frame ---
 

@@ -176,12 +176,16 @@ Missing primitives added to `paal-initial-env` (`lib/kaappi/paal/vm.sld`):
       against a build of kaappi `main` @ 321da93a: all nine cases in the repro
       now agree with paal.
 
-      Still not R7RS, and unchanged by this work: an unmatched `raise-continuable`
+      Still not R7RS, and deliberately so: an unmatched `raise-continuable`
       is not resumable — the clauses run after the host stack has unwound, so
       there is no raise point to return a value to. `(list 'got
       (raise-continuable 'sym))` under a declining guard yields the outer
-      handler's value rather than `(got …)`. kaappi behaves the same way, and
-      closing it does need re-entrant continuations.
+      handler's value rather than `(got …)`. kaappi behaves the same way, so
+      fixing it unilaterally would break three-way agreement for a corner no
+      suite tests. The machinery to close it now exists, though: since the
+      bytecode VM gained continuations, the sketch is for `run-guard!` to
+      capture a body-loop continuation at the raise point and for its retry
+      to resume it — the `%paal-vm-cont-invoke` escape protocol is the base.
 
 ---
 
@@ -863,26 +867,35 @@ no value representation and no cross-copy protocol — so they can land in any o
       labels, string and character escaping — a second implementation to keep
       in step with kaappi's. Same call the debugger's `%debug-write` already
       makes.
-- [x] **`call/cc` was bound but type-errored on the bytecode path** — worse
-      than absent: `(procedure? call/cc)` answered `#t` while calling it
-      failed, so feature-detecting code took the wrong branch and got a
-      confusing error deep inside. Both names are now **unbound on the bytecode
-      path** and kept on the tree-walking path, where a paal closure *is* a
-      HOST procedure and they genuinely work.
+- [x] **`call/cc` works on the bytecode path** — full re-entrant, multi-shot,
+      as a VM marker in `do-call!` like `guard` and `apply` before it.
+      Capture copies the live register prefix, the frame list as plain data,
+      and the wind and handler stacks; invoke winds the dynamic extent across
+      with the same `%paal-wind-out!`/`%paal-wind-in!` walk a declining guard
+      uses, restores the handler stack by assignment, and rebuilds fresh
+      frames per entry, so one continuation can be re-entered any number of
+      times and a tail-position re-invoke grows nothing. §6.10 went 29/5 →
+      34/0 and §6.11 21/3 → 30/0, with suite forms 878–880 no longer
+      aborting. See `docs/architecture.md` § Continuations in the bytecode VM.
 
-      An escape-only replacement in paal source was written and reverted, and
-      the reason is worth recording. It raises a tagged escape and claims its
-      own tag in a `guard`, which is sound in isolation. But `%paal-guard-catch`
-      has to intercept escapes *before* the clauses run — otherwise any
-      intervening `(guard (e (#t ...)) ...)` swallows them, which is a subtler
-      wrong answer than the type error it replaced — and once it intercepts,
-      it also intercepts the escape belonging to `call/cc`'s *own* guard, which
-      it cannot recognize because a clauses procedure carries no identity.
-      Making that work means teaching the VM about continuations, which is the
-      re-entrant design that is out of scope.
+      The path here had three states, each honest in its day. First bound to
+      the HOST `call/cc`, which type-errored on every paal closure — worse
+      than absent, since `(procedure? call/cc)` said `#t` while calling it
+      failed. Then **unbound**, so feature detection took the fallback branch
+      correctly. An escape-only paal-source replacement was written between
+      the two and reverted: its escapes had to pass `%paal-guard-catch`,
+      which could not tell them from its own, and fixing that meant teaching
+      the VM about continuations. That is exactly what the final design does
+      — capture and invoke live in the dispatch loop, where no guard's
+      clauses ever run, and the one escape it still uses
+      (`%paal-vm-cont-invoke`, for an invoke crossing dispatch loops) is
+      recognized and passed through by `run-guard!` itself.
 
-      So: unbound, which is a true statement, and the branch a program takes on
-      finding it absent is now the correct one.
+      One documented limit, kaappi-parity in kind: a continuation belongs to
+      the dispatch-loop episode that captured it. Invoked after its episode
+      finished — a guard body that returned, a previous `eval` — it dies with
+      `continuation invoked outside its dispatch extent`, deliberately past
+      the program's own guards, the way kaappi's `KP3008` is uncatchable.
 - [x] **`#!fold-case` / `#!no-fold-case`** — supported, and checked against
       kaappi's reader on every case. Folding applies to the symbol branch only:
       numbers are unaffected, a single-character literal is not folded (`#\A`

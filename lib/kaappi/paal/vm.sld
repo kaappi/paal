@@ -54,6 +54,7 @@
                         ">"))
         ((bytecode-function? v)
          (string-append "#<code " (%paal-proc-label (bytecode-function-name v)) ">"))
+        ((continuation? v) "#<continuation>")
         (else #f)))
 
     (define (%paal-write v . port)

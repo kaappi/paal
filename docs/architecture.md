@@ -542,9 +542,13 @@ the frame stays on `%paal-winds` and the extent stays open, which is exactly wha
 the raise point still reconstructable when the guard looks. Closing it is the enclosing
 guard's job, and one `%paal-wind-out!` closes every extent between it and the raise in a
 single pass — restoring parameters and running `after` thunks in innermost-first order.
-Nothing else can leave a dynamic extent — a raise is paal's only non-local exit — so
-nothing else has to be caught. If paal ever gains `call/cc` over paal closures, this is
-the first place to revisit.
+A raise is no longer paal's only non-local exit — a continuation invoke is the other —
+but the revisit this paragraph used to promise turned out to be a reuse: invoking a
+continuation moves between dynamic environments with the same
+`%paal-wind-out!`/`%paal-wind-in!` walk, out to the deepest shared tail of the two
+wind stacks and back in to the captured one (see "Continuations in the bytecode VM").
+`parameterize` and `dynamic-wind` still need no cleanup handler of their own: both
+kinds of exit close every extent between the two states in one pass.
 
 A guard *inside* an extent is not leaving it, so a guard that declines there does not
 run the `after` thunk; only an escape that actually crosses the frame does. kaappi
@@ -639,9 +643,12 @@ copies compile the same explicit `vector` / `vector-ref` code.
 |-------|-----|------------|
 | closure | `%paal-closure` | `frame.sld` |
 | bytecode function | `%paal-bytecode-function` | `bytecode.sld` |
+| continuation | `%paal-continuation` | `frame.sld` |
 | guard marker | `%paal-vm-guard-run` | `vm-bc.sld` |
 | apply marker | `%paal-vm-apply` | `vm-bc.sld` |
+| call/cc marker | `%paal-vm-call/cc` | `vm-bc.sld` |
 | raise wrapper | `%paal-vm-escape` | `vm-bc.sld` |
+| continuation-invoke escape | `%paal-vm-cont-invoke` | `vm-bc.sld` |
 
 `<frame>` stays a `define-record-type`: frames are created and consumed inside a single
 VM invocation and never enter globals.
@@ -680,25 +687,57 @@ source — cycle detection, datum labels, string and character escaping — a se
 implementation to keep in step with kaappi's. The debugger's `%debug-write` makes the
 same call for the same reason.
 
-### `call/cc` is unbound on the bytecode path
+### Continuations in the bytecode VM
 
-`paal-initial-env` binds the HOST `call/cc`, which works on the tree-walking path — a
-paal closure there *is* a HOST procedure — and cannot work on the bytecode path, where
-the host is handed a tagged vector it cannot enter. `pkaappi-make-globals` therefore
-drops both spellings from the table it builds (`%paal-host-only-names`).
+`call/cc` on this path is a VM operation, like `guard` and `apply` before it: the HOST
+`call/cc` in `paal-initial-env` cannot work here (a paal closure is a tagged vector the
+host cannot enter), so `%make-globals-table` strips it (`%paal-host-only-names`) and
+binds both spellings to the marker `%paal-vm-call/cc`, which `do-call!` implements.
 
-Absent is the honest answer and strictly better than what was there: `(procedure? call/cc)`
-answered `#t` while calling it type-errored, so feature-detecting code took the wrong
-branch and failed deep inside instead of taking its fallback. It now takes the fallback.
+**Capture** copies the live prefix of the register file — `[0, abs-base+nargs+1)`,
+exact because the emitter allocates every call's base as the next free register, so
+bases grow monotonically down the frame list, across nested `paal-call-value` episodes
+included — plus the frame list as plain `#(closure ip base dst)` tuples, the
+`%paal-winds` and `%paal-handlers` list values (both stacks grow by rebinding, so the
+reference is a snapshot), and the identity of the running dispatch loop. The result is
+`#(%paal-continuation …)`, a tagged 7-vector from `frame.sld`, recognizable by both
+self-hosting copies and by the blob's `procedure?`. The marker case then performs
+apply's in-place rewrite — receiver into the callee slot, continuation as its one
+argument, re-dispatch — so `(call/cc f)` in tail position stays a real tail call and
+`f` may be a closure, HOST procedure, marker or another continuation.
 
-An escape-only replacement in paal source was written and reverted. It raises a tagged
-escape and claims its own tag in a `guard`, which is sound in isolation — but
-`%paal-guard-catch` has to intercept escapes *before* the clauses run, or any intervening
-`(guard (e (#t …)) …)` swallows them, which is a subtler wrong answer than the type error
-it replaced. Once it intercepts, it also intercepts the escape belonging to `call/cc`'s
-*own* guard, which it cannot recognize because a clauses procedure carries no identity.
-Making that work means teaching the VM about continuations — the re-entrant design that
-is out of scope. See `docs/TODO.md` Phase 7.
+**Invoke** is a `do-call!` arm on `continuation?` (so `(apply k args)` works free).
+One argument is the value; any other count becomes the blob's MVR encoding, so
+`call-with-values` consumers receive them all. The dynamic extent moves first — wind
+out to the deepest shared tail of the current and captured `%paal-winds`, wind back in
+to the captured state, using the same `%paal-wind-out!`/`%paal-wind-in!` walk a
+declining guard performs — then `%paal-handlers` is restored by assignment, which is
+load-bearing: `with-exception-handler`'s trailing restore never runs when a
+continuation escapes its thunk. Control transfer is multi-shot: fresh frames are
+rebuilt from the snapshot each time and the register prefix is copied back, so one
+continuation can be re-entered any number of times, and a tail-position re-invoke
+neither grows the frame list nor the host stack.
+
+**Dispatch-loop episodes.** Each `paal-run-bc` and each nested `paal-call-value` run
+installs a fresh loop identity in globals (`%paal-vm-loop`). An invoke inside the
+capturing episode restores frames in place. Anywhere else it raises
+`#(%paal-vm-cont-invoke cont value)`: `run-guard!` recognizes the tag and passes it
+through — the one thing the reverted escape-only design could not do, and it must not
+restore `%paal-handlers` on the way — and `paal-run-bc`, now a retry loop, resumes the
+continuation when the identity matches. A continuation whose episode has finished — a
+guard body that returned, a previous `eval` — dies with
+`continuation invoked outside its dispatch extent`, deliberately past the program's
+own guards, the way a kaappi `KP3008` is uncatchable: never corruption. This is paal's
+analogue of kaappi's documented "cannot re-enter a returned native driver frame".
+
+What invoke does **not** restore: heap state (boxes and upvalue cells keep their
+current values, per R7RS), and the debugger hears nothing — like a guard escape, the
+frame list changes wholesale rather than by one call or return, so `next`/`finish`
+simply stop at the next event at or below their recorded base.
+
+The escape-only design this replaces is described in `docs/TODO.md` Phase 7's history;
+its fatal flaw — guards swallowing escapes they cannot recognize — dissolved when
+capture and invoke moved into the dispatch loop, where the clauses never run.
 
 ---
 

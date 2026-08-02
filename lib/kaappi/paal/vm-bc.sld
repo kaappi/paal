@@ -8,7 +8,8 @@
 (define-library (kaappi paal vm-bc)
   (import (scheme base) (kaappi paal bytecode) (kaappi paal frame))
   (export paal-run-bc paal-make-globals
-          %paal-guard-run-marker %paal-apply-marker paal-vm-raise-escape!
+          %paal-guard-run-marker %paal-apply-marker %paal-callcc-marker
+          paal-vm-raise-escape!
           paal-profile-start! paal-profile-report
           paal-coverage-start! paal-coverage-report
           paal-debug-start! paal-debug-stop!
@@ -48,6 +49,25 @@
     ;; the old 16-argument ceiling came from.  do-call! can just spread the list
     ;; into argument registers and issue the call.
     (define %paal-apply-marker '%paal-vm-apply)
+
+    ;; call/cc is a marker for the closure-boundary reason guard is one: the
+    ;; receiver is usually a paal closure, and capture needs the frame list and
+    ;; register file, which only do-call! can see.  Invoking the captured
+    ;; continuation is a do-call! arm too, so (apply k args) works unchanged.
+    (define %paal-callcc-marker '%paal-vm-call/cc)
+
+    ;; A continuation invoked outside the dispatch loop that captured it cannot
+    ;; be resumed by returning — the loop that owns its frames is suspended
+    ;; somewhere down the HOST stack, or already gone.  The invoke escapes with
+    ;; this tag instead; run-guard! passes it through untouched, and the retry
+    ;; loop in paal-run-bc resumes the continuation when the loop identity
+    ;; matches or reports it cleanly when it never can.  A 3-vector, so
+    ;; paal-vm-escape? (length 2) never confuses the two.
+    (define %paal-cont-invoke-tag '%paal-vm-cont-invoke)
+
+    (define (paal-vm-cont-invoke? e)
+      (and (vector? e) (= (vector-length e) 3)
+           (eq? (vector-ref e 0) %paal-cont-invoke-tag)))
 
     ;; paal `raise` is the HOST procedure paal-vm-raise-escape!, which raises a
     ;; HOST exception carrying the paal value in a tagged wrapper.  The wrapper
@@ -106,17 +126,48 @@
     ;; Main entry point
     ;; ---------------------------------------------------------------
 
+    ;; Every dispatch-loop episode carries a fresh identity in globals under
+    ;; %paal-vm-loop — a fresh pair, compared with eq?.  A continuation may
+    ;; only restore frames inside the episode that captured them: frames of a
+    ;; finished episode have no loop left to return into, and frames of a
+    ;; suspended one are reachable only by unwinding the HOST stack back to
+    ;; it, which is what the %paal-vm-cont-invoke escape does.
+    ;; paal-call-value gives its nested episode a fresh identity too, so a
+    ;; capture inside a guard body cannot be replayed after the body's loop
+    ;; has returned — invoking such a continuation reports it cleanly instead
+    ;; of resuming dead frames.
+
     (define (paal-run-bc fn globals)
       (let* ((regs    (make-vector REGS-SIZE #f))
              ; Top-level frame: base=0, dst=0, no closure wrapping needed
              (top-closure (make-closure fn (vector)))
              (top-frame   (make-frame top-closure 0 0))
-             (frames  (list top-frame)))
-        ; An escape that reached the top was raised by paal code with no guard
-        ; around it.  Strip the wrapper and re-raise so the caller sees the value
-        ; the program actually raised rather than VM plumbing.
-        (guard (e ((paal-vm-escape? e) (raise (vector-ref e 1))))
-          (run! regs globals frames))))
+             (my-id    (list 'loop))
+             (outer-id (globals-ref-default globals '%paal-vm-loop #f)))
+        (globals-define! globals '%paal-vm-loop my-id)
+        ; The retry loop re-arms the guard after every resumed continuation,
+        ; so one episode absorbs any number of cross-loop invokes.  An escape
+        ; that reached the top was raised by paal code with no guard around
+        ; it: strip the wrapper and re-raise so the caller sees the value the
+        ; program actually raised rather than VM plumbing.
+        (let ((result
+               (let retry ((fs (list top-frame)))
+                 (guard (e ((paal-vm-cont-invoke? e)
+                            (let ((cont  (vector-ref e 1))
+                                  (value (vector-ref e 2)))
+                              (if (eq? (continuation-loop cont) my-id)
+                                  (begin
+                                    ; The escape skipped every nested restore
+                                    ; on the way here, so reclaim the identity
+                                    ; before resuming.
+                                    (globals-define! globals '%paal-vm-loop my-id)
+                                    (let ((nfs (restore-cont! regs cont value)))
+                                      (if (null? nfs) value (retry nfs))))
+                                  (error "paal-bc: continuation invoked outside its dispatch extent"))))
+                           ((paal-vm-escape? e) (raise (vector-ref e 1))))
+                   (run! regs globals fs)))))
+          (globals-define! globals '%paal-vm-loop outer-id)
+          result)))
 
     ;; ---------------------------------------------------------------
     ;; Re-entrant call — enter a paal closure from HOST code
@@ -150,7 +201,15 @@
                 (vector-set! regs (+ base arity) as))
                ((not (null? as))
                 (error "paal-bc: too many arguments" (bytecode-function-name fn)))))
-           (run! regs globals (list (make-frame callee base base)))))
+           ; A fresh loop identity for the nested episode: a continuation
+           ; captured inside it must not be replayable once this run! has
+           ; returned.  On an escape the restore below is skipped — every
+           ; catcher reinstalls the identity current at its own entry.
+           (let ((outer-id (globals-ref-default globals '%paal-vm-loop #f)))
+             (globals-define! globals '%paal-vm-loop (list 'loop))
+             (let ((result (run! regs globals (list (make-frame callee base base)))))
+               (globals-define! globals '%paal-vm-loop outer-id)
+               result))))
 
         ((procedure? callee) (apply callee args))
 
@@ -359,12 +418,24 @@
       (let ((escape (globals-ref-default globals '%paal-vm-raise #f))
             (saved  (globals-ref-default globals '%paal-handlers #f))
             (catch  (globals-ref-default globals '%paal-guard-catch #f))
-            (winds  (globals-ref-default globals '%paal-winds '())))
+            (winds  (globals-ref-default globals '%paal-winds '()))
+            (entry-id (globals-ref-default globals '%paal-vm-loop #f)))
         (when (and escape saved)
           (globals-define! globals '%paal-handlers (cons escape saved)))
         (let ((result
-               (guard (e (#t (when saved
+               (guard (e ((paal-vm-cont-invoke? e)
+                          ; A continuation invoke passing through on its way to
+                          ; the loop that owns it.  Nothing here may touch
+                          ; %paal-handlers: the invoke already installed the
+                          ; captured stack, and restoring `saved` would clobber
+                          ; it.  The winds are the invoke's business too.
+                          (raise e))
+                         (#t (when saved
                                (globals-define! globals '%paal-handlers saved))
+                             ; The escape skipped paal-call-value's restore, so
+                             ; the body loop's identity is still current; the
+                             ; clauses belong to this guard's own loop.
+                             (globals-define! globals '%paal-vm-loop entry-id)
                              (let ((condition (paal-vm-condition e)))
                                (if catch
                                    (paal-call-value regs globals nbase catch
@@ -423,6 +494,134 @@
         (if (= i 0)
             acc
             (loop (- i 1) (cons (vector-ref regs (+ abs-base i)) acc)))))
+
+    ;; --- continuations -------------------------------------------------
+    ;;
+    ;; Full-copy, multi-shot, kaappi's model: capture copies the live register
+    ;; prefix and the frame list; invoke copies them back and re-enters the
+    ;; dispatch loop.  An escape-only design was tried before this and
+    ;; reverted — it cannot honour dynamic-wind re-entry, and its escapes were
+    ;; swallowed by intervening guards (see docs/architecture.md).  The wind
+    ;; stack needs no new machinery here: a dynamic environment in paal is
+    ;; data, and %paal-wind-out!/%paal-wind-in! already walk the difference
+    ;; between two states.
+
+    ;; Capture the current continuation as seen at a call/cc call site.
+    ;;
+    ;; Registers: the live prefix [0, abs-base+nargs+1).  The emitter
+    ;; allocates a call's base as the next free register and bases grow
+    ;; monotonically down the frame list — across nested paal-call-value
+    ;; episodes too — so everything at or above that bound is unused by every
+    ;; live frame.
+    ;;
+    ;; Frames: #(closure ip base dst) per frame, innermost first.
+    ;; frame-fetch! pre-increments, so the top frame's ip already points at
+    ;; the resume point.  In tail position the current frame is finishing —
+    ;; the captured continuation is the caller's — so the current frame is
+    ;; dropped and the value lands where this frame would have delivered.
+    ;;
+    ;; Winds and handlers are the list values themselves: both stacks grow by
+    ;; rebinding, never by in-place mutation, so holding the reference is a
+    ;; true snapshot.  %paal-vm-none marks a table that has no handler stack
+    ;; (one built straight from paal-initial-env), so invoke can skip it.
+    (define (capture-continuation regs globals frames frame abs-base nargs tail?)
+      (let* ((snap  (vector-copy regs 0 (+ abs-base nargs 1)))
+             (fdata (let walk ((fs (if tail? (cdr frames) frames)))
+                      (if (null? fs)
+                          '()
+                          (cons (vector (frame-closure (car fs))
+                                        (frame-ip (car fs))
+                                        (frame-base (car fs))
+                                        (frame-dst (car fs)))
+                                (walk (cdr fs))))))
+             (target (if tail? (frame-dst frame) abs-base)))
+        (make-continuation snap fdata target
+                           (globals-ref-default globals '%paal-winds '())
+                           (globals-ref-default globals '%paal-handlers '%paal-vm-none)
+                           (globals-ref-default globals '%paal-vm-loop #f))))
+
+    ;; Rebuild fresh frames from a continuation's snapshot.  Fresh records per
+    ;; invoke: frames mutate their ip as they run, and one snapshot may be
+    ;; entered any number of times.
+    (define (rebuild-frames fdata)
+      (if (null? fdata)
+          '()
+          (let* ((fd (car fdata))
+                 (f  (make-frame (vector-ref fd 0)
+                                 (vector-ref fd 2)
+                                 (vector-ref fd 3))))
+            (frame-set-ip! f (vector-ref fd 1))
+            (cons f (rebuild-frames (cdr fdata))))))
+
+    ;; Install a continuation's registers and deliver the value; the rebuilt
+    ;; frame list comes back, '() when the capture was at the bottom of its
+    ;; loop — the value is then the episode's own result.  Restoring a prefix
+    ;; is sound: frames only address registers at or above their own base, so
+    ;; everything a restored frame can read lies inside the snapshot, and
+    ;; anything the abandoned computation left above it is dead.
+    (define (restore-cont! regs cont value)
+      (let ((snap (continuation-regs cont)))
+        (vector-copy! regs 0 snap 0 (vector-length snap))
+        (let ((frames (rebuild-frames (continuation-frames cont))))
+          (vector-set! regs (continuation-target cont) value)
+          frames)))
+
+    ;; The deepest shared tail of two wind stacks.  Both are shared-tail
+    ;; lists, so aligning the lengths and walking in step finds the join; '()
+    ;; — no shared extent — is a valid answer, since it is the empty tail of
+    ;; both.
+    (define (winds-common-tail a b)
+      (let* ((la (length a))
+             (lb (length b))
+             (a2 (if (> la lb) (list-tail a (- la lb)) a))
+             (b2 (if (> lb la) (list-tail b (- lb la)) b)))
+        (let walk ((x a2) (y b2))
+          (if (eq? x y) x (walk (cdr x) (cdr y))))))
+
+    ;; Invoke a continuation with the given arguments.
+    ;;
+    ;; One argument is that value; any other count is delivered as the same
+    ;; MVR-tagged list the blob's `values` builds, so a call-with-values
+    ;; consumer receives them all.  Then the dynamic extent moves: wind out of
+    ;; the extents entered since the capture and back into the captured ones —
+    ;; the same wind-stack walk a declining guard performs — and the handler
+    ;; stack is restored by assignment, which matters because
+    ;; with-exception-handler's trailing restore never runs when a
+    ;; continuation escapes its thunk.  safe-base sits above every live
+    ;; register, so the wind thunks run without clobbering anything.
+    ;;
+    ;; Control: within the capturing episode the restored frames are simply
+    ;; entered — everything from run! down is in tail position, so repeated
+    ;; invokes grow neither the HOST stack nor the frame list.  Anywhere else
+    ;; the invoke escapes to the loop that owns the frames; see
+    ;; %paal-cont-invoke-tag above.
+    (define (invoke-continuation! regs globals cont args safe-base)
+      (let ((value
+             (if (and (pair? args) (null? (cdr args)))
+                 (car args)
+                 (let ((tag (globals-ref-default globals '%paal-mvr-tag #f)))
+                   (if tag
+                       (cons tag args)
+                       (error "paal-bc: continuation expects one value" args)))))
+            (from (globals-ref-default globals '%paal-winds '()))
+            (to   (continuation-winds cont)))
+        (when (not (eq? from to))
+          (let ((wind-out (globals-ref-default globals '%paal-wind-out! #f))
+                (wind-in  (globals-ref-default globals '%paal-wind-in! #f)))
+            (when wind-out
+              (let ((common (winds-common-tail from to)))
+                (paal-call-value regs globals safe-base wind-out (list from common))
+                (globals-define! globals '%paal-winds common)
+                (paal-call-value regs globals safe-base wind-in (list to common))
+                (globals-define! globals '%paal-winds to)))))
+        (let ((h (continuation-handlers cont)))
+          (when (not (eq? h '%paal-vm-none))
+            (globals-define! globals '%paal-handlers h)))
+        (if (eq? (continuation-loop cont)
+                 (globals-ref-default globals '%paal-vm-loop #f))
+            (let ((fs (restore-cont! regs cont value)))
+              (if (null? fs) value (run! regs globals fs)))
+            (raise (vector %paal-cont-invoke-tag cont value)))))
 
     ;; --- profiling ---------------------------------------------------
     ;;
@@ -715,6 +914,33 @@
                                       (vector-ref regs (+ abs-base 1))
                                       (vector-ref regs (+ abs-base 2)))
                           tail?))
+
+        ; call/cc — capture, then hand the continuation to the receiver by the
+        ; same in-place rewrite apply uses: the callee slot gets the receiver,
+        ; the continuation becomes its one argument, and do-call! runs again.
+        ; That keeps (call/cc f) in tail position a real tail call, and lets f
+        ; be a closure, HOST procedure, marker or another continuation with no
+        ; special cases.  Capture happens before the rewrite: the two slots it
+        ; overwrites are dead once the call is resolved, and a resumed frame
+        ; reads only the delivery target.
+        ((eq? callee %paal-callcc-marker)
+         (if (not (= nargs 1))
+             (error "paal-bc: call/cc expects one argument")
+             (let ((f    (vector-ref regs (+ abs-base 1)))
+                   (cont (capture-continuation regs globals frames frame
+                                               abs-base nargs tail?)))
+               (vector-set! regs abs-base f)
+               (vector-set! regs (+ abs-base 1) cont)
+               (do-call! regs globals frames frame f abs-base 1 base-off tail?))))
+
+        ; Continuation invoke — reached by direct (k v) calls and through
+        ; apply's re-dispatch, so (apply k args) needs nothing extra.  No
+        ; debugger event fires: like a guard escape, the frame list changes
+        ; wholesale rather than by one call or return.
+        ((continuation? callee)
+         (invoke-continuation! regs globals callee
+                               (call-args regs abs-base nargs)
+                               (+ abs-base nargs 1)))
 
         ; Host (Scheme) procedure
         ((procedure? callee)

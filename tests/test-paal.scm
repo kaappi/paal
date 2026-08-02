@@ -1760,21 +1760,205 @@
 ;; feature-detecting code took the wrong branch and got a confusing error deep
 ;; inside.  Unbound on the bytecode path is the honest answer.
 
-(test-group "call/cc"
-  (test-equal "unbound on the bytecode path, rather than present and broken"
-    '(unbound unbound)
+;; call/cc on the bytecode path: full-copy multi-shot continuations as a VM
+;; marker in do-call!, invoked either by restoring frames in place (same
+;; dispatch loop) or by the %paal-vm-cont-invoke escape (any other loop).
+;; See docs/architecture.md § Continuations in the bytecode VM.  Programs
+;; both pipelines support are pinned on both; the tree-walking path uses the
+;; HOST call/cc, so agreement here is agreement between two implementations.
+
+(test-group "call/cc: escape"
+  (test-equal "early exit from for-each" -3
     (pkaappi-run-bc-string
-      "(list (guard (e (#t 'unbound)) (procedure? call/cc))
-             (guard (e (#t 'unbound)) (call-with-current-continuation (lambda (k) 1))))"))
-  ;; The point of unbinding rather than leaving it: this branch is now taken.
-  (test-equal "feature detection takes the fallback branch"
-    'no-callcc
-    (pkaappi-run-bc-string "(guard (e (#t 'no-callcc)) (call/cc (lambda (k) (k 1))))"))
-  ;; Still there on the tree-walking path, where it genuinely works.
-  (test-equal "the tree-walking path keeps it"
-    '(#t 42)
-    (pkaappi-run-string
-      "(list (procedure? call/cc) (call/cc (lambda (k) 42)))")))
+      "(call-with-current-continuation
+         (lambda (exit)
+           (for-each (lambda (x) (if (negative? x) (exit x)))
+                     '(54 0 37 -3 245 19))
+           #t))"))
+  ;; No tree-walk twin for this one: there for-each is the HOST procedure and
+  ;; a paal lambda's tail call — (exit x) — comes back as a trampoline thunk
+  ;; the host discards.  That is the documented HOST-HOF boundary of the
+  ;; tree-walking path (docs/architecture.md § The trampoline boundary), not
+  ;; a continuation defect; the bytecode path is the production one.
+  (test-equal "list-length returns #f through the continuation" '(4 #f)
+    (pkaappi-run-bc-string
+      "(define (list-length obj)
+         (call-with-current-continuation
+           (lambda (return)
+             (letrec ((r (lambda (obj)
+                           (cond ((null? obj) 0)
+                                 ((pair? obj) (+ (r (cdr obj)) 1))
+                                 (else (return #f))))))
+               (r obj)))))
+       (list (list-length '(1 2 3 4)) (list-length '(a b . c)))")))
+
+(test-group "call/cc: normal return and first-class use"
+  (test-equal "receiver returns without invoking" 42
+    (pkaappi-run-bc-string "(+ 1 (call/cc (lambda (k) 41)))"))
+  (test-equal "a continuation is a procedure" #t
+    (pkaappi-run-bc-string "(call-with-current-continuation procedure?)"))
+  (test-equal "the receiver may return the continuation itself" #t
+    (pkaappi-run-bc-string "(procedure? (call/cc (lambda (k) k)))"))
+  (test-equal "a continuation goes through apply" 'via-apply
+    (pkaappi-run-bc-string
+      "(call/cc (lambda (k) (apply k '(via-apply)) 'unreached))"))
+  (test-equal "write abbreviates a continuation" "#<continuation>"
+    (pkaappi-run-bc-string
+      "(let ((p (open-output-string)))
+         (call/cc (lambda (k) (write k p)))
+         (get-output-string p))")))
+
+(test-group "call/cc: multi-shot re-entry"
+  ;; The R7RS connect/talk program: the before/after thunks run on every
+  ;; crossing, and re-invoking c re-enters the extent.
+  (test-equal "dynamic-wind traversal is re-entered"
+    '(connect talk1 disconnect connect talk2 disconnect)
+    (pkaappi-run-bc-string
+      "(define path '())
+       (define c #f)
+       (define (add s) (set! path (cons s path)))
+       (dynamic-wind
+         (lambda () (add 'connect))
+         (lambda () (add (call/cc (lambda (c0) (set! c c0) 'talk1))))
+         (lambda () (add 'disconnect)))
+       (if (< (length path) 4)
+           (c 'talk2)
+           (reverse path))"))
+  ;; Register restore per invoke: the same k re-entered with fresh state each
+  ;; time, and a tail-position invoke replaces the frames, so 10^5 rounds
+  ;; grow neither the frame list nor the host stack.
+  (test-equal "one continuation re-invoked 100000 times" 100000
+    (pkaappi-run-bc-string
+      "(define k0 #f)
+       (define r (call/cc (lambda (k) (set! k0 k) 0)))
+       (if (< r 100000) (k0 (+ r 1)) r)")))
+
+(test-group "call/cc: dynamic extent"
+  (test-equal "after runs on escape, before runs on re-entry" '(in out in out)
+    (pkaappi-run-bc-string
+      "(define log '())
+       (define (note x) (set! log (cons x log)))
+       (define k0 #f)
+       (define n 0)
+       (define r (call/cc (lambda (k) (set! k0 k) 'go)))
+       (set! n (+ n 1))
+       (if (< n 3)
+           (dynamic-wind
+             (lambda () (note 'in))
+             (lambda () (k0 'again))
+             (lambda () (note 'out)))
+           (reverse log))"))
+  (test-equal "parameterize unwinds on escape and stays unwound" '((go outer) (inner outer))
+    (pkaappi-run-bc-string
+      "(define p (make-parameter 'outer))
+       (define k0 #f)
+       (define log '())
+       (define (note x) (set! log (cons x log)))
+       (define r (call/cc (lambda (k) (set! k0 k) 'go)))
+       (note (list r (p)))
+       (if (eq? r 'go)
+           (parameterize ((p 'inner)) (k0 (p)))
+           (reverse log))")))
+
+(test-group "call/cc: multiple values"
+  ;; Bytecode-only pin: the value is delivered as the blob's MVR encoding, so
+  ;; call-with-values consumers see all of them.  The tree-walking path routes
+  ;; this corner through HOST kaappi values instead.
+  (test-equal "(k 1 2) reaches a two-argument consumer" '(1 2)
+    (pkaappi-run-bc-string
+      "(call-with-values (lambda () (call/cc (lambda (k) (k 1 2)))) list)"))
+  (test-equal "(k) reaches a nullary consumer" 'none
+    (pkaappi-run-bc-string
+      "(call-with-values (lambda () (call/cc (lambda (k) (k)))) (lambda () 'none))")))
+
+(test-group "call/cc: exceptions"
+  ;; The handler escapes via k; the with-exception-handler thunk never
+  ;; returns, so the handler stack is restored from the continuation.
+  (test-equal "a handler escapes through the continuation"
+    '(106 exception ("condition: " an-error))
+    (pkaappi-run-bc-string
+      "(define something-went-wrong #f)
+       (define (teh1 v)
+         (call-with-current-continuation
+           (lambda (k)
+             (with-exception-handler
+               (lambda (x)
+                 (set! something-went-wrong (list \"condition: \" x))
+                 (k 'exception))
+               (lambda ()
+                 (+ 1 (if (> v 0) (+ v 100) (raise 'an-error))))))))
+       (list (teh1 5) (teh1 -1) something-went-wrong)"))
+  ;; A declining guard re-raises from inside the guard-catch dispatch loop,
+  ;; so (k 'zero) there crosses loops through the escape protocol.
+  (test-equal "a declining guard's re-raise reaches the handler, which escapes"
+    '(positive negative zero ((reraised 0)))
+    (pkaappi-run-bc-string
+      "(define out '())
+       (define (teh4 v)
+         (call-with-current-continuation
+           (lambda (k)
+             (with-exception-handler
+               (lambda (x)
+                 (set! out (cons (list 'reraised x) out))
+                 (k 'zero))
+               (lambda ()
+                 (guard (condition
+                          ((positive? condition) 'positive)
+                          ((negative? condition) 'negative))
+                   (raise v)))))))
+       (list (teh4 1) (teh4 -1) (teh4 0) out)"))
+  ;; After the inner handler escapes via k, the captured stack is what is
+  ;; installed — a later raise must reach the outer handler, not the inner.
+  (test-equal "the handler stack is the captured one after an escape"
+    '(escaped outer-result)
+    (pkaappi-run-bc-string
+      "(define log '())
+       (with-exception-handler
+         (lambda (e) 'outer-result)
+         (lambda ()
+           (define r (call/cc (lambda (k)
+                       (with-exception-handler
+                         (lambda (e) (k 'escaped))
+                         (lambda () (raise-continuable 'boom))))))
+           (if (eq? r 'escaped)
+               (list r (raise-continuable 'second))
+               r)))"))
+  (test-equal "an invoke from inside a guard body is not swallowed" 'second
+    (pkaappi-run-bc-string
+      "(define k0 #f)
+       (define r (call/cc (lambda (k) (set! k0 k) 'first)))
+       (if (eq? r 'first)
+           (guard (e (#t 'swallowed))
+             (k0 'second))
+           r)")))
+
+(test-group "call/cc: limitations pinned"
+  ;; A continuation belongs to the dispatch-loop episode that captured it.
+  ;; One captured inside a guard body and invoked after that guard returned
+  ;; has no loop left to resume; the failure is a clear error, not
+  ;; corruption.  The error deliberately passes through the program's own
+  ;; guards — the same pass-through that keeps cross-loop invokes from being
+  ;; swallowed — so it surfaces at the caller of the VM, the way a KP3008
+  ;; overflow does in kaappi.
+  (test-equal "invoking a dead episode's continuation reports cleanly"
+    'dispatch-extent-error
+    (guard (e (#t (if (and (error-object? e)
+                           (string=? (error-object-message e)
+                                     "paal-bc: continuation invoked outside its dispatch extent"))
+                      'dispatch-extent-error
+                      (list 'unexpected e))))
+      (pkaappi-run-bc-string
+        "(define k0 #f)
+         (guard (e (#t 'body-done))
+           (call/cc (lambda (k) (set! k0 k)))
+           (raise 'leave))
+         (k0 'too-late)"))))
+
+(test-group "call/cc: the tree-walking path still agrees"
+  (test-equal "normal return" 42
+    (pkaappi-run-string "(+ 1 (call/cc (lambda (k) 41)))"))
+  (test-equal "procedure?" #t
+    (pkaappi-run-string "(call/cc (lambda (k) (procedure? k)))")))
 
 ;; ---------------------------------------------------------------
 ;; Phase 1: guard / raise / error
