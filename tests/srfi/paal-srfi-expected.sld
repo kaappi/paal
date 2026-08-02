@@ -29,9 +29,9 @@
         ("srfi23.scm" pass)
         ("srfi26.scm" pass)
         ("srfi260.scm" pass)
-        ("srfi27-audit.scm" fail) ; exit 1
+        ("srfi27-audit.scm" pass)
         ("srfi27-state.scm" pass)
-        ("srfi35-audit.scm" fail) ; exit 1
+        ("srfi35-audit.scm" pass)
         ("srfi35.scm" pass)
         ("srfi39.scm" pass)
         ("srfi41.scm" fail) ; exit 1

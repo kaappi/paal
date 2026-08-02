@@ -4697,6 +4697,35 @@
        (define v (vector 1 2 3 4 5))
        (vector-reverse! v 1 4)
        (list v (vector-reverse-copy #(1 2 3 4 5) 1 4))"))
+  ;; The bytecode VM routes a primitive's HOST error through %paal-handlers
+  ;; before any guard's clauses see it: paal-call-value's retry guard pops
+  ;; handlers innermost-first while the raising episode is still resumable,
+  ;; so the call/cc + with-exception-handler idiom observes primitive
+  ;; errors (the shelf's srfi 27/35 audits).  The tree-walking pipeline
+  ;; binds the HOST with-exception-handler and had this from the start.
+  (test-equal "a handler with no guard sees a primitive error" #t
+    (pkaappi-run-bc-string
+      "(call-with-current-continuation
+         (lambda (k)
+           (with-exception-handler
+             (lambda (e) (k #t))
+             (lambda () (car 5) #f))))"))
+  (test-equal "the handler fires before an enclosing guard's clauses" #t
+    (pkaappi-run-bc-string
+      "(guard (g (#t 'guarded))
+         (call-with-current-continuation
+           (lambda (k)
+             (with-exception-handler
+               (lambda (e) (k #t))
+               (lambda () (car 5) #f)))))"))
+  (test-equal "the tree-walker agrees on the guarded handler shape" #t
+    (pkaappi-run-string
+      "(guard (g (#t 'guarded))
+         (call-with-current-continuation
+           (lambda (k)
+             (with-exception-handler
+               (lambda (e) (k #t))
+               (lambda () (car 5) #f)))))"))
   ;; (srfi 128): a registered comparator without an ordering leaves its
   ;; records unordered through the default comparator.  kaappi's opaque
   ;; records answer #f; paal's tagged-vector records must not fall into

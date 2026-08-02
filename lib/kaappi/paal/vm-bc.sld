@@ -173,7 +173,47 @@
                                     (let ((nfs (restore-cont! regs cont value)))
                                       (if (null? nfs) value (retry nfs))))
                                   (error "paal-bc: continuation invoked outside its dispatch extent"))))
-                           ((paal-vm-escape? e) (raise (vector-ref e 1))))
+                           ((paal-vm-escape? e) (raise (vector-ref e 1)))
+                           ; A raw HOST condition — a primitive's error — with
+                           ; no paal guard anywhere below this loop.  paal
+                           ; `raise` consults %paal-handlers before escaping,
+                           ; but a primitive raises through the HOST condition
+                           ; system, which only a guard's host-side catch
+                           ; intercepts — so a with-exception-handler with no
+                           ; guard around it never saw primitive errors (the
+                           ; shelf's srfi 27/35 audits are exactly that shape:
+                           ; call/cc + handler, no guard).  Run the top
+                           ; handler here, after the unwind — the timing
+                           ; kaappi's own handlers get.  The tree-walking
+                           ; pipeline needs none of this: it binds the HOST
+                           ; with-exception-handler, so primitive errors run
+                           ; its handlers natively.
+                           ;
+                           ; A handler escapes into a captured continuation as
+                           ; a rule; when the continuation is this episode's,
+                           ; its invoke raises through this very arm, where
+                           ; the retry loop is still in scope — the outer
+                           ; guard cannot re-catch a raise from its own
+                           ; clause, so the resume happens here, mirroring the
+                           ; cont-invoke arm above.  Returning from the
+                           ; handler belongs to the non-continuable raise
+                           ; protocol: the blob-raise secondary error.
+                           ((let ((hs (globals-ref-default globals '%paal-handlers '())))
+                              (and (pair? hs) hs))
+                            => (lambda (hs)
+                                 (globals-define! globals '%paal-handlers (cdr hs))
+                                 (guard (e2 ((and (paal-vm-cont-invoke? e2)
+                                                  (eq? (continuation-loop (vector-ref e2 1))
+                                                       my-id))
+                                             (globals-define! globals '%paal-vm-loop my-id)
+                                             (let ((nfs (restore-cont! regs (vector-ref e2 1)
+                                                                       (vector-ref e2 2))))
+                                               (if (null? nfs)
+                                                   (vector-ref e2 2)
+                                                   (retry nfs)))))
+                                   (paal-call-value regs globals 0 (car hs) (list e))
+                                   (globals-define! globals '%paal-handlers hs)
+                                   (error "paal-bc: handler returned from non-continuable raise")))))
                    (run! regs globals fs)))))
           (globals-define! globals '%paal-vm-loop outer-id)
           result)))
@@ -214,9 +254,97 @@
            ; captured inside it must not be replayable once this run! has
            ; returned.  On an escape the restore below is skipped — every
            ; catcher reinstalls the identity current at its own entry.
-           (let ((outer-id (globals-ref-default globals '%paal-vm-loop #f)))
-             (globals-define! globals '%paal-vm-loop (list 'loop))
-             (let ((result (run! regs globals (list (make-frame callee base base)))))
+           ;
+           ; The retry guard mirrors paal-run-bc's, and it exists for the
+           ; same two jobs *at nested depth*.  First, a continuation this
+           ; episode owns can now be resumed from a catcher's arm — without
+           ; the retry, a guard body's episode became unresumable the moment
+           ; a HOST catch unwound its run!, though its frames lived on in
+           ; the capture.  Second, and the reason the first matters: a raw
+           ; primitive error must visit any with-exception-handler entries
+           ; the episode pushed *before* some enclosing guard's clauses see
+           ; it — paal `raise` consults %paal-handlers, but a primitive
+           ; raises through the HOST condition system, which no paal-side
+           ; stack ever sees.  This is the innermost host frame that can
+           ; still resume the episode, so the routing lives here: pop and
+           ; call handlers innermost-first, and when one escapes into a
+           ; continuation of this episode — the (call/cc k) +
+           ; with-exception-handler idiom — the inner arm resumes it on the
+           ; retry loop.  A handler that returns violates the
+           ; non-continuable protocol and its secondary error goes outward
+           ; to the nearest guard, blob-raise style; a handler that raises
+           ; a paal value has walked the remaining stack itself, so its
+           ; vm-escape passes outward untouched.  With no handler pending —
+           ; the stack empty or a guard's escape on top — the condition
+           ; re-raises outward exactly as before, so guard-only programs
+           ; never enter the arm.
+           (let ((outer-id (globals-ref-default globals '%paal-vm-loop #f))
+                 (my-id    (list 'loop)))
+             (globals-define! globals '%paal-vm-loop my-id)
+             (let ((result
+                    (let retry ((fs (list (make-frame callee base base))))
+                      (guard (e ((and (paal-vm-cont-invoke? e)
+                                      (eq? (continuation-loop (vector-ref e 1))
+                                           my-id))
+                                 (globals-define! globals '%paal-vm-loop my-id)
+                                 (let ((nfs (restore-cont! regs (vector-ref e 1)
+                                                           (vector-ref e 2))))
+                                   (if (null? nfs) (vector-ref e 2) (retry nfs))))
+                                ((paal-vm-cont-invoke? e) (raise e))
+                                ((paal-vm-escape? e) (raise e))
+                                ((let ((hs (globals-ref-default
+                                             globals '%paal-handlers '()))
+                                       (esc (globals-ref-default
+                                              globals '%paal-vm-raise #f)))
+                                   (and (pair? hs)
+                                        (not (eq? (car hs) esc))
+                                        hs))
+                                 =>
+                                 (lambda (hs0)
+                                   (let ((esc (globals-ref-default
+                                                globals '%paal-vm-raise #f)))
+                                     (let route ((condition e) (hs hs0))
+                                       (if (or (null? hs)
+                                               (eq? (car hs) esc))
+                                           (raise condition)
+                                           (begin
+                                             (globals-define!
+                                               globals '%paal-handlers (cdr hs))
+                                             (let ((outcome
+                                                    (guard (e2 ((and (paal-vm-cont-invoke? e2)
+                                                                     (eq? (continuation-loop
+                                                                            (vector-ref e2 1))
+                                                                          my-id))
+                                                                (globals-define!
+                                                                  globals '%paal-vm-loop my-id)
+                                                                (let ((nfs (restore-cont!
+                                                                             regs
+                                                                             (vector-ref e2 1)
+                                                                             (vector-ref e2 2))))
+                                                                  (vector 'resumed
+                                                                          (if (null? nfs)
+                                                                              (vector-ref e2 2)
+                                                                              (retry nfs)))))
+                                                               ((paal-vm-cont-invoke? e2)
+                                                                (raise e2))
+                                                               ((paal-vm-escape? e2)
+                                                                (raise e2))
+                                                               (#t (vector 'route e2)))
+                                                      (paal-call-value
+                                                        regs globals base
+                                                        (car hs) (list condition))
+                                                      'returned)))
+                                               (cond
+                                                 ((eq? outcome 'returned)
+                                                  (raise (handler-returned-condition)))
+                                                 ((eq? (vector-ref outcome 0) 'resumed)
+                                                  (vector-ref outcome 1))
+                                                 (else
+                                                  (route (vector-ref outcome 1)
+                                                         (globals-ref-default
+                                                           globals
+                                                           '%paal-handlers '()))))))))))))
+                        (run! regs globals fs)))))
                (globals-define! globals '%paal-vm-loop outer-id)
                result))))
 
@@ -444,6 +572,13 @@
                              ; The escape skipped paal-call-value's restore, so
                              ; the body loop's identity is still current; the
                              ; clauses belong to this guard's own loop.
+                             ;
+                             ; A *raw* HOST condition arriving here has already
+                             ; visited any with-exception-handler entries the
+                             ; body pushed: paal-call-value's own retry guard
+                             ; routes primitive errors through them while the
+                             ; body's episode is still resumable.  Whatever
+                             ; reaches this catch belongs to the clauses.
                              (globals-define! globals '%paal-vm-loop entry-id)
                              (let ((condition (paal-vm-condition e)))
                                (if catch
@@ -455,6 +590,12 @@
           (when saved
             (globals-define! globals '%paal-handlers saved))
           result)))
+
+    ;; A HOST condition value to stand for the blob raise's secondary error,
+    ;; built by catching our own raise so no host constructor is assumed.
+    (define (handler-returned-condition)
+      (guard (e (#t e))
+        (error "handler returned from non-continuable raise")))
 
     ;; Fallback for a globals table with no %paal-guard-catch: no wind stack to
     ;; restore, so the clauses can be applied straight and an unmatched

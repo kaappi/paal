@@ -562,8 +562,26 @@ conditions it exists for; and cleanup on a non-local exit is unnecessary, since 
 escape propagates to some enclosing guard whose `run-guard!` restores the stack to
 what it captured beforehand.
 
+**Primitive errors reach the stack too, from the episode's retry guard.** A paal
+`raise` consults `%paal-handlers`, but a primitive's error rises through the HOST
+condition system, which no paal-side stack ever sees — so a
+`with-exception-handler` with no `guard` around it (the `call/cc` + handler idiom
+the SRFI 27/35 audit suites use for `raises?`) never observed them. Both
+`paal-run-bc` and `paal-call-value` now run their dispatch episode inside a retry
+guard that, on a raw HOST condition with a non-escape handler on the stack, pops
+and calls handlers innermost-first — after the unwind, which is the timing
+kaappi's own handlers get. `paal-call-value` is the layer that matters: a guard
+body runs as its nested episode, and this is the innermost host frame that can
+still resume it, so a handler escaping into a continuation of that episode — the
+`raises?` shape — resumes on the retry loop. A handler that returns violates the
+non-continuable protocol and its `"handler returned"` secondary error goes outward
+to the nearest guard; one that raises a paal value has walked the remaining stack
+itself. A condition that exhausts the pending handlers (or finds a guard's escape
+on top) re-raises outward, so guard-only programs never enter the arm, and
+whatever reaches `run-guard!`'s catch belongs to the clauses.
+
 The tree-walking VM keeps HOST `with-exception-handler` and inherits the host's own
-handler stack. It only needs the trampoline forced on both the thunk and the handler
+handler stack — which is why it needed none of the routing above. It only needs the trampoline forced on both the thunk and the handler
 result: an unforced `(raise-continuable x)` in tail position would otherwise happen
 after the handler had been uninstalled, and an unforced handler result would become a
 thunk rather than the value of the raise.
