@@ -940,3 +940,45 @@ posix scheme`. The middle four are inherited from kaappi's runtime, which advert
 exactly those; `full-unicode` and `ratios` are *not* in kaappi's list, so paal does not
 claim them either. `scheme` is a paal extension rather than an R7RS feature identifier,
 kept because paal's own `cond-expand`s use it.
+
+## CLI tooling
+
+The query and diagnostic subcommands live outside the pipeline: each is either a thin
+CLI rendering over an exported procedure, or a support library no pipeline stage
+imports. None of them is needed to compile or run code.
+
+**`features [--json]`** renders `paal-features` — an alist of the version, the
+feature-identifier list, the embedded-library names (from `paal-embedded-names`, so the
+report derives from the same table the expander resolves against), and the pipeline
+cache state. The facts are data apart from the two renderings (`paal-features-text`,
+`paal-features-json`), so the suite asserts on the report without parsing either.
+
+**`cache status|clear [file...]`** manages paal's two caches. With files, the subject
+is the `<file>.<hash>.pbc` entries `--cache` writes beside sources: `pkaappi-cache-entries`
+lists them with the current one marked — the hash is in the name, so a source edit
+strands the old entry — and `pkaappi-cache-clear!` removes them. A *run* can never do
+this (it cannot tell its own leavings from a user's `.pbc`); an explicit subcommand can,
+by the naming scheme. Directory listing is the one operation R7RS lacks; the host's
+`(srfi 170)` supplies it, which is safe because `(kaappi paal)` is HOST-side API and
+never compiled by paal itself. With no files the subject is the pipeline cache under
+`cache/` (`paal-pipeline-cache-status`).
+
+**`dis <file>`** and the runtime `(disassemble proc)` render bytecode through
+`(kaappi paal disassembler)`. Instructions are tagged lists already, so each line is the
+instruction written verbatim, numbered; an embedded `(closure dst fn specs)` function
+becomes a label (`fn1`, `fn2`, … breadth-first) and is listed under that label after its
+parent. The runtime binding prints to the HOST error port, as kaappi's prints to stderr:
+the listing is a diagnostic, so a paal-level port rebinding deliberately does not
+capture it.
+
+**`check` warnings** come from `(kaappi paal lint)`, run by `pkaappi-check-file` after a
+successful compile. Two lints over the emitted bytecode: an *unknown top-level
+variable* (a `get-global` name the program neither defines anywhere in its function
+tree nor the runtime binds — the driver hands the lint the names of a freshly built,
+memoized globals table, the runtime's real surface) and an *arity mismatch* on a direct
+call to a program-defined procedure. Both are warnings and never rejections — kaappi's
+invariant. The arity lint trusts only what it can see whole: the callee was loaded by
+`get-global` in straight-line code (register tracking drops at every jump and call),
+and the name was defined exactly once, from a `closure` instruction, and never `set!`.
+Warnings are data — `(unknown-variable NAME)`, `(arity NAME EXPECTED VARIADIC? GOT)` —
+rendered by the check driver.

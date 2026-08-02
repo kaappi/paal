@@ -2979,6 +2979,67 @@
     (pkaappi-check-files '())))
 
 ;; ---------------------------------------------------------------
+;; check lints
+;; ---------------------------------------------------------------
+;;
+;; The lint is parametric over what the runtime binds — a predicate — so the
+;; unit tests hand it a tiny known-list and need no globals table; the
+;; driver-level tests at the end go through pkaappi-check-file, which builds
+;; the real one.  Warnings are data: (unknown-variable NAME) and
+;; (arity NAME EXPECTED VARIADIC? GOT).
+
+(define (%lint src known-list)
+  (paal-lint-program (pkaappi-compile src)
+                     (lambda (n) (and (memq n known-list) #t))))
+
+(test-group "check lints"
+  (test-equal "an unknown top-level reference is warned"
+    '((unknown-variable nosuch))
+    (%lint "(nosuch 1)" '()))
+  (test-equal "a runtime-known name is not"
+    '() (%lint "(car (list 1))" '(car list)))
+  (test-equal "a reference inside a lambda is seen"
+    '((unknown-variable mystery))
+    (%lint "(define (f) (mystery)) (f)" '()))
+  (test-equal "imports do not blind the lint"
+    '((unknown-variable undefined-thing))
+    (%lint "(import (scheme base)) (undefined-thing 1)" '(+)))
+  (test-equal "forward references within the program are fine"
+    '() (%lint "(define (g2) (h2)) (define (h2) (g2)) (g2)" '()))
+  (test-equal "a direct call with the wrong argument count is warned"
+    '((arity f 1 #f 2))
+    (%lint "(define (f x) x) (f 1 2)" '()))
+  (test-equal "a variadic call below its floor is warned"
+    '((arity v 1 #t 0))
+    (%lint "(define (v a . r) a) (v)" '()))
+  (test-equal "a variadic call at its floor or above is not"
+    '() (%lint "(define (v a . r) a) (v 1) (v 1 2 3)" '()))
+  (test-equal "a set! procedure is left alone"
+    '() (%lint "(define (f x) x) (set! f car) (f 1 2)" '(car)))
+  (test-equal "a redefined procedure is left alone"
+    '() (%lint "(define (f x) x) (define (f x y) x) (f 1)" '()))
+  (test-equal "a conditionally bound procedure is left alone"
+    '()
+    (%lint "(define f (if #t (lambda (x) x) (lambda (x y) x))) (f 1 2)" '()))
+  (test-equal "a mismatch inside a conditional branch is still seen"
+    '((arity f 1 #f 3))
+    (%lint "(define (f x) x) (define (g p) (if p (f 1) (f 1 2 3)))"
+           '()))
+  ;; Through the driver: warnings print on the error port and never reject.
+  (let ((r (let ((p "paal-lint-drv-tmp.scm"))
+             (write-temp! p "(define (f x) x) (f 1 2) (mystery)")
+             (let* ((err (open-output-string))
+                    (ok  (parameterize ((current-error-port err))
+                           (pkaappi-check-file p))))
+               (delete-file p)
+               (cons ok (get-output-string err))))))
+    (test-assert "a warned file still checks true" (car r))
+    (test-assert "the arity warning is rendered"
+      (%has-substring? (cdr r) "`f` called with 2 arguments but takes 1"))
+    (test-assert "the unknown-variable warning is rendered"
+      (%has-substring? (cdr r) "unknown top-level variable `mystery`"))))
+
+;; ---------------------------------------------------------------
 ;; Module system
 ;; ---------------------------------------------------------------
 ;;

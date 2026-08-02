@@ -40,7 +40,8 @@ paal also binds), `--cache`, `--profile`, `--coverage`.
 **Exceptions:** `compile` outputs `.pbc` text bytecode (not a native binary);
 `cache` manages paal's two caches (the `<file>.<hash>.pbc` entries `--cache`
 writes beside sources — stale ones included — and the pipeline cache under
-`cache/`), not kaappi's `~/.kaappi/cache`.
+`cache/`), not kaappi's `~/.kaappi/cache`; `check` also warns about unknown
+top-level variables and direct-call arity mismatches (warnings never reject).
 
 In a `make binary` build, kaappi's own CLI claims the first argument whenever it
 recognizes it — `check`, `fmt`, `compile`, `ast`, `expand`, `ir`, `features`,

@@ -22,7 +22,8 @@
           (kaappi paal vm-bc)
           (kaappi paal serializer)
           (kaappi paal formatter)
-          (kaappi paal disassembler))
+          (kaappi paal disassembler)
+          (kaappi paal lint))
   (export
     ;; Reader
     paal-read paal-read-string paal-read-all paal-read-file
@@ -62,6 +63,8 @@
     paal-format-check-file
     ;; Disassembler
     paal-disassemble
+    ;; Lints (check warnings)
+    paal-lint-program
     ;; Profiling
     paal-profile-start! paal-profile-report
     paal-coverage-start! paal-coverage-report
@@ -1305,6 +1308,11 @@
     ;; Returns #t if the file compiled, #f otherwise, printing one diagnostic
     ;; line per failure.  A fresh macro table per file, so a define-syntax in
     ;; one checked file cannot silently satisfy a reference in the next.
+    ;;
+    ;; A file that compiles is then linted (see lint.sld): unknown top-level
+    ;; variables and direct-call arity mismatches print as warnings on the
+    ;; error port.  Warnings never affect the answer — kaappi's invariant: a
+    ;; valid program is never rejected.
     (define (pkaappi-check-file path)
       (guard (e (#t (display "error: " (current-error-port))
                     (display path (current-error-port))
@@ -1312,9 +1320,50 @@
                     (%display-condition e (current-error-port))
                     (newline (current-error-port))
                     #f))
-        (paal-macros-reset!)
-        (pkaappi-compile-forms (paal-read-file path))
-        #t))
+        (let ((known (%paal-known-names)))
+          (paal-macros-reset!)
+          (let ((fn (pkaappi-compile-forms (paal-read-file path))))
+            (for-each
+              (lambda (w) (%paal-print-warning path w))
+              (paal-lint-program fn (lambda (n) (and (memq n known) #t))))
+            #t))))
+
+    ;; The names of a fresh globals table — the bytecode runtime's real
+    ;; surface, blob definitions included — memoized because check runs per
+    ;; file and the table is five blob compiles deep.  Read before the
+    ;; per-file macro reset: building the table resets and repopulates the
+    ;; macro table itself.
+    (define %paal-known-names-cache #f)
+    (define (%paal-known-names)
+      (unless %paal-known-names-cache
+        (set! %paal-known-names-cache
+          (map car (vector-ref (pkaappi-make-globals) 0))))
+      %paal-known-names-cache)
+
+    (define (%paal-print-warning path w)
+      (let ((err (current-error-port)))
+        (display "warning: " err)
+        (display path err)
+        (display ": " err)
+        (cond
+          ((eq? (car w) 'unknown-variable)
+           (display "unknown top-level variable `" err)
+           (display (cadr w) err)
+           (display "`" err))
+          ((eq? (car w) 'arity)
+           (let ((name     (list-ref w 1))
+                 (expected (list-ref w 2))
+                 (variadic (list-ref w 3))
+                 (got      (list-ref w 4)))
+             (display "`" err)
+             (display name err)
+             (display "` called with " err)
+             (display got err)
+             (display (if (= got 1) " argument" " arguments") err)
+             (display (if variadic " but takes at least " " but takes ") err)
+             (display expected err)))
+          (else (write w err)))
+        (newline err)))
 
     ;; Conditions reaching here are HOST error objects most of the time, but a
     ;; paal `raise` can deliver any value at all, so fall back to writing it.
