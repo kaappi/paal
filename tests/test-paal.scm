@@ -1,5 +1,16 @@
 (import (scheme base) (scheme file) (kaappi test) (kaappi paal))
 
+;; Substring search for asserting on rendered reports and transcripts;
+;; (scheme base) has no string-contains and pulling SRFI 13 in for one probe
+;; is not worth it.  Up here because top-level defines run in order, and
+;; groups all through the file lean on it.
+(define (%has-substring? hay needle)
+  (let ((hl (string-length hay)) (nl (string-length needle)))
+    (let loop ((i 0))
+      (cond ((> (+ i nl) hl) #f)
+            ((string=? (substring hay i (+ i nl)) needle) #t)
+            (else (loop (+ i 1)))))))
+
 (test-group "literals"
   (test-equal "integer"    42       (pkaappi-run-string "42"))
   (test-equal "negative"   -7       (pkaappi-run-string "-7"))
@@ -4764,15 +4775,6 @@
                  (pkaappi-debug-file p))))
         (delete-file p)
         r))))
-
-;; Substring search for asserting on rendered reports; (scheme base) has no
-;; string-contains and pulling SRFI 13 in for one probe is not worth it.
-(define (%has-substring? hay needle)
-  (let ((hl (string-length hay)) (nl (string-length needle)))
-    (let loop ((i 0))
-      (cond ((> (+ i nl) hl) #f)
-            ((string=? (substring hay i (+ i nl)) needle) #t)
-            (else (loop (+ i 1)))))))
 
 (test-group "capability report"
   (let ((report (paal-features)))
