@@ -4816,7 +4816,47 @@
       "(import (scheme base) (srfi 7))
        (define answer 'no)
        (program (requires srfi-1) (code (set! answer 'yes)))
-       answer")))
+       answer"))
+  ;; Template hygiene reaches into a binding's *init* expression, and
+  ;; recognizes case-lambda's clause formals — (srfi 232) writes
+  ;; (letrec ((f (case-lambda … (args (more-args f args))))) f), whose
+  ;; `args` used to be classified free, become %gref%args and be unbound.
+  (test-equal "a binder inside a binding's init is still template-bound" 7
+    (pkaappi-run-bc-string
+      "(import (scheme base))
+       (define-syntax two-ways
+         (syntax-rules ()
+           ((_ e) (letrec ((f (case-lambda
+                                ((a) a)
+                                (args (apply + args)))))
+                    (f 3 e)))))
+       (define args 'a-use-site-binding-that-must-not-be-captured)
+       (two-ways 4)"))
+  ;; A definition keyword may be a macro too: (srfi 219)'s `define`
+  ;; rewrites curried defines, in a body as well as at top level, while
+  ;; its own base case still reaches the core define.
+  (test-equal "an imported define macro rewrites, in body and top level" '(3 3)
+    (pkaappi-run-bc-string
+      "(import (scheme base) (srfi 219))
+       (define ((outer a) b) (+ a b))
+       (define (inner)
+         (define ((f a) b) (+ a b))
+         ((f 1) 2))
+       (list ((outer 1) 2) (inner))"))
+  ;; member and assoc take a comparison in their third argument (R7RS
+  ;; 6.4), which the host cannot call on the bytecode pipeline — the same
+  ;; crossing as call-with-output-file.  (srfi 221) passes one.
+  (test-equal "member and assoc take a paal comparison" '((2 3) (2 . b))
+    (pkaappi-run-bc-string
+      "(list (member 2.0 '(1 2 3) (lambda (a b) (= a b)))
+             (assoc 2.0 '((1 . a) (2 . b)) (lambda (x y) (= x y))))"))
+  (test-equal "the tree-walker agrees" '((2 3) (2 . b))
+    (pkaappi-run-string
+      "(list (member 2.0 '(1 2 3) (lambda (a b) (= a b)))
+             (assoc 2.0 '((1 . a) (2 . b)) (lambda (x y) (= x y))))"))
+  (test-equal "the two-argument forms are unchanged" '((2 3) (2 . b))
+    (pkaappi-run-bc-string
+      "(list (member 2 '(1 2 3)) (assoc 2 '((1 . a) (2 . b))))")))
 
 ;; ---------------------------------------------------------------
 ;; Bytecode cache for user programs

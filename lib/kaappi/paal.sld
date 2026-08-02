@@ -1064,7 +1064,30 @@
                (let ((port (open-output-file path)))
                  (let ((r (proc port)))
                    (close-output-port port)
-                   r)))")
+                   r)))
+             ; member and assoc take a comparison in their third argument
+             ; (R7RS 6.4), and that one is a paal closure the host cannot
+             ; call — (srfi 221) passes one.  Only the three-argument form
+             ; walks here; the common two-argument call still goes straight
+             ; to the host's.
+             (define %paal-raw-member member)
+             (define %paal-raw-assoc assoc)
+             (define (member x lst . rest)
+               (if (null? rest)
+                   (%paal-raw-member x lst)
+                   (let ((same? (car rest)))
+                     (let loop ((l lst))
+                       (cond ((null? l) #f)
+                             ((same? x (car l)) l)
+                             (else (loop (cdr l))))))))
+             (define (assoc x alist . rest)
+               (if (null? rest)
+                   (%paal-raw-assoc x alist)
+                   (let ((same? (car rest)))
+                     (let loop ((l alist))
+                       (cond ((null? l) #f)
+                             ((same? x (car (car l))) (car l))
+                             (else (loop (cdr l))))))))")
           g)
         g))
 

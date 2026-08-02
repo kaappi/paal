@@ -12,19 +12,23 @@ scope** below, so no recorded decision was lost in the swap.
   distinct fixes; SRFI 67, 70, 101, 135, 140, 148 and 171 all import and
   run. Unit suite 904 → 935.
 - **Phase 1 — in progress.** The SRFI shelf harness (`make test-srfi`,
-  `tests/srfi/`) is live and ratcheting over 83 vendored kaappi test files.
-  Batch 1's burn-down is **complete**, and vendor tranches 2a and 2b have
-  landed (47 more libraries: the seven the Phase 0 fixes unlocked, then the
-  no-dependency layer). Fixes each tranche flushed out: SRFI 69's
+  `tests/srfi/`) is live and ratcheting over 139 vendored kaappi test files
+  (109 pass, 30 fail, 4 skipped). Batch 1's burn-down is **complete**, and
+  vendor tranches 2a–2c have landed (100 more libraries: the seven the
+  Phase 0 fixes unlocked, then the whole dependency-free layer). Fixes each
+  tranche flushed out: SRFI 69's
   kaappi-compatible failure default, the full SRFI 13 completion, SRFI
   1/133 n-ary and range arms, the SRFI 128 record-ordering adaptation,
   primitive-error routing through `%paal-handlers` (architecture.md
   § Exception handlers), and then eight more — imported macros named for
   core keywords winning at the use site while machinery keeps its own
   (architecture.md § Stage 2), SRFI 17 generalized `set!`, bounded-space
-  `delay-force`, and paal-side `call-with-{input,output}-file`. Next:
-  the two dependent layers (~15 libraries, incl. `(srfi 146 hash)` and
-  the 166 family) and `(kaappi parallel)`. Exact counts live in
+  `delay-force`, paal-side `call-with-{input,output}-file` and the
+  three-argument `member`/`assoc`, template hygiene reaching into a
+  binding's init expression, and a macro named for a definition keyword
+  getting first refusal in a body. Next: the two dependent layers (~15
+  libraries, incl. `(srfi 146 hash)` and the 166 family) and
+  `(kaappi parallel)`. Exact counts live in
   `tests/srfi/paal-srfi-expected.sld`, which is where a number stays true.
 - **Phases 2–6 — pending.** (Phase 3's REPL `,help` sectioning landed
   early, outside the phase; the rest of item 8 is planned below.)

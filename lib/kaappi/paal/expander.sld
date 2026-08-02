@@ -652,9 +652,21 @@
                ;; spelling back to the keyword the macro shadows.  The
                ;; %gref% mark says "the top-level macro of this name",
                ;; which dispatch resolves ahead of any use-site binding.
+               ;;
+               ;; The definition keywords are the exception, and kaappi
+               ;; draws the line in the same place: they are *structural*
+               ;; here — body and top-level scanning recognize them before
+               ;; any macro — so a library that redefines one writes its
+               ;; base case in terms of the real thing.  SRFI 219's `define`
+               ;; bottoms out at `(define name expr)`, which must reach the
+               ;; core define or the expansion never terminates.
                (macro-grefs
                 (filter-map
-                  (lambda (m) (and (assq m exports) (cons m (gref-symbol m))))
+                  (lambda (m)
+                    (and (assq m exports)
+                         (not (memq m '(define define-values define-syntax
+                                        define-record-type begin)))
+                         (cons m (gref-symbol m))))
                   own-macros))
                (all-renames (append renames macro-renames macro-grefs)))
           ;; Paired with their specs, since the table entries are about to be
@@ -1274,10 +1286,15 @@
           (cond ((symbol? f) (note! f))
                 ((pair? f)   (note-formals! (car f)) (note-formals! (cdr f)))
                 (else        #f)))
-        ;; ((v e) ...) for let/letrec/do, (((a b) e) ...) for let-values
+        ;; ((v e) ...) for let/letrec/do, (((a b) e) ...) for let-values.
+        ;; The init expressions are walked too — a binding form nested in
+        ;; one binds as much as it would anywhere else, and skipping them
+        ;; left (letrec ((f (case-lambda … (args …)))) f) with `args` free.
         (define (note-bindings! bs)
           (when (pair? bs)
-            (when (pair? (car bs)) (note-formals! (car (car bs))))
+            (when (pair? (car bs))
+              (note-formals! (car (car bs)))
+              (walk-list (cdr (car bs))))
             (note-bindings! (cdr bs))))
         (define (walk-list l)
           (when (pair? l) (walk (car l)) (walk-list (cdr l))))
@@ -1326,6 +1343,17 @@
                 ((and (eq? head 'define-syntax) (pair? (cdr t)))
                  (note! (cadr t))
                  (walk-list (cddr t)))
+                ;; Every clause of a case-lambda binds its own formals, the
+                ;; rest-only clause `(args body …)` included — (srfi 232)
+                ;; writes exactly that, and without this arm `args` was
+                ;; classified free, became %gref%args and was unbound at
+                ;; run time.
+                ((eq? head 'case-lambda)
+                 (for-each (lambda (clause)
+                             (when (pair? clause)
+                               (note-formals! (car clause))
+                               (walk-list (cdr clause))))
+                           (cdr t)))
                 (else (walk-list t)))))
           (when (vector? t)
             (walk-list (vector->list t))))
@@ -2919,6 +2947,20 @@
            (if (null? defs)
                (error "paal-expand: empty lambda body")
                (error "paal-expand: lambda body has only definitions")))
+          ;; A macro named for a definition keyword gets first refusal on
+          ;; the form, since the structural arms below would otherwise
+          ;; claim it: (srfi 219)'s `define` rewrites the curried
+          ;; `(define ((f a) b) …)` that `define` itself cannot read.  The
+          ;; *unstripped* head is what decides, so machinery output —
+          ;; always %core%-marked — skips this arm and reaches its
+          ;; structural one, which is what stops SRFI 219's base case from
+          ;; expanding forever.
+          ((and (pair? (car rest))
+                (memq (car (car rest))
+                      '(define define-values define-syntax define-record-type))
+                (body-macro-transformer (car (car rest)) env))
+           => (lambda (t)
+                (loop (cons (t (car rest) env) (cdr rest)) defs env)))
           ;; define-values in body: wrap remaining forms in let-values
           ((eq? (body-head (car rest)) 'define-values)
            (let* ((dvform    (car rest))

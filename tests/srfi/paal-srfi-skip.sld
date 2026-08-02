@@ -11,4 +11,6 @@
         ("srfi158-audit.scm"
          "needs (srfi 160 u8), which arrives with the Phase 2 host-native bindings — unskip then")
         ("srfi14.scm"
-         "passes (172 assertions) but costs ~4 minutes through the in-process pipeline: full-Unicode charset algebra.  Runtime, not correctness; revisit after the bytecode-encoding perf work")))))
+         "passes (172 assertions) but costs ~4 minutes through the in-process pipeline: full-Unicode charset algebra.  Runtime, not correctness; revisit after the bytecode-encoding perf work")
+        ("srfi263.scm"
+         "passes but costs ~5.7 minutes through the in-process pipeline: a prototype object system, every message send a table walk.  Runtime, not correctness; revisit with srfi14 after the bytecode-encoding perf work")))))
