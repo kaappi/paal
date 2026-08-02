@@ -980,6 +980,21 @@ Line numbers come from scanning the source for each procedure's define, with the
 1-based position as fallback when the scan misses, exactly as kaappi's. The writer
 (`paal-coverage-xml`) is a pure string function.
 
+**The REPL** is one driver (`%run-repl-driver`) for every route; what differs per route
+— how a datum is expanded, compiled and run — is a hook alist. `%repl-host-hooks`
+closes over one HOST globals table; `%repl-loaded-hooks` crosses into the loaded
+pipeline as data, injecting each datum as a global and running fixed program strings
+that read it out, so no string is ever built from user text. Input is read as datums
+straight off the port (a form may span lines; there is no continuation prompt — the
+reader's state is not observable, and a wrong guess is worse than none). `_` holds the
+last value. `,cmd` — which the reader hands over as `(unquote cmd)` — is the command
+surface: `,help ,quit ,env ,history`, and taking the next datum as argument,
+`,time ,expand ,ir ,dis`; the diagnostics run through the session's own hooks, so
+under self-hosting `,expand` shows the loaded expander's output, prompt-defined macros
+included. History lives in memory for `,history` and mirrors to a file when the CLI
+passes one (`~/.paal_history`; R7RS has no append-open, so the file is rewritten per
+entry, capped at 500). Echo abbreviates procedures the way the debugger prints them.
+
 **`check` warnings** come from `(kaappi paal lint)`, run by `pkaappi-check-file` after a
 successful compile. Two lints over the emitted bytecode: an *unknown top-level
 variable* (a `get-global` name the program neither defines anywhere in its function

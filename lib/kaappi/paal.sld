@@ -7,6 +7,7 @@
   (import (scheme base)
           (scheme file)
           (scheme write)
+          (scheme time)
           (scheme process-context)
           (srfi 170)
           (kaappi ffi)
@@ -45,6 +46,7 @@
     pkaappi-make-globals pkaappi-load-file pkaappi-run-string-in
     ;; Self-hosted run, compile, and REPL
     pkaappi-self-run-file pkaappi-self-compile-to-file pkaappi-self-repl
+    pkaappi-host-repl
     ;; Command-line injection for user programs
     pkaappi-set-command-line!
     ;; Serializer
@@ -1722,77 +1724,32 @@
             (string-append "(paal-lib-path-add! \"" dir "\")")))
         (paal-lib-paths-list)))
 
-    ; --- Self-hosted REPL ---
+    ; --- REPL ---
+    ;
+    ; One driver for every route.  The half that differs — how a datum is
+    ; expanded, compiled and run — is a hook alist; everything the user
+    ; touches (prompt, echo rules, `_`, comma commands, history) lives here
+    ; once.  The routes are the same as before: cached pipeline, .sld
+    ; pipeline, and a HOST fallback for a binary that has neither.
+    ;
+    ; Input is read as datums straight off the port, so a form may span
+    ; lines — the reader keeps reading until it is complete.  There is no
+    ; continuation prompt: the reader's internal state is not observable
+    ; from here, and a wrong guess is worse than none.
+    ;
+    ; A `,cmd` input arrives from the reader as (unquote cmd), and that is
+    ; the comma-command surface: ,help ,quit ,env ,history and — taking the
+    ; *next datum* as their argument — ,time ,expand ,ir ,dis.  The
+    ; diagnostics run through the session's own hooks, so under
+    ; self-hosting ,expand shows the loaded expander's output, macros
+    ; defined at the prompt included.  `_` holds the last value.
 
-    ; Internal: run a REPL loop inside an already-loaded globals g.
-    ; The loop persists user globals across expressions so define accumulates.
-    ; Internal: run a REPL loop with pipeline already loaded in g.
-    ; The loop runs in HOST Scheme so we can use HOST guard for error handling.
-    ; Each iteration reads one datum via the loaded paal-read, stashes it in g
-    ; as %repl-last-input, then compiles and runs it through the loaded pipeline.
-    (define (%run-repl g)
-      ; Create persistent user globals inside g — defines accumulate here.
-      (pkaappi-run-string-in g "(define %repl-user-globals (pkaappi-make-globals))")
-      (let loop ()
-        (display "paal> ")
-        (flush-output-port (current-output-port))
-        ; Read one datum using the loaded reader; store it in g.
-        (pkaappi-run-string-in g
-          "(define %repl-last-input (paal-read (current-input-port)))")
-        (let ((is-eof (pkaappi-run-string-in g "(eof-object? %repl-last-input)")))
-          (unless is-eof
-            (guard (exn (#t
-                         (display "error: ")
-                         (display (error-object-message exn))
-                         (for-each (lambda (x) (display " ") (write x))
-                                   (error-object-irritants exn))
-                         (newline)))
-              (let* ((result
-                      (pkaappi-run-string-in g
-                        "(paal-run-bc
-                           (paal-emit-program
-                             (paal-analyze-all
-                               (paal-expand-all (list %repl-last-input))))
-                           %repl-user-globals)"))
-                     (is-def
-                      (pkaappi-run-string-in g
-                        "(and (pair? %repl-last-input)
-                              (memq (car %repl-last-input)
-                                    '(define define-values define-record-type
-                                      define-library define-syntax import)))")))
-                (unless is-def
-                  (write result)
-                  (newline))))
-            (loop)))))
+    (define (%repl-hook hooks name) (cdr (assq name hooks)))
 
-    ; Load paal's pipeline and start an interactive REPL.
-    ; Priority: cache (.pbc) > .sld sources > error (no pipeline available).
-    (define (pkaappi-self-repl)
-      (cond
-        ((paal-cache-complete?)
-         (let ((g (pkaappi-make-globals)))
-           (pkaappi-load-cached-pipeline g)
-           (%run-repl g)))
-        ((file-exists? "lib/kaappi/paal/ir.sld")
-         (let ((g (pkaappi-make-globals)))
-           (pkaappi-load-source-pipeline g)
-           (%run-repl g)))
-        ;; Neither the cache nor paal's sources are on disk -- which is the
-        ;; normal case for a bundled binary run outside the repo.  The HOST
-        ;; pipeline is compiled into the binary regardless, so a REPL is still
-        ;; possible; it just is not the self-hosted one.  Erroring here left
-        ;; the standalone binary with no REPL at all.
-        (else (%run-host-repl))))
-
-    ;; A REPL over the HOST pipeline.  Definitions accumulate in one globals
-    ;; table, so `(define x 1)` is visible to the next expression, and each
-    ;; input is guarded so a raise ends that expression rather than the
-    ;; session.
-    ;; Whether a REPL should echo the result.  A definition's value in paal is
-    ;; the thing defined, not the unspecified value, so a REPL that suppresses
-    ;; only the unspecified value answers `9` to `(define q 9)`.  Both REPLs
-    ;; decide from the form; this is the same list %run-repl tests inside its
-    ;; own globals, which is where the fallback had drifted from it.
+    ;; Whether a REPL should echo the result.  A definition's value in paal
+    ;; is the thing defined, not the unspecified value, so a REPL that
+    ;; suppresses only the unspecified value answers `9` to `(define q 9)`.
+    ;; Every route shares this one decision now.
     (define (%definition-form? form)
       (and (pair? form)
            (memq (car form)
@@ -1800,21 +1757,238 @@
                    define-syntax import))
            #t))
 
-    (define (%run-host-repl)
-      (let ((g (pkaappi-make-globals)))
-        (let loop ()
-          (display "paal> ")
-          (flush-output-port (current-output-port))
-          (let ((form (paal-read (current-input-port))))
-            (if (eof-object? form)
-                (newline)
-                (begin
-                  (guard (e (#t (display "error: ")
-                                (%display-condition e (current-output-port))
-                                (newline)))
-                    (let ((result (paal-run-bc (pkaappi-compile-forms (list form)) g)))
-                      (unless (or (%definition-form? form)
-                                  (eq? result (if #f #f)))
-                        (write result)
-                        (newline))))
-                  (loop)))))))))
+    ;; History.  In memory (newest first) for ,history; mirrored to `path`
+    ;; when one is given, oldest first, capped so the file cannot grow
+    ;; without bound.  R7RS has no append-mode open, so the file is
+    ;; rewritten per entry — at one line per input that is cheap.  Comma
+    ;; commands are not recorded: they are cheap to retype, and a history
+    ;; of (unquote …) datums helps nobody.
+    (define %repl-history-cap 500)
+
+    (define (%repl-take lst n)
+      (if (or (null? lst) (<= n 0))
+          '()
+          (cons (car lst) (%repl-take (cdr lst) (- n 1)))))
+
+    (define (%repl-load-history path)
+      (if (and path (file-exists? path))
+          (let ((port (open-input-file path)))
+            (let loop ((acc '()))
+              (let ((line (read-line port)))
+                (if (eof-object? line)
+                    (begin (close-input-port port) acc)
+                    (loop (cons line acc))))))
+          '()))
+
+    ;; Failures deliberately vanish: an unwritable history file must not
+    ;; break evaluation.
+    (define (%repl-save-history path entries)
+      (when path
+        (guard (e (#t #f))
+          (let ((port (open-output-file path)))
+            (for-each (lambda (l) (display l port) (newline port))
+                      (reverse (%repl-take entries %repl-history-cap)))
+            (close-output-port port)))))
+
+    (define (%repl-trim s)
+      (let* ((n (string-length s))
+             (a (let loop ((i 0))
+                  (if (and (< i n)
+                           (or (char=? (string-ref s i) #\space)
+                               (char=? (string-ref s i) #\tab)))
+                      (loop (+ i 1))
+                      i)))
+             (b (let loop ((i n))
+                  (if (and (> i a)
+                           (or (char=? (string-ref s (- i 1)) #\space)
+                               (char=? (string-ref s (- i 1)) #\tab)))
+                      (loop (- i 1))
+                      i))))
+        (substring s a b)))
+
+    (define (%repl-comma form)
+      (and (pair? form)
+           (eq? (car form) 'unquote)
+           (pair? (cdr form))
+           (null? (cddr form))
+           (symbol? (cadr form))
+           (cadr form)))
+
+    (define (%repl-help)
+      (display "  ,help            this list\n")
+      (display "  ,quit  ,q        leave the REPL\n")
+      (display "  ,env             names defined in this session\n")
+      (display "  ,history [n]     the last n inputs (default 10)\n")
+      (display "  ,time <form>     evaluate, reporting elapsed seconds\n")
+      (display "  ,expand <form>   print the expansion\n")
+      (display "  ,ir <form>       print the IR nodes\n")
+      (display "  ,dis <form>      print the compiled bytecode\n")
+      (display "  _                the last value\n"))
+
+    ;; Echo through the debugger's abbreviation, so a procedure prints as
+    ;; #<procedure name> rather than pages of closure vectors.
+    (define (%repl-eval-echo hooks form)
+      (guard (e (#t (display "error: ")
+                    (%display-condition e (current-output-port))
+                    (newline)))
+        (let ((result ((%repl-hook hooks 'eval) form)))
+          ((%repl-hook hooks 'set-last!) result)
+          (unless (or (%definition-form? form)
+                      (eq? result (if #f #f)))
+            (%debug-write result)
+            (newline)))))
+
+    (define (%repl-run-command cmd hooks history)
+      (case cmd
+        ((help h) (%repl-help))
+        ((env)
+         (let ((names ((%repl-hook hooks 'env-names))))
+           (if (null? names)
+               (display "nothing defined yet\n")
+               (for-each (lambda (n) (display n) (newline)) names))))
+        ((history)
+         ;; The optional count rides the rest of the line, which no-arg
+         ;; commands consume anyway.
+         (let* ((tail (read-line (current-input-port)))
+                (n    (let ((v (and (string? tail)
+                                    (string->number (%repl-trim tail)))))
+                        (if (and (exact-integer? v) (positive? v)) v 10))))
+           (for-each (lambda (l) (display l) (newline))
+                     (reverse (%repl-take history n)))))
+        ((time)
+         (let ((form (paal-read (current-input-port)))
+               (t0   (current-jiffy)))
+           (%repl-eval-echo hooks form)
+           (display "elapsed: ")
+           (display (/ (inexact (- (current-jiffy) t0))
+                       (inexact (jiffies-per-second))))
+           (display " s")
+           (newline)))
+        ((expand)
+         (for-each (lambda (f) (write f) (newline))
+                   ((%repl-hook hooks 'expand)
+                    (paal-read (current-input-port)))))
+        ((ir)
+         (for-each (lambda (n) (write n) (newline))
+                   ((%repl-hook hooks 'ir)
+                    (paal-read (current-input-port)))))
+        ((dis)
+         (paal-disassemble ((%repl-hook hooks 'compile)
+                            (paal-read (current-input-port)))))
+        (else
+         (display "unknown command: ,")
+         (display cmd)
+         (display "   (,help for the list)")
+         (newline))))
+
+    (define (%run-repl-driver hooks history-path)
+      (let loop ((history (%repl-load-history history-path)))
+        (display "paal> ")
+        (flush-output-port (current-output-port))
+        (let ((form (paal-read (current-input-port))))
+          (cond
+            ((eof-object? form) (newline))
+            ((%repl-comma form)
+             => (lambda (cmd)
+                  (if (memq cmd '(quit q exit))
+                      (if #f #f)
+                      (begin
+                        (guard (e (#t (display "error: ")
+                                      (%display-condition
+                                        e (current-output-port))
+                                      (newline)))
+                          (%repl-run-command cmd hooks history))
+                        (loop history)))))
+            (else
+             (let ((history (cons (paal-write-to-string form) history)))
+               (%repl-save-history history-path history)
+               (%repl-eval-echo hooks form)
+               (loop history)))))))
+
+    ;; Hooks for a session over the loaded (self-hosted) pipeline.  Every
+    ;; crossing is data: the datum is injected as a global in g, and fixed
+    ;; program strings — never strings built from user text — read it out.
+    ;; NB each string is a Scheme string literal: no double quote may
+    ;; appear inside one.
+    (define (%repl-loaded-hooks g)
+      (define (inject! datum) (%globals-put! g '%repl-last-input datum))
+      (define (run str) (pkaappi-run-string-in g str))
+      (run "(define %repl-user-globals (pkaappi-make-globals))")
+      (run "(define %repl-baseline (vector-ref %repl-user-globals 0))")
+      `((eval
+          . ,(lambda (form)
+               (inject! form)
+               (run "(paal-run-bc (paal-emit-program (paal-analyze-all (paal-expand-all (list %repl-last-input)))) %repl-user-globals)")))
+        (expand
+          . ,(lambda (form)
+               (inject! form)
+               (run "(paal-expand-all (list %repl-last-input))")))
+        (ir
+          . ,(lambda (form)
+               (inject! form)
+               (run "(paal-analyze-all (paal-expand-all (list %repl-last-input)))")))
+        (compile
+          . ,(lambda (form)
+               (inject! form)
+               (run "(paal-emit-program (paal-analyze-all (paal-expand-all (list %repl-last-input))))")))
+        (set-last!
+          . ,(lambda (v)
+               (%globals-put! g '%repl-last-value v)
+               (run "(let ((hit (assq (quote _) (vector-ref %repl-user-globals 0)))) (if hit (set-cdr! hit %repl-last-value) (vector-set! %repl-user-globals 0 (cons (cons (quote _) %repl-last-value) (vector-ref %repl-user-globals 0)))))")))
+        ;; The alist is newest-first, so consing on the way down already
+        ;; restores definition order — no reverse.
+        (env-names
+          . ,(lambda ()
+               (run "(let loop ((a (vector-ref %repl-user-globals 0)) (acc (quote ()))) (if (or (null? a) (eq? a %repl-baseline)) acc (loop (cdr a) (if (eq? (car (car a)) (quote _)) acc (cons (car (car a)) acc)))))")))))
+
+    ;; Hooks over the HOST pipeline, for a binary outside any checkout.
+    ;; `_` is an ordinary global here; ,env walks down to the table as it
+    ;; stood at session start, skipping `_` — a session artifact, not a
+    ;; definition.
+    (define (%repl-host-hooks)
+      (let* ((g        (pkaappi-make-globals))
+             (baseline (vector-ref g 0)))
+        `((eval    . ,(lambda (form)
+                        (paal-run-bc (pkaappi-compile-forms (list form)) g)))
+          (expand  . ,(lambda (form) (paal-expand-all (list form))))
+          (ir      . ,(lambda (form)
+                        (paal-analyze-all (paal-expand-all (list form)))))
+          (compile . ,(lambda (form)
+                        (pkaappi-compile-forms (list form))))
+          (set-last! . ,(lambda (v) (%globals-put! g '_ v)))
+          ;; Newest-first alist; consing down restores definition order.
+          (env-names
+            . ,(lambda ()
+                 (let loop ((a (vector-ref g 0)) (acc '()))
+                   (if (or (null? a) (eq? a baseline))
+                       acc
+                       (loop (cdr a)
+                             (if (eq? (car (car a)) '_)
+                                 acc
+                                 (cons (car (car a)) acc))))))))))
+
+    ; Load paal's pipeline and start an interactive REPL.
+    ; Priority: cache (.pbc) > .sld sources > HOST fallback — a bundled
+    ; binary outside the repo has neither on disk, but the HOST pipeline is
+    ; compiled in, so it still gets a REPL; it just is not the self-hosted
+    ; one.  The optional argument is a history file path, or #f for none:
+    ; the CLI passes ~/.paal_history, the suite passes nothing or a scratch
+    ; path, never the real one.
+    (define (pkaappi-self-repl . opts)
+      (let ((history (if (null? opts) #f (car opts))))
+        (cond
+          ((paal-cache-complete?)
+           (let ((g (pkaappi-make-globals)))
+             (pkaappi-load-cached-pipeline g)
+             (%run-repl-driver (%repl-loaded-hooks g) history)))
+          ((file-exists? "lib/kaappi/paal/ir.sld")
+           (let ((g (pkaappi-make-globals)))
+             (pkaappi-load-source-pipeline g)
+             (%run-repl-driver (%repl-loaded-hooks g) history)))
+          (else (pkaappi-host-repl history)))))
+
+    ;; The HOST-pipeline REPL, exported on its own so the driver can be
+    ;; exercised without a pipeline load.
+    (define (pkaappi-host-repl . opts)
+      (%run-repl-driver (%repl-host-hooks)
+                        (if (null? opts) #f (car opts))))))

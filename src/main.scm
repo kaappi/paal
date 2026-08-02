@@ -187,12 +187,19 @@
      (display "usage: paal cache status|clear [file...]\n")
      (exit 2))))
 
+;; Where the REPL keeps its history.  A single file in HOME rather than a
+;; ~/.paal directory: R7RS cannot create a directory, and kaappi's ~/.kaappi
+;; may not exist on a machine that only ever ran paal.  No HOME, no history.
+(define (repl-history-path)
+  (let ((home (get-environment-variable "HOME")))
+    (and home (string-append home "/.paal_history"))))
+
 (define (main raw-args)
   (define args (strip-lib-paths raw-args))
   (cond
     ; No args → REPL (matches kaappi's behavior)
     ((null? args)
-     (pkaappi-self-repl))
+     (pkaappi-self-repl (repl-history-path)))
     ; do <anything...> — re-dispatch, skipping kaappi's CLI
     ;
     ; A -Dbundle binary is kaappi with paal's bytecode inside it, and kaappi
@@ -228,7 +235,7 @@
          (apply run-file (cadr args) (cddr args))))
     ; repl — explicit subcommand
     ((string=? (car args) "repl")
-     (pkaappi-self-repl))
+     (pkaappi-self-repl (repl-history-path)))
     ; check <file>... — compile only, run nothing; exit 1 if anything failed
     ((string=? (car args) "check")
      (if (null? (cdr args))

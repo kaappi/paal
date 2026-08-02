@@ -55,6 +55,11 @@ over, finish the frame and continue; `b <name>` to break on a procedure, `bt` fo
 a backtrace with arguments, `p <name>` to print a top-level binding, `h` for the
 list. See `docs/architecture.md` § The stepping debugger.
 
+The REPL reads whole datums (multi-line forms fine), binds `_` to the last value,
+keeps history in `~/.paal_history`, and answers comma commands: `,help ,quit ,env
+,history [n]` and — taking the next datum as argument — `,time ,expand ,ir ,dis`.
+See `docs/architecture.md` § CLI tooling.
+
 ## Architecture
 
 Each compilation stage is a separate `define-library`. The pipeline **forks at the

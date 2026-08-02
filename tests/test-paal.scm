@@ -787,20 +787,84 @@
 ;; REPL
 ;; ---------------------------------------------------------------
 ;;
-;; A definition's value in paal is the thing defined, not the unspecified value,
-;; so a REPL that suppresses only the unspecified value answers `9` to
-;; `(define q 9)`.  Paal has three REPL routes — cached pipeline, .sld pipeline,
-;; and a HOST fallback for a binary that has neither — and all three now decide
-;; from the *form*.  Which one this exercises depends on whether cache/ is built;
-;; the fallback is only reachable outside a checkout, so it is verified against
-;; the binary rather than here.
+;; One driver serves every route now; what differs per route is a hook
+;; alist.  The driver itself — echo rules, `_`, comma commands, history,
+;; multi-line datums — is exercised over the HOST hooks below, where no
+;; pipeline load is needed.  The self-hosted session at the end goes through
+;; the loaded hooks, whose fixed program strings are REPL-only code no other
+;; test touches.  Which loaded route it takes depends on whether cache/ is
+;; built; the HOST fallback is only *reached* outside a checkout, but it is
+;; the same driver and hooks tested here.
+
+(define (%host-repl-transcript input . opts)
+  (let ((out (open-output-string)))
+    (parameterize ((current-input-port (open-input-string input))
+                   (current-output-port out))
+      (apply pkaappi-host-repl opts))
+    (get-output-string out)))
+
+(test-group "repl driver"
+  (test-equal "echoes expressions, with a newline answered to EOF"
+    "paal> 3\npaal> \n"
+    (%host-repl-transcript "(+ 1 2)\n"))
+  (test-equal "definitions are silent and accumulate"
+    "paal> paal> 11\npaal> \n"
+    (%host-repl-transcript "(define x 11)\nx\n"))
+  (test-equal "a form may span lines; the reader finishes it"
+    "paal> 6\npaal> \n"
+    (%host-repl-transcript "(+ 1\n2\n3)\n"))
+  (test-equal "_ answers the last value"
+    "paal> 6\npaal> 36\npaal> \n"
+    (%host-repl-transcript "(* 2 3)\n(* _ _)\n"))
+  (test-equal "a procedure echoes abbreviated, as the debugger prints it"
+    "paal> #<procedure <anonymous>>\npaal> \n"
+    (%host-repl-transcript "(lambda (x) x)\n"))
+  (test-equal ",q leaves at once; nothing after it is read"
+    "paal> "
+    (%host-repl-transcript ",q\n(+ 1 1)\n"))
+  (test-equal ",env lists the session's names in definition order, sans _"
+    "paal> paal> paal> aa\nbb\npaal> \n"
+    (%host-repl-transcript "(define aa 1)\n(define bb 2)\n,env\n"))
+  (test-equal ",history answers the inputs, oldest first"
+    "paal> 3\npaal> (+ 1 2)\npaal> \n"
+    (%host-repl-transcript "(+ 1 2)\n,history\n"))
+  (test-equal "an unknown comma command names itself"
+    "paal> unknown command: ,wat   (,help for the list)\npaal> \n"
+    (%host-repl-transcript ",wat\n"))
+  (test-assert ",help mentions the argument-taking commands"
+    (%has-substring? (%host-repl-transcript ",help\n,q\n") ",time <form>"))
+  (test-assert ",time reports elapsed seconds after the value"
+    (let ((t (%host-repl-transcript ",time (+ 1 2)\n,q\n")))
+      (and (%has-substring? t "3\n")
+           (%has-substring? t "elapsed: "))))
+  (test-assert ",expand prints the expansion"
+    (%has-substring? (%host-repl-transcript ",expand (when #t 1)\n,q\n")
+                     "(if #t (begin 1))"))
+  (test-assert ",ir prints the IR nodes"
+    (%has-substring? (%host-repl-transcript ",ir 42\n,q\n")
+                     "(const 42)"))
+  (test-assert ",dis prints the compiled bytecode"
+    (%has-substring? (%host-repl-transcript ",dis (lambda (x) x)\n,q\n")
+                     "; fn1: <lambda>  arity 1"))
+  (test-assert "an error ends the form, not the session"
+    (let ((t (%host-repl-transcript "(car 5)\n(+ 1 1)\n")))
+      (and (%has-substring? t "error: ")
+           (%has-substring? t "paal> 2\npaal> \n"))))
+  (test-equal "history persists through the file across sessions"
+    "paal> (+ 40 2)\npaal> "
+    (let ((h "paal-repl-hist-tmp"))
+      (%host-repl-transcript "(+ 40 2)\n" h)
+      (let ((t (%host-repl-transcript ",history\n,q\n" h)))
+        (delete-file h)
+        t))))
 
 (test-group "repl"
-  (test-equal "echoes expressions but not definitions"
-    "paal> paal> 81\npaal> "
+  (test-equal "the self-hosted session: echo, _, ,env, ,q"
+    "paal> paal> 81\npaal> 82\npaal> q\npaal> "
     (let ((out (open-output-string)))
       (parameterize ((current-input-port
-                       (open-input-string "(define q 9)\n(* q q)\n"))
+                       (open-input-string
+                         "(define q 9)\n(* q q)\n(+ _ 1)\n,env\n,q\n"))
                      (current-output-port out))
         (pkaappi-self-repl))
       (get-output-string out))))
