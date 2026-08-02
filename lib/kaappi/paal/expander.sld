@@ -2786,6 +2786,12 @@
     ;; A case clause is ((datum ...) expr ...) or (else expr ...).  The datum
     ;; list must be a list -- (case x (1 'one)) is the usual slip, and without
     ;; the check it reached memv as a bare atom.
+    ;;
+    ;; %core%else counts as else: a `case` arriving from a syntax-rules
+    ;; template carries its keywords marked, and this validator runs before
+    ;; the denotation-aware dispatch that already accepts the mark — checking
+    ;; the literal spelling alone rejected every macro that expands to a
+    ;; `case` with an else clause (SRFI 67's compare machinery was the find).
     (define (check-case-clauses! clauses)
       (let loop ((cs clauses))
         (unless (null? cs)
@@ -2793,7 +2799,8 @@
             (cond
               ((not (pair? clause))
                (syntax-error* "case: clause must be a list" clause))
-              ((eq? (car clause) 'else)
+              ((or (eq? (car clause) 'else)
+                   (eq? (car clause) %core-else))
                (when (pair? (cdr cs))
                  (syntax-error* "case: else must be the last clause" clause))
                (when (null? (cdr clause))

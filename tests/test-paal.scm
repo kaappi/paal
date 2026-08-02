@@ -1543,6 +1543,42 @@
     (pkaappi-run-bc-string
       "(define-syntax q5 (syntax-rules () ((_) '(let if)))) (q5)")))
 
+;; A template's `case`/`cond` else arrives as %core%else — the mark that
+;; stops a use site's `else` binding from capturing the machinery's.  The
+;; case-clause validator runs before the mark-aware dispatch and used to
+;; check the literal spelling only, so every macro expanding to a `case`
+;; with an else clause was rejected with "clause data must be a list"
+;; (SRFI 67's compare machinery was the find).
+(test-group "define-syntax: else survives case templates"
+  (test-equal "case with else inside a template" 'other
+    (pkaappi-run-bc-string
+      "(define-syntax classify
+         (syntax-rules () ((_ x) (case x ((1) 'one) (else 'other)))))
+       (classify 5)"))
+  (test-equal "case with else => inside a template" 10
+    (pkaappi-run-bc-string
+      "(define-syntax pick
+         (syntax-rules ()
+           ((_ x) (case x ((1) 'one) (else => (lambda (k) (* k 2)))))))
+       (pick 5)"))
+  (test-equal "cond with else inside a template" 'no
+    (pkaappi-run-bc-string
+      "(define-syntax test3
+         (syntax-rules () ((_ x) (cond ((= x 3) 'yes) (else 'no)))))
+       (test3 4)"))
+  (test-equal "tree-walking pipeline agrees" 'other
+    (pkaappi-run-string
+      "(define-syntax classify
+         (syntax-rules () ((_ x) (case x ((1) 'one) (else 'other)))))
+       (classify 5)"))
+  (test-equal "the SRFI 67 shape: case else calling error, untaken" 'gt
+    (pkaappi-run-bc-string
+      "(define-syntax cmp
+         (syntax-rules ()
+           ((_ c) (case c ((-1) 'lt) ((0) 'eq) ((1) 'gt)
+                    (else (error \"comparison value not in {-1,0,1}\"))))))
+       (cmp 1)")))
+
 (test-group "define-syntax: hygiene"
   (test-equal "introduced let binding does not capture the user's variable"
     '(2 1)
