@@ -123,8 +123,12 @@ Key exports: `paal-read-string`, `paal-read-file`, `paal-read-all`, `paal-read`
 **Input:** list of S-expressions (possibly containing derived forms)  
 **Output:** list of S-expressions in core form only
 
-Rewrites every derived form to a combination of core forms. The expander is purely
-structural — it transforms S-expressions to S-expressions with no semantic analysis.
+Rewrites every derived form to a combination of core forms. The expander is *not*
+purely structural any more: expansion threads an immutable **compile-time
+environment** (cenv) recording what each identifier in scope denotes, and dispatch
+consults it before the keyword table — so a lexical binding shadows a keyword the
+way R7RS requires, and `(let ((if list)) (if 1 2 3))` is a call. The exported
+`paal-expand` keeps its arity; the cenv threads through the internal `expand-form`.
 
 **Core forms** (passed through, with sub-form recursion):
 
@@ -162,14 +166,49 @@ structural — it transforms S-expressions to S-expressions with no semantic ana
 | `` `form `` | `cons`/`append`/`list` construction |
 | `(do …)` | named-let loop |
 | `(define-record-type name (ctor f…) pred (f acc [mut])…)` | `begin` of `define`s using vector storage |
-| `(define-library name decl…)` | `begin` of the library's `(begin …)` bodies |
-| `(import …)` / `(export …)` | `(quote #f)` — no-op during bootstrap |
+| `(define-library name decl…)` | `begin` of the library's body forms, after `normalize-decls` flattens `cond-expand` and `include-library-declarations` (see § Library declarations) |
+| `(import spec…)` | the named libraries' definitions, renamed per library, spliced in front — and the program's import grants recorded for the scope check (see § Import scope) |
+| `(export …)` at top level | `(quote #f)` — outside a `define-library` there is nothing to act on; inside one, `install-library!` reads the declaration directly |
 | `(guard (v clause…) body…)` | `(%paal-guard-run (lambda () body…) (lambda (v) (cond clause… [else %paal-guard-no-match])))` |
 | `(parameterize ((p v)…) body…)` | `(%paal-parameterize (list p…) (list v…) (lambda () body…))` |
 
-**Internal defines:** `expand-body` processes a lambda/let body and hoists any leading
-`(define …)` forms to `letrec*` (R7RS §5.3.2). Both the `lambda` and shorthand
-`(define (name …) body…)` handlers call `expand-body`.
+**The compile-time environment.** A cenv is an alist from names to denotations:
+
+| Denotation | Meaning |
+|------|---------|
+| `(variable . rename?)` | a lexical variable — a lambda formal, or a hygiene rename of one |
+| `(macro . alias)` | a local macro; `alias` names its `%mac-<name>-<n>` slot in the global macro table |
+| `(global)` | explicitly the top level |
+
+Every derived binder desugars to `lambda`, so formals extension is the single binding
+point and threading stays cheap; the top level fast-paths on the empty cenv. Dispatch
+looks the head up first: a head denoting a variable is a call whatever it spells;
+`else` and `=>` lose their special role inside `cond`/`case` when lexically bound
+(`(let ((=> #f)) (cond (#t => 'ok)))` answers `ok`); and a lambda formal spelling one
+of the six analyzer head symbols (`quote lambda define set! if begin`) is α-renamed to
+`%kw-…` on the spot, so the analyzer downstream never mistakes a variable for syntax.
+
+**Body definition contexts.** `expand-body` processes a lambda/let body: leading
+`(define …)` and `(define-values …)` forms hoist to `letrec*` (R7RS §5.3.2), and a
+leading `(define-syntax …)` installs a *body-scoped* macro — a fresh `%mac-` alias in
+the global macro table for the extent of the body, with the cenv carrying source name
+→ alias, so it cannot leak into the program (the pollution that once darkened a whole
+conformance section). A phase-1 pre-scan collects definition names first, so
+definitions may be mutually recursive and a body-level macro may be used before its
+textual position. A macro use at the head of a body is expanded one step in case it
+*produces* a definition (R7RS 5.3.2 requires macro-produced defines to bind).
+`let-syntax`, `letrec-syntax`, `let-values` and `let*-values` bodies are bodies in
+this sense — definitions are legal at their heads.
+
+**Pattern matching.** `syntax-rules` literals match by *denotation*: a literal in a
+pattern matches an input identifier only when the use-site and definition-site
+denotations agree — unbound at both (the top level) is one denotation, anything else
+must be the same binding (kaappi's `literal_bound` analogue, under paal's
+approximation). Vector patterns and templates work (`#(a b …)` matches vectors
+element-wise). A custom ellipsis — `(syntax-rules ell (lit …) clause …)` — is honored
+through spec parsing, matching, instantiation and the rename walkers; a literal
+outranks `_` and outranks an ellipsis position; improper-tail ellipsis patterns
+(`(a … . tail)`) match per R7RS.
 
 **Top-level begin splicing:** `paal-expand-all` splices top-level `(begin …)` results.
 This is necessary for `define-record-type` and `define-library` desugaring, which both
@@ -192,13 +231,28 @@ and `<bytecode-function>` avoid `define-record-type` for exactly this reason.
 `syntax-rules` templates get the same treatment. Before instantiating a template,
 the expander collects the identifiers that template *binds* — `lambda` formals,
 `let`/`let*`/`letrec`/`letrec*`/`let-values` bindings, named-let loop names, `do`
-variables, `guard` variables — and renames each per expansion. Pattern variables are
-excluded, since those names come from the use site. The renames are added to the same
-environment `instantiate-template` already consults for pattern variables, so the
-substitution costs nothing extra.
+variables, `guard` variables, and `define`/`define-values`/`define-syntax` binders
+(a template may expand into definitions) — and renames each per expansion. Pattern
+variables are excluded, since those names come from the use site. The renames are
+added to the same environment `instantiate-template` already consults for pattern
+variables, so the substitution costs nothing extra.
 
 Without it, a template introducing `(let ((tmp a)) …)` shadows a user's `tmp`:
 `swap!` written the textbook way silently did nothing when called as `(swap! x tmp)`.
+
+Instantiation is *quote-aware*: the two substitutions part ways under `quote`.
+Pattern-variable substitutions still apply — R7RS says a quoted datum in a template
+transcribes its pattern variables — while hygiene renames are suppressed, so a
+template's `'tmp` is the symbol `tmp`, never a rename of it.
+
+Keyword capture is prevented from the other side by `%core%` marks: during the same
+classification walk, a template's syntactic keywords are marked `%core%<name>` and
+stripped again at dispatch, so a use site that binds `let` cannot capture a
+template's `let`. Keywords the *definition* environment itself shadows are not
+marked — that shadowing is the macro author's, and it holds. Excluded from marking:
+quote and quasiquote internals, the ellipsis, `_`, `syntax-rules` itself, and the
+library forms. Neither `%core%` nor `%kw-` nor `%mac-` ever reaches the IR — a leak
+assertion in the suite pins all three.
 
 That is the capture half. The other half — referential transparency — is handled by
 marking a template's *free* identifiers `%gref%<name>`, which the emitter and the
@@ -222,17 +276,24 @@ a macro, covering one defined *after* the macro that referenced it. A nested
 identifiers of the enclosing template, and its own free identifiers belong where that
 inner macro is defined.
 
-Resolving to the top level is exact while macros are defined at top level, which is
-where paal's are — the macro table is global, so a macro has no other definition
-environment to point at. A macro defined inside a local scope and referring to a local
-of that scope would resolve to the top level instead; nothing in paal creates one.
+Resolving to the top level is exact for a value binding, because even a *local*
+macro's table entry is global — the `%mac-` alias lives in the one macro table, and a
+library-defined value a template names resolves through its `%gref%` mark
+(`rename-core` follows the mark through a library rename, so a macro used inside its
+own library still finds the renamed global). The genuine boundary is elsewhere: a
+template-introduced identifier that is *bound only by a later expansion step* needs
+per-identifier provenance — syntax objects — which paal's symbol-marking scheme does
+not carry. That is the deferred case behind §4.3 tests 117/149/153 and the SRFI 26
+adaptation; it is recorded in TODO.md, and nothing should attempt it without that
+design.
 
 **Local macro scope:** `letrec-syntax` installs all its bindings before expanding
 anything, so its transformers may refer to each other and to themselves. `let-syntax`
-wraps each transformer so that its *output* is expanded in the environment captured
-before any of the bindings were installed — R7RS 4.3.1 gives its keywords the body as
-their region, not the bindings, so a template naming a sibling keyword must resolve to
-the outer binding. That wrapper is the only difference between the two forms here.
+gives its keywords the body as their region, not the bindings (R7RS 4.3.1): each
+transformer captures its *definition* environment — `make-transformer` takes a
+def-env, and transformers are `(lambda (form use-env) …)` — so a template naming a
+sibling keyword resolves to the outer binding. (An earlier design got this effect by
+expanding the body twice; def-env capture replaced the double expansion.)
 
 The macro table is module-level state, so its lifetime has to be managed explicitly:
 `paal-macros-reset!` runs wherever a fresh globals table is created, giving macros the
