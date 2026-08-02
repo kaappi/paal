@@ -5487,7 +5487,12 @@
       ht1)))
 ")
        (cons '(srfi 128)
-             "(define-library (srfi 128)
+             ";; [paal adaptation] default-ordering gets one extra arm: under paal a
+;; record is a tagged vector, so without it two same-type records whose
+;; registered comparator has no ordering fall into vector-ordering and
+;; compare by fields, where kaappi's opaque records answer #f from the
+;; else arm.  See the arm's comment; everything else is upstream verbatim.
+(define-library (srfi 128)
   (import (scheme base) (scheme case-lambda) (scheme char) (scheme inexact))
   (export comparator? comparator-ordered? comparator-hashable?
           make-comparator
@@ -5658,6 +5663,16 @@
                 ((string? a) (string<? a b))
                 ((symbol? a) (string<? (symbol->string a) (symbol->string b)))
                 ((pair? a) (pair-ordering a b))
+                ;; [paal adaptation] a paal record is a vector whose slot 0
+                ;; holds its (list '<type-name>) tag — the shape (srfi 13)'s
+                ;; char-set recognizer documents.  Records with no usable
+                ;; registered ordering are unordered, as kaappi's opaque
+                ;; records are, so they must not reach vector-ordering.
+                ((and (vector? a)
+                      (positive? (vector-length a))
+                      (pair? (vector-ref a 0))
+                      (symbol? (car (vector-ref a 0))))
+                 #f)
                 ((vector? a) (vector-ordering a b))
                 ((bytevector? a) (bytevector-ordering a b))
                 (else #f))))))

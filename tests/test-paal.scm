@@ -4696,7 +4696,19 @@
       "(import (scheme base) (srfi 133))
        (define v (vector 1 2 3 4 5))
        (vector-reverse! v 1 4)
-       (list v (vector-reverse-copy #(1 2 3 4 5) 1 4))")))
+       (list v (vector-reverse-copy #(1 2 3 4 5) 1 4))"))
+  ;; (srfi 128): a registered comparator without an ordering leaves its
+  ;; records unordered through the default comparator.  kaappi's opaque
+  ;; records answer #f; paal's tagged-vector records must not fall into
+  ;; the vector-ordering arm instead.
+  (test-equal "unordered registered records don't order as vectors" '(#t #f)
+    (pkaappi-run-bc-string
+      "(import (scheme base) (srfi 128))
+       (define-record-type <uq> (make-uq v) uq? (v uq-v))
+       (comparator-register-default!
+         (make-comparator uq? (lambda (a b) (= (uq-v a) (uq-v b))) #f #f))
+       (list (=? (make-default-comparator) (make-uq 1) (make-uq 1))
+             (<? (make-default-comparator) (make-uq 1) (make-uq 2)))")))
 
 ;; ---------------------------------------------------------------
 ;; Bytecode cache for user programs

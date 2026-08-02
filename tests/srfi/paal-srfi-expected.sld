@@ -16,7 +16,7 @@
         ("srfi113.scm" pass)
         ("srfi117.scm" pass)
         ("srfi125.scm" pass)
-        ("srfi128.scm" fail) ; exit 1
+        ("srfi128.scm" pass)
         ("srfi13-charset.scm" pass)
         ("srfi13-ext.scm" pass)
         ("srfi13-startend.scm" pass)
