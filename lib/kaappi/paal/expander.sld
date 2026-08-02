@@ -588,7 +588,8 @@
               (let* ((spec* (rename-syntax-rules spec renames))
                      (hit   (assq name renames))
                      (final (if hit (cdr hit) name)))
-                (paal-macro-set! final (make-transformer spec*) spec*)))))
+                ;; Library macros are top-level: the empty definition env.
+                (paal-macro-set! final (make-transformer spec* '()) spec*)))))
         names))
 
     ;; The entries %paal-macros gained since `older` — it only ever grows by
@@ -976,23 +977,6 @@
          (cons (instantiate-template (car tmpl) penv subst ell lits)
                (instantiate-template (cdr tmpl) penv subst ell lits)))))
 
-    ;; A transformer whose output is expanded in `env` rather than in whatever
-    ;; macro environment is current where the macro is used.  let-syntax needs
-    ;; this so a binding cannot see its siblings; letrec-syntax deliberately
-    ;; uses the plain transformer, which is what lets its bindings refer to one
-    ;; another.
-    ;;
-    ;; Expanding here means the caller's (paal-expand (macro form)) runs over an
-    ;; already-expanded form. That is harmless — core forms simply recurse into
-    ;; their sub-forms and no macro uses remain.
-    (define (make-scoped-transformer spec env)
-      (let ((base (make-transformer spec)))
-        (lambda (form)
-          (let ((saved %paal-macros))
-            (set! %paal-macros env)
-            (let ((result (paal-expand (base form))))
-              (set! %paal-macros saved)
-              result)))))
 
     ;; ---------------------------------------------------------------
     ;; Hygiene: rename identifiers the template itself binds
@@ -1110,9 +1094,78 @@
     (define (gref-symbol name)
       (string->symbol (string-append %gref-prefix (symbol->string name))))
 
+    ;; ---------------------------------------------------------------
+    ;; %core% marks: a template's keywords survive use-site shadowing
+    ;; ---------------------------------------------------------------
+    ;;
+    ;; Once dispatch consults the lexical environment, (let ((if car)) ...)
+    ;; makes `if` a variable — which is right for the user's code and wrong
+    ;; for a template that meant the special form: a macro expanding to
+    ;; (if c a b) must mean `if` wherever it is used.  So instantiation marks
+    ;; a template's keyword occurrences %core%<name>, and the dispatcher
+    ;; strips the mark and dispatches the keyword directly, past whatever the
+    ;; use site binds.  The mark is the keyword sibling of %gref% and rides
+    ;; the same subst list, so it never reaches quoted data (C1's split) and
+    ;; never reaches the IR (the dispatcher consumes it).
+    ;;
+    ;; Not markable: quote and the quasiquote trio, matched structurally by
+    ;; walkers that must see them bare; syntax-rules, whose specs stay
+    ;; literal (nested specs are skipped whole anyway); the module forms,
+    ;; which the library walkers match; and the ellipsis and _.
+
+    (define %core-prefix "%core%")
+
+    (define (core-symbol name)
+      (string->symbol (string-append %core-prefix (symbol->string name))))
+
+    ;; Strip the %core% marker, or #f when the symbol does not carry one.
+    (define (core-name sym)
+      (let ((s (symbol->string sym)))
+        (and (> (string-length s) 6)
+             (string=? (substring s 0 6) "%core%")
+             (string->symbol (substring s 6 (string-length s))))))
+
+    (define %core-markable
+      '(lambda define set! if begin
+        let let* letrec letrec* and or when unless cond case do
+        define-record-type guard parameterize case-lambda
+        define-values let-values let*-values
+        delay delay-force include include-ci cond-expand syntax-error
+        define-syntax let-syntax letrec-syntax
+        else =>))
+
+    ;; (k . %core%k) for each markable keyword occurring in the template —
+    ;; outside nested syntax-rules, and skipping any keyword the macro's own
+    ;; definition environment shadows as a variable, since the template then
+    ;; means that variable.
+    (define (template-core-marks tmpl pvars literals ell def-env)
+      (let ((acc '()))
+        (define (note! s)
+          (when (and (symbol? s)
+                     (memq s %core-markable)
+                     (not (eq? s ell))
+                     (not (memq s pvars))
+                     (not (memq s literals))
+                     (not (let ((d (cenv-lookup def-env s)))
+                            (and (pair? d) (eq? (car d) 'variable))))
+                     (not (assq s acc)))
+            (set! acc (cons (cons s (core-symbol s)) acc))))
+        (define (walk t)
+          (cond
+            ((symbol? t) (note! t))
+            ((pair? t)
+             (cond
+               ((eq? (car t) 'quote) #f)
+               ((eq? (car t) 'syntax-rules) #f)
+               (else (walk (car t)) (walk (cdr t)))))
+            (else #f)))
+        (walk tmpl)
+        acc))
+
     ;; Free identifiers of a template: symbols that are not pattern variables,
-    ;; not bound by the template, not literals, not keywords, not the ellipsis,
-    ;; and not currently macros.
+    ;; not bound by the template, not literals, not keywords, and not the
+    ;; ellipsis.  Macro names are included — classify-frees decides what each
+    ;; free identifier becomes.
     (define (template-free-ids tmpl pattern-vars bound literals ell)
       (let ((acc '()))
         (define (note! s)
@@ -1126,7 +1179,7 @@
                      ;; macro's expansion.  Marking twice yields %gref%%gref%x,
                      ;; which strips to a name nothing is bound to.
                      (not (gref-name s))
-                     (not (paal-macro-get s))
+                     (not (core-name s))
                      (not (memq s acc)))
             (set! acc (cons s acc))))
         (define (walk t)
@@ -1146,13 +1199,42 @@
         (walk tmpl)
         acc))
 
-    (define (referential-renames tmpl pattern-vars bound literals ell)
-      (map (lambda (s) (cons s (gref-symbol s)))
-           (template-free-ids tmpl pattern-vars bound literals ell)))
+    ;; What each free identifier of a template becomes, judged against the
+    ;; macro's *definition* environment:
+    ;;
+    ;;   local macro there        →  its global alias, so the use site cannot
+    ;;                               intercept the name
+    ;;   variable there, renamed  →  the rename
+    ;;   variable there, plain    →  stays bare; within the definition region
+    ;;                               the use site resolves it to that binding
+    ;;   anything else            →  %gref%<name>: top-level resolution — the
+    ;;                               global macro or value the template saw —
+    ;;                               past whatever the use site binds
+    (define (classify-frees tmpl pattern-vars bound literals ell def-env)
+      (let loop ((ids (template-free-ids tmpl pattern-vars bound literals ell))
+                 (acc '()))
+        (if (null? ids)
+            (reverse acc)
+            (let* ((s (car ids))
+                   (d (cenv-lookup def-env s)))
+              (loop (cdr ids)
+                    (cond
+                      ((and (pair? d) (eq? (car d) 'macro))
+                       (cons (cons s (cdr d)) acc))
+                      ((and (pair? d) (eq? (car d) 'variable))
+                       (if (cdr d) (cons (cons s (cdr d)) acc) acc))
+                      (else
+                       (cons (cons s (gref-symbol s)) acc))))))))
 
     ;; Build a transformer from a syntax-rules spec — either shape, with or
     ;; without the custom ellipsis identifier (see spec-ellipsis above).
-    (define (make-transformer spec)
+    ;;
+    ;; def-env is the lexical environment where the macro is *defined*: '()
+    ;; for top-level define-syntax, the surrounding cenv for let-syntax and
+    ;; letrec-syntax.  It steers classify-frees and the %core% marking above.
+    ;; The transformer receives the use-site environment as well; the matcher
+    ;; consults it for denotation-aware literals.
+    (define (make-transformer spec def-env)
       (if (not (and (pair? spec) (eq? (car spec) 'syntax-rules)
                     (pair? (cdr spec))
                     (list? (spec-literals spec))))
@@ -1160,7 +1242,7 @@
           (let ((ell      (spec-ellipsis spec))
                 (literals (spec-literals spec))
                 (clauses  (spec-clauses spec)))
-            (lambda (form)
+            (lambda (form use-env)
               (let loop ((cls clauses))
                 (if (null? cls)
                     (error "syntax-rules: no matching pattern" form)
@@ -1175,6 +1257,9 @@
                           ;; bindings and renames travel separately: pattern
                           ;; variables substitute even inside quoted data,
                           ;; renames never do — see instantiate-template.
+                          ;; Order in subst: bound renames, then frees, then
+                          ;; keyword marks — a template-bound `else` is its
+                          ;; rename, not a mark.
                           (let* ((pvars   (map car env))
                                  (bound   (template-bound-ids template pvars literals ell))
                                  (renames (map (lambda (s)
@@ -1182,10 +1267,12 @@
                                                            (string-append
                                                              "%h-" (symbol->string s) "-"))))
                                                bound))
-                                 (frees   (referential-renames
-                                            template pvars bound literals ell)))
+                                 (frees   (classify-frees
+                                            template pvars bound literals ell def-env))
+                                 (marks   (template-core-marks
+                                            template pvars literals ell def-env)))
                             (instantiate-template
-                              template env (append renames frees) ell literals))
+                              template env (append renames frees marks) ell literals))
                           (loop (cdr cls))))))))))
 
     ;; ---------------------------------------------------------------
@@ -1281,6 +1368,44 @@
     (define (cenv-bind-macro env name alias)
       (cons (cons name (cons 'macro alias)) env))
 
+    ;; The six symbols compiler.sld dispatches on.  A lambda formal spelling
+    ;; one of them is α-renamed so the expanded output stays unambiguous —
+    ;; (lambda (if) (if 1)) must not read as a conditional downstream.  Other
+    ;; keywords need no rename: the analyzer treats them as ordinary heads.
+    (define %analyzer-keywords '(quote lambda define set! if begin))
+
+    ;; Extend env with a lambda's formals, renaming analyzer keywords.
+    ;; Returns (env . formals), formals rewritten where renamed.
+    (define (cenv-bind-lambda env formals)
+      (cond
+        ((symbol? formals)
+         (if (memq formals %analyzer-keywords)
+             (let ((r (fresh-name (string-append "%kw-" (symbol->string formals) "-"))))
+               (cons (cons (cons formals (cons 'variable r)) env) r))
+             (cons (cenv-extend-var env formals) formals)))
+        ((pair? formals)
+         (let ((head (car formals)))
+           (cond
+             ((and (symbol? head) (memq head %analyzer-keywords))
+              (let* ((r    (fresh-name (string-append "%kw-" (symbol->string head) "-")))
+                     (rest (cenv-bind-lambda
+                             (cons (cons head (cons 'variable r)) env)
+                             (cdr formals))))
+                (cons (car rest) (cons r (cdr rest)))))
+             ((symbol? head)
+              (let ((rest (cenv-bind-lambda (cenv-extend-var env head)
+                                            (cdr formals))))
+                (cons (car rest) (cons head (cdr rest)))))
+             (else
+              (let ((rest (cenv-bind-lambda env (cdr formals))))
+                (cons (car rest) (cons head (cdr rest))))))))
+        (else (cons env formals))))
+
+    ;; A (variable . rename) hit, or #f.
+    (define (cenv-variable-rename env name)
+      (let ((d (cenv-lookup env name)))
+        (and (pair? d) (eq? (car d) 'variable) (cdr d))))
+
     ;; ---------------------------------------------------------------
     ;; Main dispatch
     ;; ---------------------------------------------------------------
@@ -1289,29 +1414,70 @@
     (define (paal-expand form)
       (expand-form form '()))
 
+    ;; Dispatch order, and why:
+    ;;
+    ;;   1. a %core%-marked head is the keyword, unconditionally — the mark
+    ;;      exists so a template's `if` survives a use site that binds `if`;
+    ;;   2. a %gref%-marked head naming a global macro is that macro — the
+    ;;      template saw it past whatever the use site binds;
+    ;;   3. a lexical denotation wins over everything else: a variable makes
+    ;;      the form a plain application (keyword shadowing, R7RS 4.3), a
+    ;;      local macro expands through its alias;
+    ;;   4. the keyword table;
+    ;;   5. global macros;
+    ;;   6. a plain application.
     (define (expand-form form env)
-      (if (not (pair? form))
-          form
-          (case (car form)
+      (cond
+        ;; A symbol: apply a lexical rename; strip a stray keyword mark.
+        ((symbol? form)
+         (or (core-name form)
+             (cenv-variable-rename env form)
+             form))
+        ((not (pair? form)) form)
+        ((not (symbol? (car form)))
+         (map (lambda (f) (expand-form f env)) form))
+        (else
+         (let* ((head  (car form))
+                (cname (core-name head)))
+           (cond
+             (cname
+              (dispatch-core (cons cname (cdr form)) env))
+             ((let ((g (gref-name head)))
+                (and g (paal-macro-get g) g))
+              => (lambda (g)
+                   (expand-form ((paal-macro-get g) (cons g (cdr form)) env)
+                                env)))
+             ((cenv-lookup env head)
+              => (lambda (d)
+                   (if (eq? (car d) 'macro)
+                       (expand-form ((paal-macro-get (cdr d)) form env) env)
+                       (map (lambda (f) (expand-form f env)) form))))
+             (else (dispatch-core form env)))))))
+
+    (define (dispatch-core form env)
+      (case (car form)
             ;; --- Core forms: recurse into sub-forms ---
             ((quote)
              form)
             ((lambda)
-             `(lambda ,(cadr form)
-                ,@(expand-body (cddr form)
-                               (cenv-extend-formals env (cadr form)))))
+             (let ((bf (cenv-bind-lambda env (cadr form))))
+               `(lambda ,(cdr bf)
+                  ,@(expand-body (cddr form) (car bf)))))
             ((define)
              (if (pair? (cadr form))
-                 `(define ,(caadr form)
-                    (lambda ,(cdadr form)
-                      ,@(expand-body (cddr form)
-                                     (cenv-extend-formals env (cdadr form)))))
+                 (let ((bf (cenv-bind-lambda env (cdadr form))))
+                   `(define ,(caadr form)
+                      (lambda ,(cdr bf)
+                        ,@(expand-body (cddr form) (car bf)))))
                  `(define ,(cadr form)
                     ,@(if (null? (cddr form))
                           '()
                           (list (expand-form (caddr form) env))))))
             ((set!)
-             `(set! ,(cadr form) ,(expand-form (caddr form) env)))
+             (let* ((name (cadr form))
+                    (r    (and (symbol? name)
+                               (cenv-variable-rename env name))))
+               `(set! ,(or r name) ,(expand-form (caddr form) env))))
             ((if)
              (if (null? (cdddr form))
                  `(if ,(expand-form (cadr form) env)
@@ -1334,14 +1500,14 @@
             ((or)          (expand-form (expand-or  (cdr form)) env))
             ((when)        (expand-form (expand-when form) env))
             ((unless)      (expand-form (expand-unless form) env))
-            ((cond)        (expand-form (expand-cond (cdr form)) env))
-            ((case)        (expand-form (expand-case form) env))
+            ((cond)        (expand-form (expand-cond (cdr form) env) env))
+            ((case)        (expand-form (expand-case form env) env))
             ((quasiquote)  (expand-form (expand-qq (cadr form) 0) env))
             ((do)          (expand-form (expand-do form) env))
             ((define-record-type)
              (expand-form (expand-define-record-type form) env))
             ((guard)
-             (expand-form (expand-guard form) env))
+             (expand-form (expand-guard form env) env))
             ((parameterize)
              (expand-form (expand-parameterize form) env))
             ;; --- New derived forms ---
@@ -1375,39 +1541,41 @@
             ((define-syntax)
              (let ((name          (cadr form))
                    (transformer-spec (caddr form)))
-               (paal-macro-set! name (make-transformer transformer-spec)
+               (paal-macro-set! name (make-transformer transformer-spec env)
                                 transformer-spec)
                '(quote #f)))
-            ((let-syntax)
-             ;; R7RS 4.3.1: a keyword's region is the *body* only, so a binding
-             ;; does not see its siblings.  Each transformer therefore expands
-             ;; its output in the environment from before any of these bindings
-             ;; were installed — which is exactly what letrec-syntax below does
-             ;; not do, and the only thing that distinguishes the two here.
-             (let* ((bindings (cadr form))
+            ;; R7RS 4.3.1 gives the two forms one difference: the region of a
+            ;; let-syntax keyword is the body only, so a binding cannot see
+            ;; its siblings, while letrec-syntax includes the bindings, so
+            ;; they can.  Both scope through the cenv now: each transformer is
+            ;; installed globally under a fresh %mac- alias — a name no source
+            ;; can utter — and the body's environment maps the source names to
+            ;; the aliases, so the macros are exactly as local as the
+            ;; environment entry.  The definition environment handed to
+            ;; make-transformer is what separates the two forms: the outer env
+            ;; for let-syntax, the extended one for letrec-syntax, which is
+            ;; how a sibling reference in a template resolves outward in one
+            ;; and to the sibling in the other.
+            ((let-syntax letrec-syntax)
+             (let* ((letrec?  (eq? (car form) 'letrec-syntax))
+                    (bindings (cadr form))
                     (body     (cddr form))
-                    (saved    %paal-macros))
-               (for-each (lambda (b)
-                           (paal-macro-set! (car b)
-                                            (make-scoped-transformer (cadr b) saved)))
-                         bindings)
-               (let ((result (expand-form `(begin ,@body) env)))
-                 (set! %paal-macros saved)
-                 result)))
-            ((letrec-syntax)
-             ;; R7RS 4.3.1: the region covers the bindings as well as the body,
-             ;; so the transformers may refer to each other and to themselves.
-             ;; Installing them all before expanding anything gives that for
-             ;; free, since a use expands against whatever is current.
-             (let* ((bindings (cadr form))
-                    (body     (cddr form))
-                    (saved    %paal-macros))
-               (for-each (lambda (b)
-                           (paal-macro-set! (car b) (make-transformer (cadr b))))
-                         bindings)
-               (let ((result (expand-form `(begin ,@body) env)))
-                 (set! %paal-macros saved)
-                 result)))
+                    (aliases  (map (lambda (b)
+                                     (fresh-name
+                                       (string-append
+                                         "%mac-" (symbol->string (car b)) "-")))
+                                   bindings))
+                    (env*     (let bind ((bs bindings) (as aliases) (e env))
+                                (if (null? bs)
+                                    e
+                                    (bind (cdr bs) (cdr as)
+                                          (cenv-bind-macro e (car (car bs))
+                                                           (car as))))))
+                    (def-env  (if letrec? env* env)))
+               (for-each (lambda (b a)
+                           (paal-macro-set! a (make-transformer (cadr b) def-env)))
+                         bindings aliases)
+               (expand-form `(begin ,@body) env*)))
             ;; --- Library forms ---
             ;; A define-library evaluated as a program form -- `paal file.sld`,
             ;; or pkaappi-load-file on a pipeline stage.  Its own imports are
@@ -1429,20 +1597,14 @@
             ;; act on; inside one, install-library! reads it directly.
             ((export)
              '(quote #f))
-            ;; --- User-defined macro or procedure call ---
+            ;; --- Global macro or plain application ---
+            ;; (%gref% heads and lexical denotations were handled before the
+            ;; keyword table — see expand-form.)
             (else
              (let ((macro (paal-macro-get (car form))))
-               (cond
-                 ((and (symbol? (car form)) macro)
-                  (expand-form (macro form) env))
-                 ;; A template's free identifier was marked %gref% before we knew
-                 ;; whether it named a macro — it may name one defined after the
-                 ;; macro that referenced it.  Unmark and expand as a macro use.
-                 ((and (symbol? (car form))
-                       (gref-name (car form))
-                       (paal-macro-get (gref-name (car form))))
-                  (expand-form (cons (gref-name (car form)) (cdr form)) env))
-                 (else (map (lambda (f) (expand-form f env)) form))))))))
+               (if macro
+                   (expand-form (macro form env) env)
+                   (map (lambda (f) (expand-form f env)) form))))))
 
     ;; Strip the %gref% marker, or #f when the symbol does not carry one.
     ;; Shared with the emitter and the tree-walking VM, which resolve a marked
@@ -1789,7 +1951,30 @@
     ;; cond
     ;; ---------------------------------------------------------------
 
-    (define (expand-cond clauses)
+    ;; else and => are clause keywords only while the use site has not bound
+    ;; them as variables — (let ((=> #f)) (cond (#t => 'ok))) is an ordinary
+    ;; clause whose second expression happens to be the variable =>, and
+    ;; yields 'ok.  A template's marked %core%else / %core%=> always count:
+    ;; the macro meant the keyword, whatever its use site binds.  The marked
+    ;; spellings are also what the expander's own desugarings emit, so a
+    ;; machinery else can never be captured.
+
+    (define %core-else  (core-symbol 'else))
+    (define %core-arrow (core-symbol '=>))
+
+    (define (clause-else? x env)
+      (or (eq? x %core-else)
+          (and (eq? x 'else)
+               (let ((d (cenv-lookup env 'else)))
+                 (not (and (pair? d) (eq? (car d) 'variable)))))))
+
+    (define (clause-arrow? x env)
+      (or (eq? x %core-arrow)
+          (and (eq? x '=>)
+               (let ((d (cenv-lookup env '=>)))
+                 (not (and (pair? d) (eq? (car d) 'variable)))))))
+
+    (define (expand-cond clauses env)
       (if (null? clauses)
           '(if #f #f)
           (let ((clause (car clauses))
@@ -1797,16 +1982,16 @@
             (cond
               ((not (pair? clause))
                (syntax-error* "cond: clause must be a list" clause))
-              ((and (eq? (car clause) 'else) (not (null? rest)))
+              ((and (clause-else? (car clause) env) (not (null? rest)))
                (syntax-error* "cond: else must be the last clause" clause))
-              ((and (eq? (car clause) 'else) (null? (cdr clause)))
+              ((and (clause-else? (car clause) env) (null? (cdr clause)))
                (syntax-error* "cond: else needs at least one expression" clause)))
             (cond
-              ((and (pair? clause) (eq? (car clause) 'else))
+              ((and (pair? clause) (clause-else? (car clause) env))
                `(begin ,@(cdr clause)))
               ((= (length clause) 1)
                `(or ,(car clause) (cond ,@rest)))
-              ((and (= (length clause) 3) (eq? (cadr clause) '=>))
+              ((and (= (length clause) 3) (clause-arrow? (cadr clause) env))
                (let ((v (fresh-name "__paal_cv")))
                  `(let ((,v ,(car clause)))
                     (if ,v (,(caddr clause) ,v) (cond ,@rest)))))
@@ -1819,14 +2004,14 @@
     ;; case
     ;; ---------------------------------------------------------------
 
-    (define (expand-case form)
+    (define (expand-case form env)
       (check-shape! form "case" 2)
       (check-case-clauses! (cddr form))
       (let ((key     (cadr form))
             (clauses (cddr form))
             (k       (fresh-name "__paal_ck")))
         `(let ((,k ,key))
-           (cond ,@(map (lambda (clause) (case-clause k clause)) clauses)))))
+           (cond ,@(map (lambda (clause) (case-clause k clause env)) clauses)))))
 
     ;; `case` with `=>` hands the receiver **the key**, not the test value.
     ;; Splicing (cdr clause) into a cond clause got this wrong: cond's own `=>`
@@ -1834,13 +2019,17 @@
     ;; — so (case 3 ((3) => (lambda (x) (* x 2)))) multiplied the list (3).
     ;; R7RS 4.2.1 is explicit that it is the key.  So the `=>` clauses are
     ;; rewritten here rather than routed through cond's.
-    (define (case-clause k clause)
+    ;;
+    ;; Emitted else clauses are marked %core%else so a use site that bound
+    ;; `else` as a variable cannot capture the machinery's.
+    (define (case-clause k clause env)
       (cond
-        ((and (eq? (car clause) 'else)
-              (pair? (cdr clause)) (eq? (cadr clause) '=>))
-         `(else (,(caddr clause) ,k)))
-        ((eq? (car clause) 'else) clause)
-        ((and (pair? (cdr clause)) (eq? (cadr clause) '=>))
+        ((and (clause-else? (car clause) env)
+              (pair? (cdr clause)) (clause-arrow? (cadr clause) env))
+         `(,%core-else (,(caddr clause) ,k)))
+        ((clause-else? (car clause) env)
+         `(,%core-else ,@(cdr clause)))
+        ((and (pair? (cdr clause)) (clause-arrow? (cadr clause) env))
          `((memv ,k ',(car clause)) (,(caddr clause) ,k)))
         (else `((memv ,k ',(car clause)) ,@(cdr clause)))))
 
@@ -2162,7 +2351,7 @@
     ;; and that belongs to the machinery, which knows both states.  Returning a
     ;; sentinel is how the handler says "nothing matched, it is yours".
 
-    (define (expand-guard form)
+    (define (expand-guard form env)
       (let* ((var-and-clauses (cadr form))
              (var     (car var-and-clauses))
              (clauses (cdr var-and-clauses))
@@ -2171,11 +2360,16 @@
              (has-else? (and (pair? clauses)
                              (let loop ((cs clauses))
                                (cond ((null? (cdr cs))
-                                      (and (pair? (car cs)) (eq? (caar cs) 'else)))
+                                      (and (pair? (car cs))
+                                           (clause-else? (caar cs) env)))
                                      (else (loop (cdr cs)))))))
+             ; The implicit clause is machinery, so its else is the marked
+             ; spelling a use-site binding cannot capture.
              (all-clauses (if has-else?
                               clauses
-                              (append clauses '((else %paal-guard-no-match))))))
+                              (append clauses
+                                      (list (list %core-else
+                                                  '%paal-guard-no-match))))))
         `(%paal-guard-run
            (lambda () ,@body)
            (lambda (,var) (cond ,@all-clauses)))))

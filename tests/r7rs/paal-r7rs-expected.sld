@@ -10,8 +10,8 @@
       '(("R7RS" 0 0)
         ("4.1 Primitive expression types" 27 0)
         ("4.2 Derived expression types" 73 0)
-        ("4.3 Macros" 16 6)
-        ("5 Program structure" 14 0)
+        ("4.3 Macros" 18 5)
+        ("5 Program structure" 15 0)
         ("6.1 Equivalence Predicates" 25 0)
         ("6.2 Numbers" 210 1)
         ("6.3 Booleans" 18 0)
@@ -31,4 +31,4 @@
 
     ;; Top-level forms that raise before any test inside them runs.
     (define expected-errors
-      '(65 118 148 152 161))))
+      '(65 148 152))))

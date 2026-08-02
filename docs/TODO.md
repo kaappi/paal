@@ -913,8 +913,11 @@ named `let`, `if`) need an environment threaded through every `expand-*`; and
 because the imaginary part is *inexact* zero. The host's `make-rectangular`
 normalizes an inexact-zero imaginary part away — `(make-rectangular -2.5 0.0)`
 *is* `-2.5` — so the value the test needs cannot exist in the runtime paal
-delegates its numbers to. Same family as kaappi/kaappi#1911, whose main effect
-is closed: the reader now parses complex literals itself, splitting the token
+delegates its numbers to. Same family as kaappi/kaappi#1911; two siblings —
+eqv? conflating exact with inexact complex, and `(- z)` dropping exactness —
+are fixed on kaappi main by kaappi/kaappi#2170, with the representation work
+that would close this one tracked as kaappi/kaappi#2166. The main effect of
+#1911 is closed here: the reader now parses complex literals itself, splitting the token
 into real and imaginary parts — each a plain real, where `string->number` is
 reliable and exactness survives — and reassembling with `make-rectangular`.
 That is what `string->number` could not be trusted to do: it rejects `-3/2-i`,

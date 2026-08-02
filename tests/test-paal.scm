@@ -1182,6 +1182,64 @@
 ;;
 ;; Referential transparency is *not* provided — see the group's last test.
 
+;; Dispatch consults the lexical environment: a binding of a keyword's name
+;; makes it a variable at that use site (R7RS 4.3), while a template's
+;; keywords are %core%-marked at instantiation and survive any shadowing.
+;; The six analyzer keywords are α-renamed as formals so the expanded output
+;; stays unambiguous downstream.
+(test-group "expander: keyword shadowing"
+  (test-equal "a keyword bound as a variable is a variable, call position" 1
+    (pkaappi-run-bc-string "(let ((if car)) (if '(1 2)))"))
+  (test-equal "reference position" 8
+    (pkaappi-run-bc-string "(let ((if 7)) (+ if 1))"))
+  (test-equal "set! on a renamed keyword formal" 2
+    (pkaappi-run-bc-string "(let ((begin 1)) (set! begin 2) begin)"))
+  (test-equal "=> bound as a variable is an ordinary clause" 'ok
+    (pkaappi-run-bc-string "(let ((=> #f)) (cond (#t => 'ok)))"))
+  (test-equal "else bound as a variable is an ordinary test" 2
+    (pkaappi-run-bc-string "(let ((else #f)) (cond (else 1) (#t 2)))"))
+  (test-equal "a template's if survives a use site that binds if"
+    'template-if-works
+    (pkaappi-run-bc-string
+      "(define-syntax my-when (syntax-rules () ((_ c e) (if c e #f))))
+       (let ((if car)) (my-when #t 'template-if-works))"))
+  (test-equal "the R7RS my-or torture case" 7
+    (pkaappi-run-bc-string
+      "(define-syntax my-or
+         (syntax-rules ()
+           ((my-or) #f)
+           ((my-or e) e)
+           ((my-or e1 e2 ...)
+            (let ((temp e1)) (if temp temp (my-or e2 ...))))))
+       (let ((x #f) (y 7) (temp 8) (let odd?) (if even?))
+         (my-or x (let temp) (if y) y))"))
+  (test-equal "a lexical variable shadows a global macro" 'shadowed
+    (pkaappi-run-bc-string
+      "(define-syntax m (syntax-rules () ((_ x) 'macro)))
+       (let ((m (lambda (x) 'shadowed))) (m 1))"))
+  (test-equal "keyword shadowing works on the tree-walking path too" 1
+    (pkaappi-run-string "(let ((if car)) (if '(1 2)))")))
+
+;; Local macros scope through the compile-time environment: installed under
+;; unutterable %mac- aliases, mapped by the body's env, gone with it.  The
+;; definition environment handed to the transformer distinguishes the two
+;; binding forms.
+(test-group "expander: local macro scope via aliases"
+  (test-equal "a local macro does not leak past its body" 'proc
+    (pkaappi-run-bc-string
+      "(define (f) 'proc)
+       (let-syntax ((f (syntax-rules () ((_) 'macro))))
+         (f))
+       (f)"))
+  (test-equal "a body define-syntax cannot pollute a later form's names" 'value
+    (pkaappi-run-bc-string
+      "(let ()
+         (define-syntax g (syntax-rules () ((_ x) 'macro)))
+         (g 1))
+       (let ((x 5))
+         (define (g a b) 'value)
+         (g x x))")))
+
 ;; syntax-rules accepts the custom-ellipsis shape (syntax-rules ell (lits)
 ;; clause ...), and the literals list has priority over both the ellipsis and
 ;; the _ wildcard (R7RS 4.3.2).  Ellipsis patterns may close over a dotted
@@ -2693,10 +2751,11 @@
     '(hi pi ascii) (car (paal-read-string "(hi pi ascii)")))
   (test-equal "@ inside a symbol stays a symbol"
     'foo@bar (car (paal-read-string "foo@bar")))
-  ;; The literal itself, not arithmetic over it: kaappi's `-` drops exactness
-  ;; on complex operands, real-part turns an exact rational part inexact, and
-  ;; eqv? conflates exact with inexact complex — so anything beyond integer
-  ;; parts would test the host's quirks rather than the reader.
+  ;; The literal itself, not arithmetic over it: the host's real-part turns
+  ;; an exact rational part inexact (kaappi/kaappi#2166), and on the v0.22
+  ;; releases `-` and eqv? mishandle exactness too — fixed on kaappi main by
+  ;; kaappi/kaappi#2170, not yet released — so anything beyond integer parts
+  ;; would test the host's version rather than the reader.
   (test-equal "a complex literal evaluates through the pipeline"
     '(1 2 #t)
     (pkaappi-run-bc-string
