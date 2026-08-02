@@ -4735,6 +4735,42 @@
   (test-assert "the json rendering names the embedded libraries"
     (%has-substring? (paal-features-json) "\"(srfi 1)\"")))
 
+(test-group "disassembler"
+  ;; The listing is diagnostic text; assert the load-bearing parts rather
+  ;; than the whole transcript, so a new instruction shape does not break
+  ;; this group.
+  (let ((listing (let ((out (open-output-string)))
+                   (paal-disassemble
+                     (pkaappi-compile "(define (dbl x) (* x 2)) (dbl 21)")
+                     out)
+                   (get-output-string out))))
+    (test-assert "the program is fn0"
+      (%has-substring? listing "; fn0: top-level"))
+    (test-assert "the nested function is labelled and named"
+      (%has-substring? listing "; fn1: dbl  arity 1"))
+    (test-assert "the closure instruction points at the label"
+      (%has-substring? listing "(closure 0 fn1"))
+    (test-assert "instructions are numbered from zero"
+      (%has-substring? listing "  0000  "))
+    (test-assert "the define shows as define-global"
+      (%has-substring? listing "(define-global dbl")))
+  (test-assert "a variadic lambda is marked with +"
+    (let ((out (open-output-string)))
+      (paal-disassemble (pkaappi-compile "(lambda (a . rest) a)") out)
+      (%has-substring? (get-output-string out) "arity 1+")))
+  ;; The runtime binding prints to the HOST error port — the listing is a
+  ;; diagnostic, so paal-level port rebinding deliberately does not capture
+  ;; it; HOST parameterize does.
+  (test-assert "(disassemble f) lists a procedure from inside a program"
+    (let ((p (open-output-string)))
+      (parameterize ((current-error-port p))
+        (pkaappi-run-bc-string "(define (trip x) (* x 3)) (disassemble trip)"))
+      (%has-substring? (get-output-string p) "; fn0: trip")))
+  (test-assert "(disassemble 5) raises"
+    (guard (e (#t #t))
+      (pkaappi-run-bc-string "(disassemble 5)")
+      #f)))
+
 (test-group "cache management"
   (let ((src "paal-cache-mgmt-tmp.scm"))
     (let ((port (open-output-file src)))

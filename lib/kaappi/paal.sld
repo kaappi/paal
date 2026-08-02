@@ -21,7 +21,8 @@
           (kaappi paal emitter)
           (kaappi paal vm-bc)
           (kaappi paal serializer)
-          (kaappi paal formatter))
+          (kaappi paal formatter)
+          (kaappi paal disassembler))
   (export
     ;; Reader
     paal-read paal-read-string paal-read-all paal-read-file
@@ -59,6 +60,8 @@
     ;; Formatter
     paal-format-string paal-format-file paal-format-file!
     paal-format-check-file
+    ;; Disassembler
+    paal-disassemble
     ;; Profiling
     paal-profile-start! paal-profile-report
     paal-coverage-start! paal-coverage-report
@@ -402,6 +405,23 @@
                       (ffi-callback               . ,%paal-ffi-callback-marker)
                       (%paal-host-spawn           . ,spawn)
                       (%paal-host-ffi-callback    . ,ffi-callback)
+                      ; kaappi's (disassemble proc) parity.  Prints to the
+                      ; HOST error port, as kaappi prints to stderr: the
+                      ; listing is a diagnostic, not program output, so a
+                      ; paal-level port rebinding deliberately does not
+                      ; capture it.  A closure is plain data here — a tagged
+                      ; vector — so a HOST lambda can take it apart.
+                      (disassemble
+                        . ,(lambda (x)
+                             (cond
+                               ((closure? x)
+                                (paal-disassemble (closure-function x)
+                                                  (current-error-port)))
+                               ((bytecode-function? x)
+                                (paal-disassemble x (current-error-port)))
+                               (else
+                                (error "disassemble: expected a paal procedure"
+                                       x)))))
                       ;; --- (scheme eval) / (scheme load) / (scheme repl) ---
                       ;;
                       ;; eval re-enters the pipeline on a datum the program

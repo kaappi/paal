@@ -24,6 +24,7 @@
   (display "  ast <file>              Print post-read datums (read plus write)\n")
   (display "  expand <file>           Print expanded forms\n")
   (display "  ir <file>               Print IR nodes\n")
+  (display "  dis <file>              Print compiled bytecode (.scm or .pbc)\n")
   (display "  features [--json]       Report the capabilities of this paal\n")
   (display "  cache status|clear [f]  Inspect or remove bytecode caches\n")
   (display "  repl                    Start interactive REPL\n")
@@ -275,6 +276,20 @@
          (begin (display "error: ast: missing file\n") (exit 1))
          (for-each (lambda (d) (write d) (newline))
                    (paal-read-file (cadr args)))))
+    ; dis <file> — print the bytecode listing.  A .pbc is read back; anything
+    ; else is compiled first.  The one subcommand that shows what the emitter
+    ; actually produced, nested functions and all.
+    ((string=? (car args) "dis")
+     (if (null? (cdr args))
+         (begin (display "error: dis: missing file\n") (exit 1))
+         (let ((path (cadr args)))
+           (paal-disassemble
+             (if (ends-with? path ".pbc")
+                 (paal-read-bc-file path)
+                 (paal-emit-program
+                   (paal-analyze-all
+                     (paal-expand-all
+                       (paal-read-file path)))))))))
     ; features [--json] — capability report
     ((string=? (car args) "features")
      (cond
