@@ -3309,6 +3309,35 @@
         (delete-file p)
         r))))
 
+;; A library may except a base name, re-import it renamed, and define its
+;; own under the public name — the (srfi 70) shape.  The prologue's alias
+;; defines have import-time meaning: renaming their RHS with the body's map
+;; repointed (define %base-abs abs) at the library's own shadow, and ran it
+;; before the shadow's define existed, so the import died with an unbound
+;; mangled global.  SRFI 70, 101 and 140 all failed this way.
+(test-group "library body may shadow an excepted base import"
+  (test-equal "the exported name is the library's shadow" '(shadowed 5)
+    (pkaappi-run-bc-string
+      "(import (except (scheme base) abs) (shadow arith)) (abs -5)"))
+  (test-equal "the renamed alias still reaches base" 5
+    (pkaappi-run-bc-string
+      "(import (except (scheme base) abs) (shadow arith)) (abs-via-base -5)"))
+  (test-equal "tree-walking pipeline agrees" '(shadowed 7)
+    (pkaappi-run-string
+      "(import (except (scheme base) abs) (shadow arith)) (abs -7)"))
+  ;; The (srfi 101) variant: rename over *full* base, which has no
+  ;; enumerable export list — the pairs are taken on faith as the alias
+  ;; list, and every unnamed base name stays ambient.
+  (test-equal "rename over full base: the pairs are the alias list" '(mine (1 2))
+    (pkaappi-run-bc-string
+      "(import (except (scheme base) list) (shadow relist)) (list 1 2)"))
+  (test-equal "a full-base rename alias reaches base" 1
+    (pkaappi-run-bc-string
+      "(import (except (scheme base) list) (shadow relist)) (first-of (cons 1 '()))"))
+  (test-equal "full-base rename on the tree-walking pipeline" '(mine (3))
+    (pkaappi-run-string
+      "(import (except (scheme base) list) (shadow relist)) (list 3)")))
+
 ;; ---------------------------------------------------------------
 ;; Library declarations beyond import/export/begin/include
 ;; ---------------------------------------------------------------

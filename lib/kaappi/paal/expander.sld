@@ -413,10 +413,19 @@
                 base)))
         ((eq? (car spec) 'rename)
          (let ((base (resolve-import (cadr spec))) (pairs (cddr spec)))
-           (map (lambda (p)
-                  (let ((hit (assq (car p) pairs)))
-                    (if hit (cons (cadr hit) (cdr p)) p)))
-                base)))
+           (if (and (null? base) (grants-everything? (cadr spec)))
+               ;; Over base itself nothing is enumerable, so the pairs ARE
+               ;; the alias list: (rename (scheme base) (car %car)) imports
+               ;; base's car as %car, and every unnamed base name stays
+               ;; ambient under its own spelling.  Taken on faith like
+               ;; `only` over base — an old name base does not actually
+               ;; have surfaces at run time as an unbound global.  SRFI 101
+               ;; is this shape.
+               (map (lambda (p) (cons (cadr p) (car p))) pairs)
+               (map (lambda (p)
+                      (let ((hit (assq (car p) pairs)))
+                        (if hit (cons (cadr hit) (cdr p)) p)))
+                    base))))
         (else (library-exports spec))))
 
     ;; --- loading --------------------------------------------------------
@@ -606,7 +615,21 @@
                               (cons n (string->symbol
                                         (string-append tag (symbol->string n)))))
                             defined))
-             (renamed  (map (lambda (f) (rename-core f renames)) all-core)))
+             ;; Prologue and body take different renamings.  A prologue form
+             ;; is an alias define `(define local imported)` whose RHS was
+             ;; resolved at import time — base's own name, or another
+             ;; library's already-mangled global.  A body may legally define
+             ;; the very name an alias's RHS spells, when the import
+             ;; excepted it: SRFI 70 excepts base's `quotient`, re-imports it
+             ;; as `%quotient`, and defines its own `quotient`.  Renaming the
+             ;; alias's RHS with the body's map repointed the import at the
+             ;; shadow — and evaluated it before the shadow's define ran, so
+             ;; the library died with an unbound mangled global.  Only the
+             ;; alias's *own* name is this library's to rename.
+             (renamed  (append
+                         (map (lambda (f) (rename-alias-define f renames))
+                              flat-pro)
+                         (map (lambda (f) (rename-core f renames)) core))))
         ;; Rewrite this library's macro templates so they name the renamed
         ;; bindings, and mangle the macros it did not export so they stop
         ;; being visible to the importer.  Both directions of the same
@@ -641,6 +664,19 @@
           (set! %paal-pending
                 (append %paal-pending (list (cons name renamed))))
           export-map)))
+
+    ;; The prologue-only renamer: the defined name through the map, the RHS
+    ;; untouched (see the renamed binding in install-library!).  Anything
+    ;; that is not a plain alias define falls back to rename-core — today
+    ;; expand-one-import emits nothing else, and the fallback keeps a future
+    ;; emission from silently skipping renaming.
+    (define (rename-alias-define f renames)
+      (if (and (pair? f) (eq? (car f) 'define)
+               (pair? (cdr f)) (symbol? (cadr f))
+               (pair? (cddr f)) (null? (cdddr f)))
+          (let ((hit (assq (cadr f) renames)))
+            (list 'define (if hit (cdr hit) (cadr f)) (caddr f)))
+          (rename-core f renames)))
 
     ;; Rewrite this library's macro templates so they name the renamed
     ;; bindings.  Without it an exported macro whose template calls a private
