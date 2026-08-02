@@ -12,8 +12,8 @@
         ("srfi-27-unit.scm" pass)
         ("srfi1-ext.scm" fail) ; '=': expected at least 2 arguments, got 1
         ("srfi1.scm" pass)
-        ("srfi113-audit.scm" fail) ; paal-bc: not a callable 0
-        ("srfi113.scm" fail) ; paal-bc: not a callable 0
+        ("srfi113-audit.scm" pass)
+        ("srfi113.scm" pass)
         ("srfi117.scm" pass)
         ("srfi125.scm" pass)
         ("srfi128.scm" fail) ; exit 1

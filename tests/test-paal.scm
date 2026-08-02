@@ -4625,6 +4625,32 @@
         r))))
 
 ;; ---------------------------------------------------------------
+;; Fixes the SRFI shelf burn-down flushed out
+;; ---------------------------------------------------------------
+
+(test-group "fixes flushed out by the SRFI shelf"
+  ;; (srfi 69): SRFI 69's failure argument is a thunk, and a non-procedure
+  ;; there "is an error" — room kaappi's native table uses to answer the
+  ;; value itself as the default.  The shelf leans on it: (srfi 113) counts
+  ;; occurrences with (hash-table-ref ht key 0).  Paal's portable table
+  ;; answers as kaappi does; hash-table-update! passes its optional argument
+  ;; through hash-table-ref, so it inherits the behavior.
+  (test-equal "hash-table-ref: non-procedure failure is the default value" 0
+    (pkaappi-run-bc-string
+      "(import (scheme base) (srfi 69))
+       (hash-table-ref (make-hash-table) 'missing 0)"))
+  (test-equal "hash-table-ref: a procedure failure is still called" 99
+    (pkaappi-run-bc-string
+      "(import (scheme base) (srfi 69))
+       (hash-table-ref (make-hash-table) 'missing (lambda () 99))"))
+  (test-equal "hash-table-update! inherits the value default" 1
+    (pkaappi-run-bc-string
+      "(import (scheme base) (srfi 69))
+       (define t (make-hash-table))
+       (hash-table-update! t 'k (lambda (n) (+ n 1)) 0)
+       (hash-table-ref t 'k)")))
+
+;; ---------------------------------------------------------------
 ;; Bytecode cache for user programs
 ;; ---------------------------------------------------------------
 ;;

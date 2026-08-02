@@ -123,7 +123,15 @@
           (hit (if (and (pair? rest) (pair? (cdr rest)))
                    ((cadr rest) (cdr hit))
                    (cdr hit)))
-          ((pair? rest) ((car rest)))
+          ((pair? rest)
+           ;; SRFI 69 says failure is a thunk, and a non-procedure there "is
+           ;; an error" — room kaappi's native table uses to answer it as the
+           ;; default value.  The shelf leans on that: (srfi 113) counts
+           ;; occurrences with (hash-table-ref ht key 0).  Answer as kaappi
+           ;; does.  hash-table-update! passes its optional arg through here,
+           ;; so it inherits the same behavior.
+           (let ((failure (car rest)))
+             (if (procedure? failure) (failure) failure)))
           (else (error "hash-table-ref: no such key" key)))))
 
     (define (hash-table-ref/default t key default)
