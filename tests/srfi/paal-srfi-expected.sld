@@ -17,9 +17,9 @@
         ("srfi117.scm" pass)
         ("srfi125.scm" pass)
         ("srfi128.scm" fail) ; exit 1
-        ("srfi13-charset.scm" fail) ; paal-bc: not a callable #((<char-set>) ((48 . 57) (1632 . 1641) (1776 . 1785) (1984 . 1993) (2406 . 2415) (2534 . 2543) …
-        ("srfi13-ext.scm" fail) ; type error in 'char=?': expected character, got #<string>
-        ("srfi13-startend.scm" fail) ; exit 1
+        ("srfi13-charset.scm" pass)
+        ("srfi13-ext.scm" pass)
+        ("srfi13-startend.scm" pass)
         ("srfi132.scm" pass)
         ("srfi133-ext.scm" fail) ; SRFI 133 extended tests failed 4
         ("srfi141.scm" pass)

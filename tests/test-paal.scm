@@ -3932,7 +3932,7 @@
   (test-equal "join, split and tokenize"
     '("a,b,c" ("a" "b" "" "c") ("a" "b"))
     (srfi-run 13 "(list (string-join '(\"a\" \"b\" \"c\") \",\")
-                        (string-split \"a,b,,c\" #\\,)
+                        (string-split \"a,b,,c\" \",\")
                         (string-tokenize \"  a  b \"))"))
   ;; skip is index with the criterion negated — what trim runs conceptually.
   (test-equal "string-skip from both ends"
@@ -4648,7 +4648,36 @@
       "(import (scheme base) (srfi 69))
        (define t (make-hash-table))
        (hash-table-update! t 'k (lambda (n) (+ n 1)) 0)
-       (hash-table-ref t 'k)")))
+       (hash-table-ref t 'k)"))
+  ;; (srfi 13), completed by the burn-down: full criterion and start/end
+  ;; treatment, and string-split matching kaappi's extension — string
+  ;; delimiter only, adjacent delimiters produce empty strings.
+  (test-equal "string-split takes a string delimiter, empties kept"
+    '("" "a" "" "b" "")
+    (pkaappi-run-bc-string
+      "(import (scheme base) (srfi 13)) (string-split \",a,,b,\" \",\")"))
+  (test-equal "string-split with a multi-character delimiter" '("a" "b:c")
+    (pkaappi-run-bc-string
+      "(import (scheme base) (srfi 13)) (string-split \"a::b:c\" \"::\")"))
+  ;; Per SRFI 13, a range selects the substring the procedure operates on,
+  ;; and transformers answer just that range's result.
+  (test-equal "range arguments select the substring operated on"
+    '("cb" "2" #t)
+    (pkaappi-run-bc-string
+      "(import (scheme base) (scheme char) (srfi 13))
+       (list (string-reverse \"abcde\" 1 3)
+             (string-filter char-numeric? \"a1b2c3\" 2 4)
+             (string-prefix? \"xxab\" \"abcdef\" 2))"))
+  ;; The char-set criterion is recognized structurally — importing
+  ;; (srfi 14) into (srfi 13) costs a measured 5.2 s of expansion at every
+  ;; (import (srfi 13)).  This pins the representation contract from both
+  ;; sides: 14's record shape, 13's recognizer.
+  (test-equal "a char-set criterion dispatches without 13 importing 14"
+    '(0 "123")
+    (pkaappi-run-bc-string
+      "(import (scheme base) (srfi 13) (srfi 14))
+       (list (string-index \"123abc\" char-set:digit)
+             (string-filter char-set:digit \"a1b2c3\"))")))
 
 ;; ---------------------------------------------------------------
 ;; Bytecode cache for user programs
