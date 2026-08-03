@@ -13,4 +13,8 @@
         ("srfi14.scm"
          "passes (172 assertions) but costs ~4 minutes through the in-process pipeline: full-Unicode charset algebra.  Runtime, not correctness; revisit after the bytecode-encoding perf work")
         ("srfi263.scm"
-         "passes but costs ~5.7 minutes through the in-process pipeline: a prototype object system, every message send a table walk.  Runtime, not correctness; revisit with srfi14 after the bytecode-encoding perf work")))))
+         "passes but costs ~5.7 minutes through the in-process pipeline: a prototype object system, every message send a table walk.  Runtime, not correctness; revisit with srfi14 after the bytecode-encoding perf work")
+        ("srfi252.scm"
+         "does not finish inside 7 minutes in-process, so it has no measured verdict to record: property-based tests over generated sequences.  Skipped on runtime alone; measure again after the bytecode-encoding perf work")
+        ("srfi264.scm"
+         "same runtime reason as srfi252 — still running at 200 s, having passed its first 450 assertions.  Its sibling srfi264-behavior.scm runs in 2 s and is not skipped")))))

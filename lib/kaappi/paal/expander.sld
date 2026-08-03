@@ -1343,6 +1343,17 @@
                 ((and (eq? head 'define-syntax) (pair? (cdr t)))
                  (note! (cadr t))
                  (walk-list (cddr t)))
+                ;; A template's let-syntax binds keywords, and they are as
+                ;; template-bound as any variable: (srfi 257) writes
+                ;; (let-syntax ((u? (syntax-rules (var) …))) (u? _ …)) to
+                ;; ask free-identifier=?, and classifying `u?` free turned
+                ;; the call into %gref%u?.  Only the names — the inits are
+                ;; syntax-rules specs, whose insides belong to the macro
+                ;; being defined there.
+                ((and (memq head '(let-syntax letrec-syntax)) (pair? (cdr t)))
+                 (for-each (lambda (b) (when (pair? b) (note! (car b))))
+                           (cadr t))
+                 (walk-list (cddr t)))
                 ;; Every clause of a case-lambda binds its own formals, the
                 ;; rest-only clause `(args body …)` included — (srfi 232)
                 ;; writes exactly that, and without this arm `args` was

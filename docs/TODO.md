@@ -12,10 +12,11 @@ scope** below, so no recorded decision was lost in the swap.
   distinct fixes; SRFI 67, 70, 101, 135, 140, 148 and 171 all import and
   run. Unit suite 904 → 935.
 - **Phase 1 — in progress.** The SRFI shelf harness (`make test-srfi`,
-  `tests/srfi/`) is live and ratcheting over 139 vendored kaappi test files
-  (109 pass, 30 fail, 4 skipped). Batch 1's burn-down is **complete**, and
-  vendor tranches 2a–2c have landed (100 more libraries: the seven the
-  Phase 0 fixes unlocked, then the whole dependency-free layer). Fixes each
+  `tests/srfi/`) is live and ratcheting over 156 vendored kaappi test files
+  (123 pass, 33 fail, 6 skipped). Batch 1's burn-down is **complete**, and
+  vendor tranches 2a–2d have landed (115 more libraries: the seven the
+  Phase 0 fixes unlocked, then the dependency-free layer, then the two
+  dependent layers and `(kaappi parallel)`). Fixes each
   tranche flushed out: SRFI 69's
   kaappi-compatible failure default, the full SRFI 13 completion, SRFI
   1/133 n-ary and range arms, the SRFI 128 record-ordering adaptation,
@@ -25,10 +26,10 @@ scope** below, so no recorded decision was lost in the swap.
   (architecture.md § Stage 2), SRFI 17 generalized `set!`, bounded-space
   `delay-force`, paal-side `call-with-{input,output}-file` and the
   three-argument `member`/`assoc`, template hygiene reaching into a
-  binding's init expression, and a macro named for a definition keyword
-  getting first refusal in a body. Next: the two dependent layers (~15
-  libraries, incl. `(srfi 146 hash)` and the 166 family) and
-  `(kaappi parallel)`. Exact counts live in
+  binding's init expression, a macro named for a definition keyword
+  getting first refusal in a body, and a template's `let-syntax` keywords
+  counting as template-bound. Next: burn down the recorded fails that are
+  neither Phase 2 nor Phase 4 work. Exact counts live in
   `tests/srfi/paal-srfi-expected.sld`, which is where a number stays true.
 - **Phases 2–6 — pending.** (Phase 3's REPL `,help` sectioning landed
   early, outside the phase; the rest of item 8 is planned below.)

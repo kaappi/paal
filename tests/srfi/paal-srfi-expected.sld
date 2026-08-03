@@ -21,7 +21,9 @@
         ("srfi116.scm" pass)
         ("srfi117.scm" pass)
         ("srfi118.scm" pass)
+        ("srfi123.scm" pass)
         ("srfi125.scm" pass)
+        ("srfi126.scm" pass)
         ("srfi127.scm" pass)
         ("srfi128.scm" pass)
         ("srfi129.scm" pass)
@@ -52,10 +54,13 @@
         ("srfi158.scm" pass)
         ("srfi161.scm" pass)
         ("srfi162.scm" pass)
+        ("srfi164.scm" pass)
         ("srfi165.scm" pass)
         ("srfi166-audit.scm" fail) ; imports (srfi 59), which needs (kaappi sysinfo) — a Phase 2 host-native binding
         ("srfi166-sub.scm" pass)
         ("srfi166.scm" pass)
+        ("srfi167.scm" pass)
+        ("srfi168.scm" pass)
         ("srfi169.scm" pass)
         ("srfi17.scm" pass)
         ("srfi171.scm" pass)
@@ -64,6 +69,7 @@
         ("srfi175.scm" pass)
         ("srfi178-audit.scm" pass)
         ("srfi178.scm" pass)
+        ("srfi180.scm" pass)
         ("srfi185.scm" pass)
         ("srfi188.scm" fail) ; a definition wrapped in `begin` at top level must not shadow — kaappi's own define-hoisting lenience (kaappi#2075), which paal does not copy
         ("srfi189-audit.scm" pass)
@@ -75,9 +81,11 @@
         ("srfi197.scm" pass)
         ("srfi2.scm" pass)
         ("srfi201.scm" fail) ; paal-emitter: ir:define in expression position
+        ("srfi202.scm" pass)
         ("srfi203.scm" pass)
         ("srfi207.scm" fail) ; the reader has no bytestring literal (#u8"…")
         ("srfi209.scm" pass)
+        ("srfi210.scm" pass)
         ("srfi213.scm" fail) ; imports (srfi 211 explicit-renaming) — er-macros, recorded out of scope until after Phase 4
         ("srfi214.scm" fail) ; flexvector: 3 assertions
         ("srfi215.scm" pass)
@@ -103,12 +111,19 @@
         ("srfi242.scm" fail) ; label*: a static call must see the call site's own binding (2 of 14)
         ("srfi244.scm" fail) ; define-values with a rest formal: map over an improper list
         ("srfi247.scm" fail) ; the $ macros thread state variables into formals (4 of 12)
-        ("srfi25.scm" fail) ; array-ref with a packed index *array* answers #f (1 of 46)
+        ("srfi25.scm" pass)
         ("srfi250.scm" fail) ; a hash table keyed by a comparator record: not a callable (the record crosses as a tagged vector)
+        ("srfi251.scm" pass)
         ("srfi253.scm" fail) ; a template-introduced constructor name bound only by a later expansion step — syntax-object provenance, a Phase 4 target
         ("srfi255.scm" fail) ; restarters resume through a continuation whose dispatch extent has ended
+        ("srfi257-full.scm" fail) ; same as srfi257.scm
+        ("srfi257-rx-full.scm" fail) ; same as srfi257.scm, reached through the rx pattern layer
+        ("srfi257-rx.scm" fail) ; same as srfi257.scm, reached through the rx pattern layer
+        ("srfi257.scm" fail) ; the free-identifier=? trick nested several levels deep: an inner let-syntax macro stops matching (the simple form of the same trick works)
+        ("srfi259.scm" pass)
         ("srfi26.scm" pass)
         ("srfi260.scm" pass)
+        ("srfi264-behavior.scm" pass)
         ("srfi267.scm" fail) ; the reader has no #"…" literal
         ("srfi27-audit.scm" pass)
         ("srfi27-state.scm" pass)
@@ -123,6 +138,7 @@
         ("srfi41.scm" fail) ; the 4 stream-of assertions — syntax-object provenance, a Phase 4 target
         ("srfi42.scm" fail) ; do-ec: no matching pattern on the threaded stop variable — syntax-object provenance, a Phase 4 target
         ("srfi43.scm" pass)
+        ("srfi44.scm" pass)
         ("srfi45.scm" pass)
         ("srfi46.scm" fail) ; custom-ellipsis hygiene and two ellipses in one pattern (4 of 31)
         ("srfi48.scm" pass)
@@ -144,6 +160,7 @@
         ("srfi86.scm" pass)
         ("srfi87.scm" pass)
         ("srfi9.scm" fail) ; the 4 assertions that probe the tagged-vector record representation directly
+        ("srfi90.scm" pass)
         ("srfi94.scm" pass)
         ("srfi95.scm" pass)
         ("srfi98.scm" pass)

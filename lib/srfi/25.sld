@@ -78,9 +78,12 @@
             (values (reverse acc) (car lst))
             (loop (cdr lst) (cons (car lst) acc)))))
 
+    ;; [paal adaptation] `array?` is asked before `vector?`.  kaappi's
+    ;; records are opaque, so either order answers the same there; paal's
+    ;; are tagged vectors, so the `vector?` arm claimed every packed index
+    ;; *array* and read its record slots as indices.
     (define (%index-value->list x)
       (cond
-       ((vector? x) (vector->list x))
        ((array? x)
         (unless (= (array-rank x) 1)
           (error "array-ref/array-set!: packed index array must be 1-dimensional" x))
@@ -89,6 +92,7 @@
         (let ((end (array-end x 0)))
           (let loop ((i 0) (acc '()))
             (if (= i end) (reverse acc) (loop (+ i 1) (cons (array-ref x i) acc))))))
+       ((vector? x) (vector->list x))
        (else (error "array-ref/array-set!: invalid packed index" x))))
 
     (define (%normalize-indices idx-args)
