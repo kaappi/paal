@@ -6,34 +6,44 @@ was retired when this replaced it; read it in git history (last version at
 commit `aa54e1f`). Its "Not planned" list carries forward in **Out of
 scope** below, so no recorded decision was lost in the swap.
 
-## Status (as of 2026-08-02)
+## Status (as of 2026-08-03)
+
+Shelf at this writing: **172 vendored kaappi test files — 137 pass, 35
+fail, 6 skipped**; unit suite **981**; R7RS baseline unchanged at
+1221/4/0. Those counts live in `tests/srfi/paal-srfi-expected.sld` and
+`tests/srfi/paal-srfi-skip.sld`, which is where they stay true.
 
 - **Phase 0 — done.** The four sweep-found expander bugs became nine
   distinct fixes; SRFI 67, 70, 101, 135, 140, 148 and 171 all import and
   run. Unit suite 904 → 935.
-- **Phase 1 — in progress.** The SRFI shelf harness (`make test-srfi`,
-  `tests/srfi/`) is live and ratcheting over 156 vendored kaappi test files
-  (123 pass, 33 fail, 6 skipped). Batch 1's burn-down is **complete**, and
-  vendor tranches 2a–2d have landed (115 more libraries: the seven the
-  Phase 0 fixes unlocked, then the dependency-free layer, then the two
-  dependent layers and `(kaappi parallel)`). Fixes each
-  tranche flushed out: SRFI 69's
-  kaappi-compatible failure default, the full SRFI 13 completion, SRFI
-  1/133 n-ary and range arms, the SRFI 128 record-ordering adaptation,
-  primitive-error routing through `%paal-handlers` (architecture.md
-  § Exception handlers), and then eight more — imported macros named for
-  core keywords winning at the use site while machinery keeps its own
-  (architecture.md § Stage 2), SRFI 17 generalized `set!`, bounded-space
-  `delay-force`, paal-side `call-with-{input,output}-file` and the
-  three-argument `member`/`assoc`, template hygiene reaching into a
-  binding's init expression, a macro named for a definition keyword
-  getting first refusal in a body, and a template's `let-syntax` keywords
-  counting as template-bound. Next: burn down the recorded fails that are
-  neither Phase 2 nor Phase 4 work. Exact counts live in
-  `tests/srfi/paal-srfi-expected.sld`, which is where a number stays true.
-- **Phase 2 — in progress.** `(kaappi sysinfo)` is bound (7 zero-argument
-  primitives answering strings), which lands SRFI 59, 112 and 193 — shelf
-  136 pass / 36 fail / 7 skipped. SRFI 112's suite asserts that a
+- **Phase 1 — done.** The SRFI shelf harness (`make test-srfi`,
+  `tests/srfi/`) is live and ratcheting, and all four vendor tranches have
+  landed: ~115 libraries plus `(kaappi parallel)` — the seven the Phase 0
+  fixes unlocked, then the dependency-free layer, then the two dependent
+  layers. Fixes the tranches flushed out: SRFI 69's kaappi-compatible
+  failure default, the full SRFI 13 completion, SRFI 1/133 n-ary and range
+  arms, the SRFI 128 record-ordering adaptation, primitive-error routing
+  through `%paal-handlers` (architecture.md § Exception handlers), and
+  then eight more — imported macros named for core keywords winning at the
+  use site while machinery keeps its own (architecture.md § Stage 2),
+  SRFI 17 generalized `set!`, bounded-space `delay-force`, paal-side
+  `call-with-{input,output}-file` and the three-argument `member`/`assoc`,
+  template hygiene reaching into a binding's init expression, a macro
+  named for a definition keyword getting first refusal in a body, and a
+  template's `let-syntax` keywords counting as template-bound.
+
+  What is *not* done, and was never in Phase 1's gate: the 35 recorded
+  fails. They are classified in the baseline, and the ones worth
+  revisiting are the reader gaps (SRFI 207's `#u8"…"`, 267's `#"…"`),
+  the `ir:define in expression position` pair (146-differential, 201),
+  and SRFI 156/194/214/242/247. The rest are already assigned — Phase 4
+  provenance (41, 42, 253), host-blocked (see Phase 2), kaappi's own
+  define-hoisting lenience (188, 219), the recorded er-macro exclusion
+  (213), and two deliberate non-copies of kaappi behaviour (158-audit's
+  #2060 pins, SRFI 190's anti-hygienic `yield`).
+- **Phase 2 — done as far as this host allows.** `(kaappi sysinfo)` is
+  bound (7 zero-argument primitives answering strings), which lands
+  SRFI 59, 112 and 193. SRFI 112's suite asserts that a
   zero-argument procedure rejects a surplus one, which is how it came out
   that **neither pipeline checked argument counts**: the bytecode VM
   dropped surplus arguments and read missing ones out of stale registers.
@@ -51,7 +61,9 @@ scope** below, so no recorded decision was lost in the swap.
   postdate kaappi v0.22.0, so eight SRFIs (57, 74, 131, 136, 137, 237,
   240, 271) wait for a newer released kaappi. Reasons under Phase 2
   below; SRFI 74 was un-vendored again rather than left as a permanent
-  fail. **Phase 2 is therefore as done as this host allows.**
+  fail. So the phase's gate ("16 more SRFIs green") is met in part:
+  **12 landed, 8 blocked** — and the blocked eight are the phase's only
+  remaining work, gated on the toolchain rather than on code.
 
   **Open harness question**: `srfi64.scm`'s verdict is order-dependent.
   It passes standalone and in every small combination, and fails in the
@@ -65,8 +77,13 @@ scope** below, so no recorded decision was lost in the swap.
   is what "one process per file" is supposed to mean and which closed a
   real leak — a file importing `(srfi 61)` left a `cond` installed under
   its plain name for later files to find.
-- **Phases 3–6 — pending.** (Phase 3's REPL `,help` sectioning landed
-  early, outside the phase; the rest of item 8 is planned below.)
+- **Phase 3 — next, not started.** The CLI and REPL tooling tail, planned
+  in detail below. Nothing of it has landed except the REPL `,help`
+  sectioning, which was done early and outside the phase.
+- **Phases 4–6 — pending.** Phase 4 (syntax objects) has three shelf
+  payoff targets waiting on it (SRFI 41, 42, 253) on top of the §4.3
+  trio and the SRFI 26 un-adaptation. Phase 6 has grown two upstream
+  items to file (see it).
 
 ## Context
 
@@ -162,7 +179,7 @@ libraries, now `%paal-base-*` spellings; record desugar's internal `v`
 capturing a field named `v`; `rename-template` not following `%gref%`
 marks; pattern-vars counting the clause head as a pattern variable).
 
-## Phase 1 — SRFI shelf: vendor + verify the 111 clean importers (L, ~6–8 commits)
+## Phase 1 — SRFI shelf: vendor + verify the 111 clean importers (L, ~6–8 commits) ✅
 
 Pattern already proven by campaign 1's 21-library vendoring: copy from
 `../kaappi/lib/srfi/`, verify behaviorally, embed, record adaptations in file
@@ -194,7 +211,7 @@ headers.
 Gate: per-SRFI harness table committed as a ratchet; `features --json`
 embedded_libraries count reflects the decision in 4; R7RS baseline unchanged.
 
-## Phase 2 — Host-native sub-library bindings (M, ~3 commits)
+## Phase 2 — Host-native sub-library bindings (M, ~3 commits) ✅ (reachable half)
 
 Extend the proven boundary pattern (how ffi/fibers/SRFI 27/258/260 were bound:
 procedure objects installed in `paal-initial-env` / the globals blob in
@@ -399,11 +416,32 @@ still work. Revisit the srfi14 shelf skip (runtime-cost) after this phase.
   vectors — needs paal's own writer (cycle detection + labels). Optional; do
   only if a real program hits it.
 
+## Landed outside the phase plan
+
+Two changes worth knowing about that no phase asked for, both found by
+the shelf and both affecting every program paal runs:
+
+- **Argument counts are checked** on both pipelines (architecture.md
+  § Lambda binding). Neither checked before: the bytecode VM dropped
+  surplus arguments and answered a *missing* one out of whatever the
+  register still held, so `(f)` could return the previous caller's
+  argument. Cost is two integer compares per call. It immediately found
+  three libraries relying on the old behaviour.
+- **The reader no longer reads `inf`, `nan` and `infinity` as numbers.**
+  The host's `string->number` accepts them; R7RS 7.1.1 spells only
+  `+inf.0` / `-inf.0` / `+nan.0` / `-nan.0`, and kaappi's own reader
+  agrees with R7RS, so this was inherited permissiveness. `1e999` still
+  overflows to `+inf.0`, and the complex and `#e`/`#i` paths are intact.
+
 ## Verification (whole campaign)
 
 - Every commit: `make test` (~5–10 min; gate on the command's own exit code,
   never on failure-text grep). Ratchet counts move only with behavior + tests
   + regenerated baseline in the same commit.
+- The shelf driver resets the expander's macro and library tables per
+  file, so verdicts do not depend on run order. One verdict still does —
+  `srfi64.scm`, recorded under Phase 2 above — and that is the one known
+  hole in this guarantee.
 - The per-SRFI harness table (Phase 1) is a second ratchet: `make test-srfi`
   gates inside `make test`.
 - Feature landings touch **both pipelines**; never "fix" a divergence by
