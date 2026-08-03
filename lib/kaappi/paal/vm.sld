@@ -22,6 +22,7 @@
           (kaappi paal bytecode) (kaappi paal frame)
           (kaappi ffi) (kaappi fibers) (kaappi diagnostics)
           (kaappi sysinfo) (srfi 160 primitives)
+          (srfi 254)
           (srfi 27) (srfi 258) (srfi 260))
   (export paal-eval paal-eval-program paal-initial-env)
   (begin
@@ -709,6 +710,28 @@
              (%numeric-vector-length . ,%numeric-vector-length)
              (%numeric-vector-ref . ,%numeric-vector-ref)
              (%numeric-vector-set! . ,%numeric-vector-set!)
+
+             ;; --- (srfi 254) ---
+             ;; Ephemerons and guardians: opaque host objects that only
+             ;; ever go back to these same primitives.  The record sets
+             ;; ((kaappi primitives), (srfi 237 primitives)) are
+             ;; deliberately not bound — see expander.sld's builtin table.
+             (make-ephemeron . ,make-ephemeron)
+             (ephemeron? . ,ephemeron?)
+             (ephemeron-key . ,ephemeron-key)
+             (ephemeron-value . ,ephemeron-value)
+             (ephemeron-broken? . ,ephemeron-broken?)
+             (ephemeron-ref . ,ephemeron-ref)
+             (make-guardian . ,make-guardian)
+             (guardian? . ,guardian?)
+             (make-transport-cell-guardian . ,make-transport-cell-guardian)
+             (transport-cell-guardian? . ,transport-cell-guardian?)
+             (transport-cell? . ,transport-cell?)
+             (transport-cell-key . ,transport-cell-key)
+             (transport-cell-value . ,transport-cell-value)
+             (transport-cell-broken? . ,transport-cell-broken?)
+             (current-hash . ,current-hash)
+             (reference-barrier . ,reference-barrier)
 
              ;; --- Machinery-introduced base references ---
              ;; The expander's own desugarings — quasiquote's list/cons/

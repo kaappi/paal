@@ -9,6 +9,7 @@
     (define expected-verdicts
       '(
         ("srfi-19-tests.scm" fail) ; needs (scheme time) native time objects (make-time, time?, time-second …) — a Phase 2 host-native binding
+        ("srfi-254.scm" pass)
         ("srfi-258.scm" pass)
         ("srfi-27-unit.scm" pass)
         ("srfi0.scm" pass)
@@ -171,7 +172,6 @@
         ("srfi7.scm" pass)
         ("srfi70.scm" pass)
         ("srfi71.scm" pass)
-        ("srfi74.scm" fail) ; imports (kaappi primitives), which arrives later in Phase 2
         ("srfi78.scm" pass)
         ("srfi86.scm" pass)
         ("srfi87.scm" pass)

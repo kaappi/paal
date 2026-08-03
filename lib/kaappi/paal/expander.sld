@@ -293,6 +293,24 @@
         ((srfi 160 primitives) %make-numeric-vector %numeric-vector?
                                %numeric-vector-kind %numeric-vector-length
                                %numeric-vector-ref %numeric-vector-set!)
+        ;; Ephemerons and guardians: opaque host objects that only ever go
+        ;; back to these same primitives.
+        ((srfi 254)       make-ephemeron ephemeron? ephemeron-key
+                          ephemeron-value ephemeron-broken? ephemeron-ref
+                          make-guardian guardian?
+                          make-transport-cell-guardian
+                          transport-cell-guardian? transport-cell?
+                          transport-cell-key transport-cell-value
+                          transport-cell-broken? current-hash
+                          reference-barrier)
+        ;; Deliberately NOT bound: (kaappi primitives) and (srfi 237
+        ;; primitives).  Both postdate the released kaappi paal is built
+        ;; against — v0.22.0 has neither `(kaappi primitives)` at all nor
+        ;; %record-type-constructor / %record-type-has-protocol? in the
+        ;; 237 set — and requiring a newer host than the recorded baseline
+        ;; is not a trade worth making.  (srfi 57), (srfi 74), (srfi 131),
+        ;; (srfi 136), (srfi 137), (srfi 237), (srfi 240) and (srfi 271)
+        ;; wait on them; see docs/TODO.md.
         ;; Host-native SRFIs: the procedures are Zig primitives bound in
         ;; paal-initial-env, so the libraries resolve as builtins — there is
         ;; no .sld to load, on disk or embedded.

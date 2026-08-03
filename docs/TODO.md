@@ -45,8 +45,13 @@ scope** below, so no recorded decision was lost in the swap.
   surfacing SRFI 1's `unfold` needing its optional `tail-gen`. The
   reader also stopped reading `inf`, `nan` and `infinity` as numbers,
   which the host's `string->number` accepts and kaappi's own reader does
-  not. Remaining: `(srfi 237 primitives)`, `(srfi 254)`, `(kaappi
-  primitives)` — SRFI 74 waits on the last of those.
+  not. `(srfi 254)` closed the phase's reachable half. The two
+  record-primitive sets — `(srfi 237 primitives)` and `(kaappi
+  primitives)` — are **blocked on the host binary**, not on paal: they
+  postdate kaappi v0.22.0, so eight SRFIs (57, 74, 131, 136, 137, 237,
+  240, 271) wait for a newer released kaappi. Reasons under Phase 2
+  below; SRFI 74 was un-vendored again rather than left as a permanent
+  fail. **Phase 2 is therefore as done as this host allows.**
 
   **Open harness question**: `srfi64.scm`'s verdict is order-dependent.
   It passes standalone and in every small combination, and fails in the
@@ -200,10 +205,22 @@ boundary as opaque objects or plain data:
 - `(srfi 160 primitives)` (6 prims, opaque NumericVector) → unlocks 4, 63, 66,
   74, 231
 - `(srfi 237 primitives)` (19 prims, opaque RTDs/records) → unlocks 57, 131,
-  136, 137, 237, 240
-- `(srfi 254)` (16 prims, opaque ephemerons/guardians) → SRFI 254
+  136, 137, 237, 240 — **blocked on the host, see below**
+- `(srfi 254)` (16 prims, opaque ephemerons/guardians) → SRFI 254 ✅
 - `(kaappi primitives)` %-helpers table → unlocks SRFI 271 (+ anything else
-  that imports it)
+  that imports it) — **blocked on the host, see below**
+
+**Blocked on the host, not on paal.** Both record-primitive sets postdate
+the released kaappi that paal builds against. v0.22.0 has no
+`(kaappi primitives)` library at all, and its `(srfi 237 primitives)` is
+missing `%record-type-constructor` and `%record-type-has-protocol?`, which
+the portable `.sld`s over it call. Binding names the host does not export
+would break `vm.sld`'s own import and take paal down with it, so neither
+is bound and SRFI 57, 74, 131, 136, 137, 237, 240 and 271 stay
+unreachable. They are one released kaappi away: re-check when the PATH
+kaappi is newer than v0.22.0, then bind both sets and vendor those eight.
+(The campaign's execution notes already say CI builds kaappi from main and
+local testing should too — this is the first item where it bites.)
 
 Each binding = expose the host procedures under the sub-library name in paal's
 module system + vendor the portable wrapper + harness verification. Watch for
