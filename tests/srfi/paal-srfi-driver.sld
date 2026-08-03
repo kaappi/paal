@@ -38,8 +38,22 @@
               (if (> n 120) (string-append (substring s 0 120) "…") s)))
           (value->line e)))
 
+    ;; Each file gets a clean expander, which is what "one process per
+    ;; file" means and what the verdicts are supposed to record.  The
+    ;; globals table was already fresh per file, but the *macro* and
+    ;; *library* tables are expander-global and were not: a file that
+    ;; imports (srfi 61) leaves a `cond` installed under its own plain
+    ;; name, and a later file that never imported it could reach that one
+    ;; instead of the core form — which is exactly what made srfi64.scm
+    ;; pass alone and fail in the middle of a full run.  Nothing a paal
+    ;; *user* can hit, since the CLI runs one program per process, but the
+    ;; driver is one process for every file on the shelf.  Measured cost of
+    ;; re-installing libraries per file: about 4%.
+    ;;
     ;; 'pass, or (fail <one-line reason>).
     (define (run-srfi-file path)
+      (paal-macros-reset!)
+      (paal-libraries-reset!)
       (guard (e ((and (pair? e) (eq? (car e) '%paal-srfi-exit))
                  (let ((code (if (null? (cdr e)) 0 (cadr e))))
                    (if (or (eqv? code 0) (eq? code #t))

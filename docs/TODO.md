@@ -33,15 +33,33 @@ scope** below, so no recorded decision was lost in the swap.
   `tests/srfi/paal-srfi-expected.sld`, which is where a number stays true.
 - **Phase 2 — in progress.** `(kaappi sysinfo)` is bound (7 zero-argument
   primitives answering strings), which lands SRFI 59, 112 and 193 — shelf
-  126 pass / 33 fail / 7 skipped. SRFI 112's suite asserts that a
+  136 pass / 36 fail / 7 skipped. SRFI 112's suite asserts that a
   zero-argument procedure rejects a surplus one, which is how it came out
   that **neither pipeline checked argument counts**: the bytecode VM
   dropped surplus arguments and read missing ones out of stale registers.
   Both check now (architecture.md § Lambda binding), and that check in
   turn surfaced `(srfi 133)`'s `vector-unfold` family needing its seeds
-  variadic, as kaappi's native one has them. Remaining: `(srfi 160
-  primitives)`, `(srfi 237 primitives)`, `(srfi 254)`, `(kaappi
-  primitives)`.
+  variadic, as kaappi's native one has them. `(srfi 160 primitives)`
+  followed, landing SRFI 4, 63, 66, 160 and the seven-file SRFI 231
+  family, unskipping srfi158-audit, and — through the same arity check —
+  surfacing SRFI 1's `unfold` needing its optional `tail-gen`. The
+  reader also stopped reading `inf`, `nan` and `infinity` as numbers,
+  which the host's `string->number` accepts and kaappi's own reader does
+  not. Remaining: `(srfi 237 primitives)`, `(srfi 254)`, `(kaappi
+  primitives)` — SRFI 74 waits on the last of those.
+
+  **Open harness question**: `srfi64.scm`'s verdict is order-dependent.
+  It passes standalone and in every small combination, and fails in the
+  full shelf run once `srfi4.scm` has allocated host numeric vectors —
+  the assertion that goes is the SRFI 35 condition-type `test-error`.
+  Not reproducible in isolation, not even as the exact triple the
+  cumulative bisect named, so the suspicion is allocation-dependent host
+  state rather than paal logic. Recorded as a fail carrying that reason
+  rather than papered over. Landed alongside it: the driver now resets
+  the expander's macro and library tables per file (~4% slower), which
+  is what "one process per file" is supposed to mean and which closed a
+  real leak — a file importing `(srfi 61)` left a `cond` installed under
+  its plain name for later files to find.
 - **Phases 3–6 — pending.** (Phase 3's REPL `,help` sectioning landed
   early, outside the phase; the rest of item 8 is planned below.)
 
@@ -346,10 +364,15 @@ still work. Revisit the srfi14 shelf skip (runtime-cost) after this phase.
 - **kaappi#2010** (bundled CLI claims argv): when fixed, `do` becomes
   optional; keep it working as compat. Re-verify the binary behavior table
   (campaign 1, Phase 6 — git history).
-- **Upstream report, pending**: 8 vendored kaappi SRFI test files call
-  `exit`/`display`/`caddr` without importing them — tolerated by kaappi's
-  unenforced import scope, caught by paal's checker; adaptations recorded
-  in-file. File as one kaappi issue at a natural break.
+- **Upstream report, pending**: ~40 vendored kaappi SRFI test files call
+  `exit`/`display`/`caddr`/`string-ci=?` and friends without importing
+  them — tolerated by kaappi's unenforced import scope, caught by paal's
+  checker; adaptations recorded in-file. File as one kaappi issue at a
+  natural break, together with the second finding: kaappi's
+  `string->number` answers a number for `inf`, `nan`, `infinity` and
+  their signed spellings, which R7RS 7.1.1 does not define and which
+  kaappi's *own reader* does not accept — so `(string->number "inf")`
+  and reading `inf` disagree.
 - **Handler timing divergence**: kaappi runs exception handlers after
   unwinding; paal matches R7RS 4.2.7 more closely and stays as-is.
   `raise-continuable` resumption through a *declining* guard is the shared

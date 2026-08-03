@@ -260,14 +260,22 @@
               (else (loop (cdr l) acc)))))
 
     ;; (unfold p f g seed) — p says when to stop, f maps, g steps.
-    (define (unfold p f g seed)
-      (let loop ((seed seed) (acc '()))
-        (if (p seed)
-            (reverse acc)
-            (loop (g seed) (cons (f seed) acc)))))
+    ;; Both take SRFI 1's optional fifth argument, which kaappi's own
+    ;; answers to: `unfold`'s tail-gen is *called on the final seed* to
+    ;; make the tail (default: the empty list), while `unfold-right`'s is
+    ;; the initial tail value itself, not a procedure.  (srfi 158)'s
+    ;; generator-unfold passes one straight through.
+    (define (unfold p f g seed . tail-gen)
+      (let ((make-tail (if (pair? tail-gen)
+                           (car tail-gen)
+                           (lambda (seed) '()))))
+        (let loop ((seed seed) (acc '()))
+          (if (p seed)
+              (append (reverse acc) (make-tail seed))
+              (loop (g seed) (cons (f seed) acc))))))
 
-    (define (unfold-right p f g seed)
-      (let loop ((seed seed) (acc '()))
+    (define (unfold-right p f g seed . tail)
+      (let loop ((seed seed) (acc (if (pair? tail) (car tail) '())))
         (if (p seed) acc (loop (g seed) (cons (f seed) acc)))))
 
     ;; The pair-walking folds see each successive pair, not each element.

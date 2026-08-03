@@ -4907,7 +4907,41 @@
     (pkaappi-run-bc-string
       "(import (scheme base) (srfi 133))
        (list (vector-unfold (lambda (i) (values (* i i))) 4)
-             (vector-unfold (lambda (i seed) (values seed (* seed 2))) 4 1))")))
+             (vector-unfold (lambda (i seed) (values seed (* seed 2))) 4 1))"))
+  ;; (srfi 160 primitives): the numeric vector is opaque and only ever
+  ;; goes back to the same six primitives, so binding the objects carries
+  ;; the whole sub-library — and (srfi 4), (srfi 63), (srfi 66) and
+  ;; (srfi 231) with it.
+  (test-equal "(srfi 160 u8) works through the bound primitives" '(#t 3 2 (1 2 3))
+    (pkaappi-run-bc-string
+      "(import (scheme base) (srfi 160 u8))
+       (define v (u8vector 1 2 3))
+       (list (u8vector? v) (u8vector-length v) (u8vector-ref v 1)
+             (u8vector->list v))"))
+  ;; SRFI 1's unfold takes a tail-gen, called on the final seed; the same
+  ;; optional-argument shape the arity check keeps surfacing.
+  (test-equal "unfold takes SRFI 1's optional tail-gen" '((0 1 2 3) (0 1 2 3 end))
+    (pkaappi-run-bc-string
+      "(import (scheme base) (srfi 1))
+       (list (unfold (lambda (x) (> x 3)) (lambda (x) x) (lambda (x) (+ x 1)) 0)
+             (unfold (lambda (x) (> x 3)) (lambda (x) x) (lambda (x) (+ x 1)) 0
+                     (lambda (x) '(end))))")))
+
+(test-group "the reader spells infinities and NaNs the way R7RS does"
+  ;; The host's string->number also answers a number for `inf`, `nan` and
+  ;; `infinity` — kaappi's own reader does not, and R7RS 7.1.1 spells only
+  ;; +inf.0 / -inf.0 / +nan.0 / -nan.0.  Inheriting it turned a program's
+  ;; (define (inf) …) into a letrec* binding named +inf.0.
+  (test-equal "the bare words read as symbols" '(inf nan -inf +inf infinity)
+    (paal-read-string "inf nan -inf +inf infinity"))
+  (test-assert "the R7RS spellings still read as numbers"
+    (let ((ds (paal-read-string "+inf.0 -inf.0 +nan.0")))
+      (and (= (length ds) 3)
+           (equal? (car ds) (/ 1.0 0.0))
+           (equal? (cadr ds) (/ -1.0 0.0))
+           (not (= (caddr ds) (caddr ds))))))
+  (test-assert "and an overflowing literal still overflows"
+    (equal? (car (paal-read-string "1e999")) (/ 1.0 0.0))))
 
 ;; ---------------------------------------------------------------
 ;; Bytecode cache for user programs

@@ -284,6 +284,15 @@
         ((kaappi sysinfo) %script-path %current-lib-dir %kaappi-lib-dir
                           %implementation-dir %implementation-version
                           %os-name %cpu-architecture)
+        ;; The numeric vector a (srfi 160) constructor answers is opaque —
+        ;; it goes back to these same six primitives and nowhere else — so
+        ;; binding the objects carries the whole sub-library.  (srfi 160
+        ;; base) and the thirteen per-type libraries are portable code on
+        ;; top, as are (srfi 4), (srfi 63), (srfi 66), (srfi 74) and
+        ;; (srfi 231).
+        ((srfi 160 primitives) %make-numeric-vector %numeric-vector?
+                               %numeric-vector-kind %numeric-vector-length
+                               %numeric-vector-ref %numeric-vector-set!)
         ;; Host-native SRFIs: the procedures are Zig primitives bound in
         ;; paal-initial-env, so the libraries resolve as builtins — there is
         ;; no .sld to load, on disk or embedded.

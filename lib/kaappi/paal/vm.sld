@@ -21,7 +21,7 @@
           (kaappi paal ir) (kaappi paal expander)
           (kaappi paal bytecode) (kaappi paal frame)
           (kaappi ffi) (kaappi fibers) (kaappi diagnostics)
-          (kaappi sysinfo)
+          (kaappi sysinfo) (srfi 160 primitives)
           (srfi 27) (srfi 258) (srfi 260))
   (export paal-eval paal-eval-program paal-initial-env)
   (begin
@@ -699,6 +699,16 @@
              (%implementation-version . ,%implementation-version)
              (%os-name . ,%os-name)
              (%cpu-architecture . ,%cpu-architecture)
+
+             ;; --- (srfi 160 primitives) ---
+             ;; The numeric vector is opaque and only ever handed back to
+             ;; these six, so the objects are the whole binding.
+             (%make-numeric-vector . ,%make-numeric-vector)
+             (%numeric-vector? . ,%numeric-vector?)
+             (%numeric-vector-kind . ,%numeric-vector-kind)
+             (%numeric-vector-length . ,%numeric-vector-length)
+             (%numeric-vector-ref . ,%numeric-vector-ref)
+             (%numeric-vector-set! . ,%numeric-vector-set!)
 
              ;; --- Machinery-introduced base references ---
              ;; The expander's own desugarings — quasiquote's list/cons/

@@ -121,9 +121,31 @@
     ;; contains @, so nothing valid is shadowed, and running after would keep
     ;; the host's inexact 1+2i.
 
+    ;; The host's string->number also answers a number for `inf`, `nan`,
+    ;; `infinity` and their signed spellings, which R7RS 7.1.1 does not —
+    ;; the only infinities and NaNs it spells are +inf.0, -inf.0, +nan.0
+    ;; and -nan.0 — and which kaappi's *own* reader does not: it reads the
+    ;; bare words as symbols.  Inheriting the permissive version turned a
+    ;; program's `(define (inf) …)` into a letrec* binding named +inf.0
+    ;; ((srfi 158)'s audit defines exactly that helper).  Filtered in the
+    ;; one place a token becomes a number, so `1e999` still overflows to
+    ;; +inf.0 the way it should.
+    (define (%bare-inf-or-nan? s)
+      (let* ((f    (string-foldcase s))
+             (n    (string-length f))
+             (body (if (and (> n 0) (memv (string-ref f 0) '(#\+ #\-)))
+                       (substring f 1 n)
+                       f)))
+        (or (string=? body "inf")
+            (string=? body "nan")
+            (string=? body "infinity"))))
+
+    (define (%number-of s)
+      (and (not (%bare-inf-or-nan? s)) (string->number s)))
+
     ;; A real (never complex) from string->number, or #f.
     (define (%real-of s)
-      (let ((n (string->number s)))
+      (let ((n (%number-of s)))
         (and n (real? n) n)))
 
     ;; The imaginary part carries its sign: "+" and "-" alone are the a+i and
@@ -185,7 +207,7 @@
       (let* ((rest (read-until-delimiter port))
              (chars (cons first-ch rest))
              (s    (list->string chars))
-             (n    (or (parse-complex-token s) (string->number s))))
+             (n    (or (parse-complex-token s) (%number-of s))))
         ;; Fold the symbol branch only.  Numbers are unaffected by case beyond
         ;; what string->number already handles, and folding before the numeric
         ;; test would turn #xFF into a different token.
