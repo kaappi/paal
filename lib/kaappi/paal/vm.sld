@@ -21,6 +21,7 @@
           (kaappi paal ir) (kaappi paal expander)
           (kaappi paal bytecode) (kaappi paal frame)
           (kaappi ffi) (kaappi fibers) (kaappi diagnostics)
+          (kaappi sysinfo)
           (srfi 27) (srfi 258) (srfi 260))
   (export paal-eval paal-eval-program paal-initial-env)
   (begin
@@ -99,11 +100,20 @@
     ;; Bind a parameter list against actual arguments.
     ;; Handles proper lists, pure variadic (symbol params), and
     ;; improper lists (x y . rest) via the recursive else branch.
+    ;; Both counts are checked, the way kaappi checks them (R7RS 4.1.4):
+    ;; a surplus argument used to be dropped silently here, and a missing
+    ;; one surfaced as `car` of the empty list rather than as an arity
+    ;; error.  The bytecode VM's do-call! carries the same pair of checks.
     (define (env-bind env params args rest?)
       (cond
         ((and rest? (symbol? params))
          (env-extend env params args))
-        ((null? params) env)
+        ((null? params)
+         (if (null? args)
+             env
+             (error "paal: too many arguments")))
+        ((null? args)
+         (error "paal: too few arguments"))
         (else
          (env-bind (env-extend env (car params) (car args))
                    (cdr params) (cdr args) rest?))))
@@ -677,6 +687,18 @@
              (string->uninterned-symbol . ,string->uninterned-symbol)
              (symbol-interned? . ,symbol-interned?)
              (generate-symbol . ,generate-symbol)
+
+             ;; --- (kaappi sysinfo) ---
+             ;; Zero arguments in, a string (or #f) out: nothing crosses
+             ;; that either side has to interpret.  (srfi 59), (srfi 112)
+             ;; and (srfi 193) are portable libraries over these seven.
+             (%script-path . ,%script-path)
+             (%current-lib-dir . ,%current-lib-dir)
+             (%kaappi-lib-dir . ,%kaappi-lib-dir)
+             (%implementation-dir . ,%implementation-dir)
+             (%implementation-version . ,%implementation-version)
+             (%os-name . ,%os-name)
+             (%cpu-architecture . ,%cpu-architecture)
 
              ;; --- Machinery-introduced base references ---
              ;; The expander's own desugarings — quasiquote's list/cons/

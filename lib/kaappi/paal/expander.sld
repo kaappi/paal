@@ -278,6 +278,12 @@
         ((kaappi ffi)     ffi-open ffi-fn ffi-close ffi-callback
                           ffi-callback-release ffi-callback? ffi-bytevector-ptr)
         ((kaappi diagnostics) error-object-code)
+        ;; Seven zero-argument primitives answering strings — plain data
+        ;; both ways, so the objects are all there is to bind.  (srfi 59),
+        ;; (srfi 112) and (srfi 193) are portable libraries layered on it.
+        ((kaappi sysinfo) %script-path %current-lib-dir %kaappi-lib-dir
+                          %implementation-dir %implementation-version
+                          %os-name %cpu-architecture)
         ;; Host-native SRFIs: the procedures are Zig primitives bound in
         ;; paal-initial-env, so the libraries resolve as builtins — there is
         ;; no .sld to load, on disk or embedded.

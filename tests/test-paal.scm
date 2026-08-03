@@ -4858,6 +4858,57 @@
     (pkaappi-run-bc-string
       "(list (member 2 '(1 2 3)) (assoc 2 '((1 . a) (2 . b))))")))
 
+(test-group "calling a procedure with the wrong number of arguments"
+  ;; R7RS 4.1.4 makes it an error, and kaappi signals one.  Unchecked, the
+  ;; bytecode VM dropped a surplus argument and answered a *missing* one
+  ;; out of the register a previous call had left behind — so (f) could
+  ;; return the last caller's argument.  (srfi 112)'s suite asserts the
+  ;; error, which is how this surfaced.
+  (test-equal "the bytecode VM signals both directions" '(raised raised raised)
+    (pkaappi-run-bc-string
+      "(define (one a) a)
+       (list (guard (e (#t 'raised)) (one 'x 'y))
+             (guard (e (#t 'raised)) (one))
+             (guard (e (#t 'raised)) ((lambda () 7) 'x)))"))
+  (test-equal "the tree-walker agrees" '(raised raised)
+    (pkaappi-run-string
+      "(define (one a) a)
+       (list (guard (e (#t 'raised)) (one 'x 'y))
+             (guard (e (#t 'raised)) (one)))"))
+  (test-equal "a variadic procedure still takes any surplus" '(1 (2 3))
+    (pkaappi-run-bc-string
+      "(define (v a . rest) (list a rest))
+       (v 1 2 3)"))
+  (test-equal "but a variadic procedure's required arguments are required" 'raised
+    (pkaappi-run-bc-string
+      "(define (v a b . rest) (list a b rest))
+       (guard (e (#t 'raised)) (v 1))")))
+
+(test-group "host-native (kaappi sysinfo)"
+  ;; Seven zero-argument primitives answering strings: plain data both
+  ;; ways, so binding the objects is the whole job.  (srfi 59), (srfi 112)
+  ;; and (srfi 193) are portable libraries layered on them.
+  (test-equal "the primitives answer strings" '(#t #t)
+    (pkaappi-run-bc-string
+      "(import (scheme base) (kaappi sysinfo))
+       (list (string? (%os-name)) (string? (%cpu-architecture)))"))
+  (test-equal "(srfi 112) reports through them" '(#t #t)
+    (pkaappi-run-bc-string
+      "(import (scheme base) (srfi 112))
+       (list (string? (implementation-name)) (string? (os-name)))"))
+  (test-equal "the tree-walker binds them too" #t
+    (pkaappi-run-string
+      "(import (scheme base) (kaappi sysinfo)) (string? (%os-name))"))
+  ;; (srfi 133)'s unfold family takes its seeds variadically, as kaappi's
+  ;; native one does.  The seedless call used to reach a three-parameter
+  ;; definition and read a stale register for the seed — the arity check
+  ;; above is what surfaced it.
+  (test-equal "vector-unfold takes zero or more seeds" '(#(0 1 4 9) #(1 2 4 8))
+    (pkaappi-run-bc-string
+      "(import (scheme base) (srfi 133))
+       (list (vector-unfold (lambda (i) (values (* i i))) 4)
+             (vector-unfold (lambda (i seed) (values seed (* seed 2))) 4 1))")))
+
 ;; ---------------------------------------------------------------
 ;; Bytecode cache for user programs
 ;; ---------------------------------------------------------------

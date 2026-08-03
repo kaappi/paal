@@ -31,7 +31,18 @@ scope** below, so no recorded decision was lost in the swap.
   counting as template-bound. Next: burn down the recorded fails that are
   neither Phase 2 nor Phase 4 work. Exact counts live in
   `tests/srfi/paal-srfi-expected.sld`, which is where a number stays true.
-- **Phases 2–6 — pending.** (Phase 3's REPL `,help` sectioning landed
+- **Phase 2 — in progress.** `(kaappi sysinfo)` is bound (7 zero-argument
+  primitives answering strings), which lands SRFI 59, 112 and 193 — shelf
+  126 pass / 33 fail / 7 skipped. SRFI 112's suite asserts that a
+  zero-argument procedure rejects a surplus one, which is how it came out
+  that **neither pipeline checked argument counts**: the bytecode VM
+  dropped surplus arguments and read missing ones out of stale registers.
+  Both check now (architecture.md § Lambda binding), and that check in
+  turn surfaced `(srfi 133)`'s `vector-unfold` family needing its seeds
+  variadic, as kaappi's native one has them. Remaining: `(srfi 160
+  primitives)`, `(srfi 237 primitives)`, `(srfi 254)`, `(kaappi
+  primitives)`.
+- **Phases 3–6 — pending.** (Phase 3's REPL `,help` sectioning landed
   early, outside the phase; the rest of item 8 is planned below.)
 
 ## Context

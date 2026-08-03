@@ -442,6 +442,16 @@ defines work without needing `letrec` semantics.
 | proper list | `#f` | pair-wise binding |
 | improper list `(x . rest)` | `#t` | pair-wise until tail; tail symbol gets remaining args |
 
+Both counts are checked, here and in the bytecode VM's `do-call!`: R7RS 4.1.4
+makes a wrong-argument-count call an error and kaappi signals one. Unchecked,
+the bytecode VM dropped a surplus argument and answered a *missing* one out of
+whatever the register still held from a previous call — `(f)` could return the
+last caller's argument. `paal-call-value`'s own setup had always checked, so
+only the two main call paths were affected. The cost is two integer compares
+per call. It is worth knowing that this check is what surfaced `(srfi 133)`'s
+`vector-unfold` taking its seeds variadically: the seedless call had been
+reaching a three-parameter definition and reading a stale register for the seed.
+
 ### Initial environment
 
 `paal-initial-env` seeds ~70 procedures from the host runtime: arithmetic, boolean,
@@ -1013,6 +1023,18 @@ The partition names the *small* libraries exhaustively and lets `(scheme base)` 
 everything else, because base has some 200 names and a typo while enumerating it would
 sit between a correct program and compiling. A name missing from a small library is only
 over-permissive.
+
+The same table is where **host-native libraries** live: `(kaappi ffi)`,
+`(kaappi fibers)`, `(kaappi diagnostics)`, `(kaappi sysinfo)`, `(srfi 27)`,
+`(srfi 258)` and `(srfi 260)` have no `.sld` on disk or embedded — their
+procedures are host primitives bound in `paal-initial-env`, so listing their
+exports here is what makes the library resolve. Binding one is worth it only
+when the values crossing are plain data or opaque objects handed straight back
+to the same host procedures; `(kaappi sysinfo)`'s seven zero-argument
+primitives answer strings, which is the easiest case there is, and `(srfi 59)`,
+`(srfi 112)` and `(srfi 193)` are portable libraries layered on them. A host
+procedure that *calls* a procedure argument is the hard case, and gets the
+treatment described under "Values that cross the HOST boundary".
 
 Three things must not leak into the check, and each did once:
 

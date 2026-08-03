@@ -1054,6 +1054,17 @@
                 (arity     (bytecode-function-arity fn))
                 (variadic? (bytecode-function-variadic? fn))
                 (new-base  (+ abs-base 1)))
+           ; R7RS 4.1.4: calling a procedure with the wrong number of
+           ; arguments is an error, and kaappi signals one.  Unchecked,
+           ; a surplus argument was dropped and a missing one *read the
+           ; register a previous call had left there* — (f) answering the
+           ; last caller's argument.  The check is two integer compares on
+           ; the call path; paal-call-value's own setup has always had it.
+           (when (if variadic? (< nargs arity) (not (= nargs arity)))
+             (error (if (< nargs arity)
+                        "paal-bc: too few arguments"
+                        "paal-bc: too many arguments")
+                    (bytecode-function-name fn)))
            ; Handle variadic: collect rest args into a list
            (when variadic?
              (let ((rest-args

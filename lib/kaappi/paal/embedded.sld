@@ -6166,14 +6166,18 @@
                   acc
                   (loop (- i 1) (f acc (vector-ref v i))))))))
 
-    ;; (vector-unfold f length seed) — f returns the element for each index.
-    (define (vector-unfold f len seed)
+    ;; (vector-unfold f length seed ...) — zero or more seeds, which is
+    ;; the arity kaappi's native one takes: f is called as (f i seed ...)
+    ;; and answers (values elt next-seed ...).  The seedless form is the
+    ;; common one, and it used to reach a three-parameter definition and
+    ;; read whatever the register held.
+    (define (vector-unfold f len . seeds)
       (let ((v (make-vector len)))
-        (let loop ((i 0) (seed seed))
+        (let loop ((i 0) (seeds seeds))
           (if (= i len)
               v
-              (call-with-values (lambda () (f i seed))
-                (lambda (elt next)
+              (call-with-values (lambda () (apply f i seeds))
+                (lambda (elt . next)
                   (vector-set! v i elt)
                   (loop (+ i 1) next)))))))
 
@@ -6184,34 +6188,35 @@
               v
               (begin (vector-set! v i (proc i)) (loop (+ i 1)))))))
 
-    ;; The unfold family, in the file's single-seed shape.  f returns
-    ;; (values elt next-seed); the ! variants fill [start,end) of an
-    ;; existing vector, the -right ones fill highest index first.
-    (define (vector-unfold-right f len seed)
+    ;; The rest of the unfold family, seeds variadic throughout: f is
+    ;; (f i seed ...) answering (values elt next-seed ...).  The ! variants
+    ;; fill [start,end) of an existing vector, the -right ones fill from
+    ;; the highest index down.
+    (define (vector-unfold-right f len . seeds)
       (let ((v (make-vector len)))
-        (let loop ((i (- len 1)) (seed seed))
+        (let loop ((i (- len 1)) (seeds seeds))
           (if (< i 0)
               v
-              (call-with-values (lambda () (f i seed))
-                (lambda (elt next)
+              (call-with-values (lambda () (apply f i seeds))
+                (lambda (elt . next)
                   (vector-set! v i elt)
                   (loop (- i 1) next)))))))
 
-    (define (vector-unfold! f v start end seed)
-      (let loop ((i start) (seed seed))
+    (define (vector-unfold! f v start end . seeds)
+      (let loop ((i start) (seeds seeds))
         (if (>= i end)
             v
-            (call-with-values (lambda () (f i seed))
-              (lambda (elt next)
+            (call-with-values (lambda () (apply f i seeds))
+              (lambda (elt . next)
                 (vector-set! v i elt)
                 (loop (+ i 1) next))))))
 
-    (define (vector-unfold-right! f v start end seed)
-      (let loop ((i (- end 1)) (seed seed))
+    (define (vector-unfold-right! f v start end . seeds)
+      (let loop ((i (- end 1)) (seeds seeds))
         (if (< i start)
             v
-            (call-with-values (lambda () (f i seed))
-              (lambda (elt next)
+            (call-with-values (lambda () (apply f i seeds))
+              (lambda (elt . next)
                 (vector-set! v i elt)
                 (loop (- i 1) next))))))
 

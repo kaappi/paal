@@ -15,6 +15,7 @@
         ("srfi1-ext.scm" pass)
         ("srfi1.scm" pass)
         ("srfi101.scm" fail) ; car: not a pair (a test-runner record) — base-name capture across the static link
+        ("srfi112.scm" pass)
         ("srfi113-audit.scm" pass)
         ("srfi113.scm" pass)
         ("srfi115.scm" pass)
@@ -75,6 +76,7 @@
         ("srfi189-audit.scm" pass)
         ("srfi189.scm" pass)
         ("srfi190.scm" fail) ; the template's `yield` must capture the use site's references; paal renames template binders per R7RS hygiene
+        ("srfi193.scm" pass)
         ("srfi194.scm" fail) ; the distribution generators (4 of 40)
         ("srfi195.scm" pass)
         ("srfi196.scm" pass)
@@ -145,6 +147,7 @@
         ("srfi5.scm" pass)
         ("srfi51.scm" pass)
         ("srfi54.scm" pass)
+        ("srfi59.scm" pass)
         ("srfi6.scm" pass)
         ("srfi60.scm" pass)
         ("srfi61.scm" pass)
